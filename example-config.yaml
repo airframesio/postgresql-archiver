@@ -1,0 +1,44 @@
+# Example configuration file for postgresql-archiver
+# Copy this to ~/.postgresql-archiver.yaml and update with your settings
+
+# PostgreSQL connection settings
+db:
+  host: localhost
+  port: 5432
+  user: your_db_user
+  password: your_db_password
+  name: your_database_name
+
+# S3-compatible object storage settings
+s3:
+  # For Hetzner Object Storage, use your cluster endpoint
+  # Example: https://fsn1.your-objectstorage.com
+  endpoint: https://your-s3-endpoint.com
+  
+  # Your storage bucket name
+  bucket: your-archive-bucket
+  
+  # S3 access credentials
+  access_key: your_access_key
+  secret_key: your_secret_key
+  
+  # Region (use "auto" for Hetzner)
+  region: auto
+
+# Archive settings
+# Base table name (without date suffix)
+table: your_table_name
+
+# Number of parallel workers for processing
+workers: 4
+
+# Optional: Date range for archiving
+# Format: YYYY-MM-DD
+# start_date: "2024-01-01"
+# end_date: "2024-12-31"
+
+# Optional: Enable debug output
+# debug: true
+
+# Optional: Perform dry run without uploading
+# dry_run: true
