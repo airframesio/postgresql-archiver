@@ -441,9 +441,106 @@ The tool provides detailed error messages for common issues:
 4. **Memory**: Tool streams data to minimize memory usage
 5. **Compression**: Multi-core zstd scales with CPU cores
 
+## 🧪 Testing
+
+The project includes a comprehensive test suite covering:
+
+- **Cache Operations**: Row count and file metadata caching, TTL expiration, legacy migration
+- **Configuration Validation**: Required fields, default values, date formats
+- **Process Management**: PID file operations, task tracking, process status checks
+
+Run tests with:
+
+```bash
+# Run all tests
+go test ./...
+
+# Run with verbose output
+go test -v ./...
+
+# Run with coverage
+go test -cover ./...
+
+# Run specific tests
+go test -run TestPartitionCache ./cmd
+```
+
+## 🐳 Docker Support
+
+Build and run with Docker:
+
+```bash
+# Build the Docker image
+docker build -t postgresql-archiver .
+
+# Run with environment variables
+docker run --rm \
+  -e ARCHIVE_DB_HOST=host.docker.internal \
+  -e ARCHIVE_DB_USER=myuser \
+  -e ARCHIVE_DB_PASSWORD=mypass \
+  -e ARCHIVE_DB_NAME=mydb \
+  -e ARCHIVE_S3_ENDPOINT=https://s3.example.com \
+  -e ARCHIVE_S3_BUCKET=my-bucket \
+  -e ARCHIVE_S3_ACCESS_KEY=key \
+  -e ARCHIVE_S3_SECRET_KEY=secret \
+  -e ARCHIVE_TABLE=events \
+  postgresql-archiver
+
+# Run with config file
+docker run --rm \
+  -v ~/.postgresql-archiver.yaml:/root/.postgresql-archiver.yaml \
+  postgresql-archiver
+```
+
+## 🔧 Development
+
+### Prerequisites
+
+- Go 1.21+
+- PostgreSQL database for testing
+- S3-compatible storage for testing
+
+### Building from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/airframesio/postgresql-archiver.git
+cd postgresql-archiver
+
+# Install dependencies
+go mod download
+
+# Build the binary
+go build -o postgresql-archiver
+
+# Run tests
+go test ./...
+
+# Build for different platforms
+GOOS=linux GOARCH=amd64 go build -o postgresql-archiver-linux-amd64
+GOOS=darwin GOARCH=arm64 go build -o postgresql-archiver-darwin-arm64
+GOOS=windows GOARCH=amd64 go build -o postgresql-archiver.exe
+```
+
+### CI/CD
+
+The project uses GitHub Actions for continuous integration:
+
+- **Test Matrix**: Tests on Go 1.21.x and 1.22.x
+- **Platforms**: Linux, macOS, Windows
+- **Coverage**: Runs tests with coverage reporting
+- **Linting**: Ensures code quality with golangci-lint
+- **Binary Builds**: Creates binaries for multiple platforms
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## 📄 License
 
