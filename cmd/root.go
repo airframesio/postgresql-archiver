@@ -29,6 +29,8 @@ var (
 	workers     int
 	dryRun      bool
 	skipCount   bool
+	cacheViewer bool
+	viewerPort  int
 
 	titleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#7D56F4")).
@@ -90,6 +92,8 @@ func init() {
 	rootCmd.Flags().StringVar(&endDate, "end-date", time.Now().Format("2006-01-02"), "end date (YYYY-MM-DD)")
 	rootCmd.Flags().IntVar(&workers, "workers", 4, "number of parallel workers")
 	rootCmd.Flags().BoolVar(&skipCount, "skip-count", false, "skip counting rows (faster startup, no progress bars)")
+	rootCmd.Flags().BoolVar(&cacheViewer, "cache-viewer", false, "start embedded cache viewer web server")
+	rootCmd.Flags().IntVar(&viewerPort, "viewer-port", 8080, "port for cache viewer web server")
 
 	rootCmd.MarkFlagRequired("table")
 
@@ -97,6 +101,8 @@ func init() {
 	viper.BindPFlag("db.host", rootCmd.Flags().Lookup("db-host"))
 	viper.BindPFlag("db.port", rootCmd.Flags().Lookup("db-port"))
 	viper.BindPFlag("db.user", rootCmd.Flags().Lookup("db-user"))
+	viper.BindPFlag("cache_viewer", rootCmd.Flags().Lookup("cache-viewer"))
+	viper.BindPFlag("viewer_port", rootCmd.Flags().Lookup("viewer-port"))
 	viper.BindPFlag("db.password", rootCmd.Flags().Lookup("db-password"))
 	viper.BindPFlag("db.name", rootCmd.Flags().Lookup("db-name"))
 	viper.BindPFlag("s3.endpoint", rootCmd.Flags().Lookup("s3-endpoint"))
@@ -137,10 +143,12 @@ func runArchive() {
 	fmt.Println(infoStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
 
 	config := &Config{
-		Debug:     viper.GetBool("debug"),
-		DryRun:    viper.GetBool("dry_run"),
-		Workers:   viper.GetInt("workers"),
-		SkipCount: viper.GetBool("skip_count"),
+		Debug:       viper.GetBool("debug"),
+		DryRun:      viper.GetBool("dry_run"),
+		Workers:     viper.GetInt("workers"),
+		SkipCount:   viper.GetBool("skip_count"),
+		CacheViewer: viper.GetBool("cache_viewer"),
+		ViewerPort:  viper.GetInt("viewer_port"),
 		Database: DatabaseConfig{
 			Host:     viper.GetString("db.host"),
 			Port:     viper.GetInt("db.port"),

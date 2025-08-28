@@ -42,3 +42,12 @@ workers: 4
 
 # Optional: Perform dry run without uploading
 # dry_run: true
+
+# Optional: Skip counting rows for faster startup
+# skip_count: false
+
+# Optional: Enable embedded cache viewer web server
+# cache_viewer: false
+
+# Optional: Port for cache viewer web server
+# viewer_port: 8080

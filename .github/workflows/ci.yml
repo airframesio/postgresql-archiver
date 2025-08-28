@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ['1.21', '1.22', '1.23']
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ matrix.go-version }}
+    
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-${{ matrix.go-version }}-
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Verify dependencies
+      run: go mod verify
+    
+    - name: Run go vet
+      run: go vet ./...
+    
+    - name: Install staticcheck
+      run: go install honnef.co/go/tools/cmd/staticcheck@latest
+    
+    - name: Run staticcheck
+      run: staticcheck ./...
+    
+    - name: Run tests
+      run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.out
+        flags: unittests
+        name: codecov-${{ matrix.go-version }}
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    
+    - name: Build
+      run: go build -v ./...
+
+  build-artifacts:
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+    
+    - name: Build for multiple platforms
+      run: |
+        # Linux AMD64
+        GOOS=linux GOARCH=amd64 go build -o postgresql-archiver-linux-amd64
+        
+        # Linux ARM64
+        GOOS=linux GOARCH=arm64 go build -o postgresql-archiver-linux-arm64
+        
+        # macOS AMD64
+        GOOS=darwin GOARCH=amd64 go build -o postgresql-archiver-darwin-amd64
+        
+        # macOS ARM64 (Apple Silicon)
+        GOOS=darwin GOARCH=arm64 go build -o postgresql-archiver-darwin-arm64
+        
+        # Windows AMD64
+        GOOS=windows GOARCH=amd64 go build -o postgresql-archiver-windows-amd64.exe
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: binaries
+        path: postgresql-archiver-*
+        retention-days: 7
+
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+    
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v6
+      with:
+        version: latest
+        args: --timeout=5m

@@ -2,9 +2,12 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/md5"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -12,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/klauspost/compress/zstd"
@@ -22,6 +26,7 @@ type Archiver struct {
 	config       *Config
 	db           *sql.DB
 	s3Client     *s3.S3
+	s3Uploader   *s3manager.Uploader
 	progressChan chan tea.Cmd
 }
 
@@ -50,12 +55,30 @@ func NewArchiver(config *Config) *Archiver {
 }
 
 func (a *Archiver) Run() error {
+	// Write PID file
+	if err := WritePIDFile(); err != nil {
+		return fmt.Errorf("failed to write PID file: %w", err)
+	}
+	defer RemovePIDFile()
+	
+	// Initialize task info
+	taskInfo := &TaskInfo{
+		PID:       os.Getpid(),
+		StartTime: time.Now(),
+		Table:     a.config.Table,
+		StartDate: a.config.StartDate,
+		EndDate:   a.config.EndDate,
+		CurrentTask: "Starting archiver",
+	}
+	WriteTaskInfo(taskInfo)
+	defer RemoveTaskFile()
+	
 	// Create channels for communication
 	errChan := make(chan error, 1)
 	resultsChan := make(chan []ProcessResult, 1)
 	
 	// Start the UI with the archiver reference
-	progressModel := newProgressModelWithArchiver(a.config, a, errChan, resultsChan)
+	progressModel := newProgressModelWithArchiver(a.config, a, errChan, resultsChan, taskInfo)
 	program := tea.NewProgram(progressModel)
 
 	// Run the TUI (this will handle everything internally)
@@ -120,6 +143,7 @@ func (a *Archiver) connect() error {
 	}
 
 	a.s3Client = s3.New(sess)
+	a.s3Uploader = s3manager.NewUploader(sess)
 
 	return nil
 }
@@ -463,19 +487,54 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 
 	// Small delay to ensure UI can update
 	time.Sleep(50 * time.Millisecond)
+
+	// Load cache and check if we have cached file metadata
+	cache, _ := loadPartitionCache(a.config.Table)
+	cachedSize, cachedMD5, hasCached := cache.getFileMetadata(partition.TableName, objectKey, partition.Date)
 	
-	// Check if already exists
-	if program != nil {
-		program.Send(updateProgress("Checking if file exists...", 0, 0))
-	}
-	if exists, size := a.checkObjectExists(objectKey); exists {
-		result.Skipped = true
-		result.SkipReason = fmt.Sprintf("Already exists with size %d", size)
-		result.Stage = "Skipped"
-		return result
+	if hasCached {
+		// We have cached metadata, check if it matches what's in S3
+		if program != nil {
+			program.Send(updateProgress("Checking cached file metadata...", 0, 0))
+		}
+		
+		if exists, s3Size, s3ETag := a.checkObjectExists(objectKey); exists {
+			s3ETag = strings.Trim(s3ETag, "\"")
+			isMultipart := strings.Contains(s3ETag, "-")
+			
+			if a.config.Debug {
+				fmt.Printf("  💾 Using cached metadata for %s:\n", partition.TableName)
+				fmt.Printf("     Cached: size=%d, md5=%s\n", cachedSize, cachedMD5)
+				fmt.Printf("     S3: size=%d, etag=%s (multipart=%v)\n", s3Size, s3ETag, isMultipart)
+			}
+			
+			// Check if cached metadata matches S3
+			if s3Size == cachedSize {
+				if !isMultipart && s3ETag == cachedMD5 {
+					// Cached metadata matches S3 - skip without extraction
+					result.Skipped = true
+					result.SkipReason = fmt.Sprintf("Cached metadata matches S3 (size=%d, md5=%s)", cachedSize, cachedMD5)
+					result.Stage = "Skipped"
+					result.BytesWritten = cachedSize
+					if a.config.Debug {
+						fmt.Printf("     ✅ Skipping based on cache: Size and MD5 match\n")
+					}
+					return result
+				} else if isMultipart {
+					// For multipart, we can't verify without the actual data
+					// But if size matches exactly, it's likely the same file
+					if a.config.Debug {
+						fmt.Printf("     ℹ️  Multipart upload with matching size, proceeding with extraction to verify\n")
+					}
+				}
+			}
+		} else if a.config.Debug {
+			fmt.Printf("  💾 Have cached metadata but file doesn't exist in S3, will upload\n")
+		}
 	}
 
 	// Extract data with progress
+	extractStart := time.Now()
 	if program != nil {
 		if partition.RowCount > 0 {
 			program.Send(updateProgress("Extracting data...", 0, partition.RowCount))
@@ -487,10 +546,21 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 	data, err := a.extractDataWithProgress(partition, program)
 	if err != nil {
 		result.Error = fmt.Errorf("extraction failed: %w", err)
+		// Save error to cache
+		cache.setError(partition.TableName, fmt.Sprintf("Extraction failed: %v", err))
+		cache.save(a.config.Table)
 		return result
 	}
+	extractDuration := time.Since(extractStart)
+	if a.config.Debug {
+		fmt.Printf("  ⏱️  Extraction took %v for %s\n", extractDuration, partition.TableName)
+	}
 
+	// Store uncompressed size
+	uncompressedSize := int64(len(data))
+	
 	// Compress data
+	compressStart := time.Now()
 	if program != nil {
 		program.Send(updateProgress("Compressing data...", 50, 100))
 	}
@@ -498,12 +568,92 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 	compressed, err := a.compressData(data)
 	if err != nil {
 		result.Error = fmt.Errorf("compression failed: %w", err)
+		// Save error to cache
+		cache.setError(partition.TableName, fmt.Sprintf("Compression failed: %v", err))
+		cache.save(a.config.Table)
 		return result
 	}
 	result.Compressed = true
 	result.BytesWritten = int64(len(compressed))
 	if program != nil {
 		program.Send(updateProgress("Compressing data...", 100, 100))
+	}
+	compressDuration := time.Since(compressStart)
+	if a.config.Debug {
+		fmt.Printf("  ⏱️  Compression took %v for %s (%.1fx ratio)\n", 
+			compressDuration, partition.TableName, float64(len(data))/float64(len(compressed)))
+	}
+
+	// Calculate MD5 hash of compressed data
+	hasher := md5.New()
+	hasher.Write(compressed)
+	localMD5 := hex.EncodeToString(hasher.Sum(nil))
+	localSize := int64(len(compressed))
+
+	// Check if already exists with matching size and hash
+	if program != nil {
+		program.Send(updateProgress("Checking if file exists...", 0, 0))
+	}
+	if exists, s3Size, s3ETag := a.checkObjectExists(objectKey); exists {
+		// Remove quotes from ETag if present
+		s3ETag = strings.Trim(s3ETag, "\"")
+		
+		// Check if it's a multipart upload (contains a dash)
+		isMultipart := strings.Contains(s3ETag, "-")
+		
+		// Always log comparison details in debug mode
+		if a.config.Debug {
+			fmt.Printf("  📊 Comparing files for %s:\n", partition.TableName)
+			fmt.Printf("     S3: size=%d, etag=%s (multipart=%v)\n", s3Size, s3ETag, isMultipart)
+			fmt.Printf("     Local: size=%d, md5=%s\n", localSize, localMD5)
+		}
+		
+		if s3Size == localSize {
+			// Size matches, now check hash
+			if !isMultipart && s3ETag == localMD5 {
+				// Single-part upload with matching MD5
+				result.Skipped = true
+				result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and MD5 (%s)", s3Size, s3ETag)
+				result.Stage = "Skipped"
+				if a.config.Debug {
+					fmt.Printf("     ✅ Skipping: Size and MD5 match\n")
+				}
+				// Save to cache for future runs (file is already in S3)
+				cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
+				cache.save(a.config.Table)
+				return result
+			} else if isMultipart {
+				// For multipart uploads, calculate the multipart ETag
+				localMultipartETag := a.calculateMultipartETag(compressed)
+				if a.config.Debug {
+					fmt.Printf("     Local multipart ETag: %s\n", localMultipartETag)
+				}
+				if s3ETag == localMultipartETag {
+					result.Skipped = true
+					result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and multipart ETag (%s)", s3Size, s3ETag)
+					result.Stage = "Skipped"
+					if a.config.Debug {
+						fmt.Printf("     ✅ Skipping: Size and multipart ETag match\n")
+					}
+					// Save to cache for future runs (store the single-part MD5 for simplicity, file is already in S3)
+					cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
+					cache.save(a.config.Table)
+					return result
+				} else if a.config.Debug {
+					fmt.Printf("     ❌ Multipart ETag mismatch: S3=%s, Local=%s\n", s3ETag, localMultipartETag)
+				}
+			} else if a.config.Debug {
+				fmt.Printf("     ❌ MD5 mismatch: S3=%s, Local=%s\n", s3ETag, localMD5)
+			}
+		} else if a.config.Debug {
+			fmt.Printf("     ❌ Size mismatch: S3=%d, Local=%d\n", s3Size, localSize)
+		}
+		// Size or hash doesn't match, we'll re-upload
+		if a.config.Debug {
+			fmt.Printf("     🔄 Will re-upload due to differences\n")
+		}
+	} else if a.config.Debug {
+		fmt.Printf("  📊 File does not exist in S3: %s\n", objectKey)
 	}
 
 	// Upload to S3
@@ -519,6 +669,13 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 		result.Uploaded = true
 		if program != nil {
 			program.Send(updateProgress("Uploading to S3...", 100, 100))
+		}
+		
+		// Save metadata to cache after successful upload
+		cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
+		cache.save(a.config.Table)
+		if a.config.Debug {
+			fmt.Printf("  💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s\n", localSize, uncompressedSize, localMD5)
 		}
 	}
 
@@ -612,7 +769,7 @@ func (a *Archiver) compressData(data []byte) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func (a *Archiver) checkObjectExists(key string) (bool, int64) {
+func (a *Archiver) checkObjectExists(key string) (bool, int64, string) {
 	headInput := &s3.HeadObjectInput{
 		Bucket: aws.String(a.config.S3.Bucket),
 		Key:    aws.String(key),
@@ -620,31 +777,91 @@ func (a *Archiver) checkObjectExists(key string) (bool, int64) {
 
 	result, err := a.s3Client.HeadObject(headInput)
 	if err != nil {
-		return false, 0
+		return false, 0, ""
 	}
 
+	var size int64
+	var etag string
+	
 	if result.ContentLength != nil {
-		return true, *result.ContentLength
+		size = *result.ContentLength
+	}
+	
+	if result.ETag != nil {
+		etag = *result.ETag
 	}
 
-	return true, 0
+	return true, size, etag
+}
+
+// calculateMultipartETag calculates the ETag for a multipart upload
+// This matches S3's algorithm for multipart uploads
+func (a *Archiver) calculateMultipartETag(data []byte) string {
+	const partSize = 5 * 1024 * 1024 * 1024 // 5GB part size (max single part size)
+	
+	// Calculate number of parts
+	numParts := (len(data) + partSize - 1) / partSize
+	
+	// If it would be a single part, just return regular MD5
+	if numParts == 1 {
+		hasher := md5.New()
+		hasher.Write(data)
+		return hex.EncodeToString(hasher.Sum(nil))
+	}
+	
+	// Calculate MD5 of each part and concatenate
+	var partMD5s []byte
+	for i := 0; i < numParts; i++ {
+		start := i * partSize
+		end := start + partSize
+		if end > len(data) {
+			end = len(data)
+		}
+		
+		partHasher := md5.New()
+		partHasher.Write(data[start:end])
+		partMD5s = append(partMD5s, partHasher.Sum(nil)...)
+	}
+	
+	// Calculate MD5 of concatenated MD5s
+	finalHasher := md5.New()
+	finalHasher.Write(partMD5s)
+	finalMD5 := hex.EncodeToString(finalHasher.Sum(nil))
+	
+	// Return in S3 multipart format: MD5-numParts
+	return fmt.Sprintf("%s-%d", finalMD5, numParts)
 }
 
 func (a *Archiver) uploadToS3(key string, data []byte) error {
-	putInput := &s3.PutObjectInput{
-		Bucket:      aws.String(a.config.S3.Bucket),
-		Key:         aws.String(key),
-		Body:        bytes.NewReader(data),
-		ContentType: aws.String("application/zstd"),
-	}
-
 	if a.config.Debug {
-		fmt.Println(debugStyle.Render(fmt.Sprintf("  ☁️  Uploading to s3://%s/%s",
-			a.config.S3.Bucket, key)))
+		fmt.Println(debugStyle.Render(fmt.Sprintf("  ☁️  Uploading to s3://%s/%s (size: %d bytes)",
+			a.config.S3.Bucket, key, len(data))))
 	}
 
-	_, err := a.s3Client.PutObject(putInput)
-	return err
+	// Use multipart upload for files larger than 100MB
+	if len(data) > 100*1024*1024 {
+		// Use S3 manager for automatic multipart upload handling
+		uploadInput := &s3manager.UploadInput{
+			Bucket:      aws.String(a.config.S3.Bucket),
+			Key:         aws.String(key),
+			Body:        bytes.NewReader(data),
+			ContentType: aws.String("application/zstd"),
+		}
+		
+		_, err := a.s3Uploader.Upload(uploadInput)
+		return err
+	} else {
+		// Use simple PutObject for smaller files
+		putInput := &s3.PutObjectInput{
+			Bucket:      aws.String(a.config.S3.Bucket),
+			Key:         aws.String(key),
+			Body:        bytes.NewReader(data),
+			ContentType: aws.String("application/zstd"),
+		}
+		
+		_, err := a.s3Client.PutObject(putInput)
+		return err
+	}
 }
 
 func (a *Archiver) printSummary(results []ProcessResult) {

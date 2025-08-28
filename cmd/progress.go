@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -50,8 +51,9 @@ type progressModel struct {
 	pendingTables   []struct{ name string; date time.Time }
 	countedPartitions []PartitionInfo
 	currentCountIndex int
-	rowCountCache   *RowCountCache
+	partitionCache  *PartitionCache
 	processingStartTime time.Time
+	taskInfo        *TaskInfo
 }
 
 type progressMsg struct {
@@ -135,7 +137,20 @@ var (
 			Margin(0, 2)
 )
 
-func newProgressModelWithArchiver(config *Config, archiver *Archiver, errChan chan<- error, resultsChan chan<- []ProcessResult) progressModel {
+// updateTaskInfo updates the task info file with current progress
+func (m *progressModel) updateTaskInfo() {
+	if m.taskInfo != nil {
+		m.taskInfo.CurrentTask = m.currentStage
+		if len(m.partitions) > 0 {
+			m.taskInfo.TotalItems = len(m.partitions)
+			m.taskInfo.CompletedItems = m.currentIndex
+			m.taskInfo.Progress = float64(m.currentIndex) / float64(len(m.partitions))
+		}
+		WriteTaskInfo(m.taskInfo)
+	}
+}
+
+func newProgressModelWithArchiver(config *Config, archiver *Archiver, errChan chan<- error, resultsChan chan<- []ProcessResult, taskInfo *TaskInfo) progressModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -151,10 +166,10 @@ func newProgressModelWithArchiver(config *Config, archiver *Archiver, errChan ch
 	)
 
 	// Load cache for row counts
-	cache, _ := loadCache(config.Table)
+	cache, _ := loadPartitionCache(config.Table)
 	if cache == nil {
-		cache = &RowCountCache{
-			Counts: make(map[string]RowCountEntry),
+		cache = &PartitionCache{
+			Entries: make(map[string]PartitionCacheEntry),
 		}
 	}
 
@@ -172,7 +187,8 @@ func newProgressModelWithArchiver(config *Config, archiver *Archiver, errChan ch
 		errChan:         errChan,
 		resultsChan:     resultsChan,
 		initialized:     false,
-		rowCountCache:   cache,
+		partitionCache:  cache,
+		taskInfo:        taskInfo,
 	}
 }
 
@@ -341,9 +357,9 @@ func (m *progressModel) startCounting(tables []struct{ name string; date time.Ti
 func (m *progressModel) countNextTable() tea.Cmd {
 	if m.currentCountIndex >= len(m.pendingTables) {
 		// Done counting all tables - clean expired entries and save cache
-		if m.rowCountCache != nil && m.config != nil {
-			m.rowCountCache.cleanExpired()
-			m.rowCountCache.save(m.config.Table)
+		if m.partitionCache != nil && m.config != nil {
+			m.partitionCache.cleanExpired()
+			m.partitionCache.save(m.config.Table)
 		}
 		return func() tea.Msg {
 			return partitionsFoundMsg{partitions: m.countedPartitions}
@@ -358,8 +374,8 @@ func (m *progressModel) countNextTable() tea.Cmd {
 		var fromCache bool
 		
 		// Try to get from cache first
-		if m.rowCountCache != nil {
-			if cachedCount, ok := m.rowCountCache.getCount(table.name, table.date); ok {
+		if m.partitionCache != nil {
+			if cachedCount, ok := m.partitionCache.getRowCount(table.name, table.date); ok {
 				count = cachedCount
 				fromCache = true
 			}
@@ -369,11 +385,11 @@ func (m *progressModel) countNextTable() tea.Cmd {
 		if !fromCache {
 			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", table.name)
 			if err := m.archiver.db.QueryRow(countQuery).Scan(&count); err == nil {
-				// Save to cache
-				if m.rowCountCache != nil {
-					m.rowCountCache.setCount(table.name, count)
+				// Save to cache (preserving existing metadata)
+				if m.partitionCache != nil {
+					m.partitionCache.setRowCount(table.name, count)
 					// Save cache immediately after updating
-					m.rowCountCache.save(m.config.Table)
+					m.partitionCache.save(m.config.Table)
 				}
 			} else {
 				// Even on error, continue to next table
@@ -517,6 +533,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Start the connection phase
 			m.phase = PhaseConnecting
 			m.currentStage = "Connecting to database..."
+			m.updateTaskInfo()
 			return m, m.doConnect()
 		}
 		
@@ -535,6 +552,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Move to discovery phase after permissions are verified
 			m.phase = PhaseDiscovering
 			m.currentStage = "Discovering partitions..."
+			m.updateTaskInfo()
 			return m, m.doDiscover()
 		}
 		
@@ -548,12 +566,38 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connectedMsg:
 		// Add connection success message
 		m.messages = append(m.messages, fmt.Sprintf("✅ Connected to PostgreSQL at %s", msg.host))
+		
+		// Start cache viewer server if enabled
+		if m.config.CacheViewer {
+			go func() {
+				// Create a new mux to avoid conflicts
+				mux := http.NewServeMux()
+				mux.HandleFunc("/", serveCacheViewer)
+				mux.HandleFunc("/api/cache", serveCacheData)
+				mux.HandleFunc("/api/status", serveStatusData)
+				
+				addr := fmt.Sprintf(":%d", m.config.ViewerPort)
+				server := &http.Server{
+					Addr:    addr,
+					Handler: mux,
+				}
+				
+				// Start the server
+				if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					// Log error but don't crash the archiver
+					fmt.Printf("Cache viewer server error: %v\n", err)
+				}
+			}()
+			m.messages = append(m.messages, fmt.Sprintf("🌐 Cache viewer started at http://localhost:%d", m.config.ViewerPort))
+		}
+		
 		if len(m.messages) > 10 {
 			m.messages = m.messages[len(m.messages)-10:]
 		}
 		// Move to permission checking phase
 		m.phase = PhaseCheckingPermissions
 		m.currentStage = "Checking table permissions..."
+		m.updateTaskInfo()
 		return m, m.doCheckPermissions()
 
 	case discoveredTablesMsg:
@@ -653,6 +697,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentStage = msg.stage
 		m.currentRows = msg.current
 		m.totalRows = msg.total
+		m.updateTaskInfo()  // Update task info when progress changes
 		
 		if msg.total > 0 {
 			percent := float64(msg.current) / float64(msg.total)
@@ -664,6 +709,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case partitionCompleteMsg:
 		m.results = append(m.results, msg.result)
 		m.currentIndex = msg.index + 1
+		m.updateTaskInfo()  // Update task info when partition completes
 		
 		// Clear the current stage and reset processing start time for next partition
 		m.currentStage = ""
@@ -690,6 +736,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		
 	case stageUpdateMsg:
 		m.currentStage = msg.stage
+		m.updateTaskInfo()
 		return m, nil
 		
 	case stageTickMsg:
@@ -709,6 +756,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.currentStage = "Finalizing"
 			}
+			m.updateTaskInfo()
 			
 			// Continue ticking if still processing
 			return m, tea.Tick(time.Millisecond*500, func(t time.Time) tea.Msg {

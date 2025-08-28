@@ -6,15 +6,17 @@ import (
 )
 
 type Config struct {
-	Debug     bool
-	DryRun    bool
-	Workers   int
-	SkipCount bool
-	Database  DatabaseConfig
-	S3        S3Config
-	Table     string
-	StartDate string
-	EndDate   string
+	Debug       bool
+	DryRun      bool
+	Workers     int
+	SkipCount   bool
+	CacheViewer bool
+	ViewerPort  int
+	Database    DatabaseConfig
+	S3          S3Config
+	Table       string
+	StartDate   string
+	EndDate     string
 }
 
 type DatabaseConfig struct {
