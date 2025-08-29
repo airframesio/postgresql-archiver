@@ -39,7 +39,6 @@ type progressModel struct {
 	height          int
 	results         []ProcessResult
 	startTime       time.Time
-	currentStart    time.Time
 	messages        []string
 	countProgress   int
 	countTotal      int
@@ -60,10 +59,9 @@ type progressModel struct {
 }
 
 type progressMsg struct {
-	partitionIndex int
-	stage          string
-	current        int64
-	total          int64
+	stage   string
+	current int64
+	total   int64
 }
 
 type partitionCompleteMsg struct {
@@ -117,22 +115,8 @@ type connectedMsg struct {
 }
 
 var (
-	currentProgressStyle = lipgloss.NewStyle().
-				Margin(1, 2)
-
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#626262")).
-			Margin(0, 2)
-
-	statusStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(lipgloss.Color("#7D56F4")).
-			Padding(0, 1).
-			Margin(0, 2)
-
-	partitionStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#00D9FF")).
-			Bold(true).
 			Margin(0, 2)
 
 	stageStyle = lipgloss.NewStyle().
@@ -144,7 +128,7 @@ var (
 func (m *progressModel) updateTaskInfo() {
 	if m.taskInfo != nil {
 		m.taskInfo.CurrentTask = m.currentStage
-		
+
 		// Set current partition and step info
 		if m.currentIndex < len(m.partitions) {
 			m.taskInfo.CurrentPartition = m.partitions[m.currentIndex].TableName
@@ -153,7 +137,7 @@ func (m *progressModel) updateTaskInfo() {
 			m.taskInfo.CurrentPartition = ""
 			m.taskInfo.CurrentStep = ""
 		}
-		
+
 		if len(m.partitions) > 0 {
 			m.taskInfo.TotalItems = len(m.partitions)
 			m.taskInfo.CompletedItems = m.currentIndex
@@ -220,6 +204,8 @@ func (m *progressModel) startArchiving() tea.Cmd {
 	}
 }
 
+// runArchiving was replaced by direct processing logic
+/*
 func (m *progressModel) runArchiving() tea.Cmd {
 	return func() tea.Msg {
 		// Start connecting
@@ -229,6 +215,7 @@ func (m *progressModel) runArchiving() tea.Cmd {
 		}
 	}
 }
+*/
 
 func (m *progressModel) doConnect() tea.Cmd {
 	return func() tea.Msg {
@@ -350,6 +337,8 @@ func (m *progressModel) doDiscover() tea.Cmd {
 	}
 }
 
+// startCounting was replaced by countNextTable logic
+/*
 func (m *progressModel) startCounting(tables []struct {
 	name string
 	date time.Time
@@ -369,6 +358,7 @@ func (m *progressModel) startCounting(tables []struct {
 	// Start counting the first table
 	return m.countNextTable()
 }
+*/
 
 func (m *progressModel) countNextTable() tea.Cmd {
 	if m.currentCountIndex >= len(m.pendingTables) {
@@ -1061,6 +1051,8 @@ func updateProgress(stage string, current, total int64) tea.Cmd {
 	}
 }
 
+// Helper functions used by commented-out archiver functions
+/*
 func completePartition(index int, result ProcessResult) tea.Cmd {
 	return func() tea.Msg {
 		return partitionCompleteMsg{
@@ -1090,7 +1082,10 @@ func addMessage(message string) tea.Cmd {
 		return messageMsg(message)
 	}
 }
+*/
 
+// Unused helper function - kept for potential future use
+/*
 func setPartitions(partitions []PartitionInfo) tea.Cmd {
 	return func() tea.Msg {
 		return partitionsFoundMsg{
@@ -1108,3 +1103,4 @@ func updateCount(current, total int, tableName string) tea.Cmd {
 		}
 	}
 }
+*/

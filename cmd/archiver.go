@@ -216,6 +216,9 @@ func (a *Archiver) checkTablePermissions() error {
 	return nil
 }
 
+// discoverPartitionsWithUI was used for UI-based discovery but is currently replaced by progress.go logic
+// Keeping for potential future use
+/*
 func (a *Archiver) discoverPartitionsWithUI(program *tea.Program) ([]PartitionInfo, error) {
 	query := `
 		SELECT tablename
@@ -317,7 +320,11 @@ func (a *Archiver) discoverPartitionsWithUI(program *tea.Program) ([]PartitionIn
 
 	return partitions, nil
 }
+*/
 
+// discoverPartitions was used for non-UI discovery but is currently replaced by progress.go logic
+// Keeping for potential future use
+/*
 func (a *Archiver) discoverPartitions() ([]PartitionInfo, error) {
 	query := `
 		SELECT tablename
@@ -424,6 +431,7 @@ func (a *Archiver) discoverPartitions() ([]PartitionInfo, error) {
 
 	return partitions, nil
 }
+*/
 
 func (a *Archiver) extractDateFromTableName(tableName string) (time.Time, bool) {
 	baseTableLen := len(a.config.Table)
@@ -460,6 +468,9 @@ func (a *Archiver) extractDateFromTableName(tableName string) (time.Time, bool) 
 	return time.Time{}, false
 }
 
+// processPartitionsWithProgress was used for UI-based processing but is currently replaced by progress.go logic
+// Keeping for potential future use
+/*
 func (a *Archiver) processPartitionsWithProgress(partitions []PartitionInfo, program *tea.Program) []ProcessResult {
 	results := make([]ProcessResult, len(partitions))
 
@@ -477,6 +488,7 @@ func (a *Archiver) processPartitionsWithProgress(partitions []PartitionInfo, pro
 
 	return results
 }
+*/
 
 func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index int, program *tea.Program) ProcessResult {
 	result := ProcessResult{

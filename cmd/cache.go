@@ -124,7 +124,8 @@ func loadLegacyCache(tableName string) (*RowCountCache, error) {
 	return &cache, nil
 }
 
-// Backward compatibility wrapper
+// Backward compatibility wrapper - kept for potential future use
+/*
 func loadCache(tableName string) (*RowCountCache, error) {
 	partitionCache, err := loadPartitionCache(tableName)
 	if err != nil {
@@ -144,6 +145,7 @@ func loadCache(tableName string) (*RowCountCache, error) {
 
 	return rowCountCache, nil
 }
+*/
 
 func (c *PartitionCache) save(tableName string) error {
 	cachePath := getCachePath(tableName)
@@ -156,7 +158,8 @@ func (c *PartitionCache) save(tableName string) error {
 	return os.WriteFile(cachePath, data, 0644)
 }
 
-// Backward compatibility wrapper
+// Backward compatibility wrapper - kept for potential future use
+/*
 func (c *RowCountCache) save(tableName string) error {
 	// Convert to new format
 	partitionCache := &PartitionCache{
@@ -171,6 +174,7 @@ func (c *RowCountCache) save(tableName string) error {
 
 	return partitionCache.save(tableName)
 }
+*/
 
 // Get file metadata from cache
 func (c *PartitionCache) getFileMetadata(tablePartition string, s3Key string, partitionDate time.Time) (size int64, md5 string, found bool) {
@@ -279,7 +283,8 @@ func (c *PartitionCache) setRowCount(tablePartition string, count int64) {
 	c.Entries[tablePartition] = entry
 }
 
-// Backward compatibility wrappers
+// Backward compatibility wrappers - kept for potential future use
+/*
 func (c *RowCountCache) getCount(tablePartition string, partitionDate time.Time) (int64, bool) {
 	entry, exists := c.Counts[tablePartition]
 	if !exists {
@@ -308,6 +313,7 @@ func (c *RowCountCache) setCount(tablePartition string, count int64) {
 		Timestamp: time.Now(),
 	}
 }
+*/
 
 func (c *PartitionCache) cleanExpired() {
 	for partition, entry := range c.Entries {
@@ -342,7 +348,8 @@ func (c *PartitionCache) cleanExpired() {
 	}
 }
 
-// Backward compatibility wrapper
+// Backward compatibility wrapper - kept for potential future use
+/*
 func (c *RowCountCache) cleanExpired() {
 	for partition, entry := range c.Counts {
 		if time.Since(entry.Timestamp) > 24*time.Hour {
@@ -350,3 +357,4 @@ func (c *RowCountCache) cleanExpired() {
 		}
 	}
 }
+*/
