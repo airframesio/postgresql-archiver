@@ -365,7 +365,7 @@ func (m *progressModel) countNextTable() tea.Cmd {
 		// Done counting all tables - clean expired entries and save cache
 		if m.partitionCache != nil && m.config != nil {
 			m.partitionCache.cleanExpired()
-			m.partitionCache.save(m.config.Table)
+			_ = m.partitionCache.save(m.config.Table)
 		}
 		return func() tea.Msg {
 			return partitionsFoundMsg{partitions: m.countedPartitions}
@@ -395,7 +395,7 @@ func (m *progressModel) countNextTable() tea.Cmd {
 				if m.partitionCache != nil {
 					m.partitionCache.setRowCount(table.name, count)
 					// Save cache immediately after updating
-					m.partitionCache.save(m.config.Table)
+					_ = m.partitionCache.save(m.config.Table)
 				}
 			} else {
 				// Even on error, continue to next table
@@ -547,10 +547,6 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Check if we need to transition phases based on the message
 		if strings.Contains(msgStr, "✅ Table permissions verified") && m.phase == PhaseCheckingPermissions {
 			// Add S3 connection message
-			s3Endpoint := m.config.S3.Endpoint
-			if s3Endpoint == "" {
-				s3Endpoint = "AWS S3"
-			}
 			m.messages = append(m.messages, fmt.Sprintf("✅ Connected to S3 at s3://%s", m.config.S3.Bucket))
 			if len(m.messages) > 10 {
 				m.messages = m.messages[len(m.messages)-10:]

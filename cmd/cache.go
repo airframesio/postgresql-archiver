@@ -47,7 +47,7 @@ type RowCountEntry struct {
 func getCachePath(tableName string) string {
 	homeDir, _ := os.UserHomeDir()
 	cacheDir := filepath.Join(homeDir, ".postgresql-archiver", "cache")
-	os.MkdirAll(cacheDir, 0755)
+	_ = os.MkdirAll(cacheDir, 0755)
 	return filepath.Join(cacheDir, fmt.Sprintf("%s_metadata.json", tableName))
 }
 
@@ -79,9 +79,9 @@ func loadPartitionCache(tableName string) (*PartitionCache, error) {
 					}
 				}
 				// Save in new format
-				newCache.save(tableName)
+				_ = newCache.save(tableName)
 				// Remove old cache file
-				os.Remove(getLegacyCachePath(tableName))
+				_ = os.Remove(getLegacyCachePath(tableName))
 				return newCache, nil
 			}
 			// Return empty cache if no legacy cache exists
