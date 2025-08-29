@@ -96,6 +96,11 @@ const cacheViewerHTML = `<!DOCTYPE html>
             color: #155724;
         }
         
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
         .pulse {
             width: 8px;
             height: 8px;
@@ -472,6 +477,18 @@ const cacheViewerHTML = `<!DOCTYPE html>
             opacity: 0.9;
         }
         
+        .task-details a {
+            color: white !important;
+            text-decoration: underline;
+            opacity: 1;
+            transition: opacity 0.2s ease;
+        }
+        
+        .task-details a:hover {
+            opacity: 0.8;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+        
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -518,18 +535,6 @@ const cacheViewerHTML = `<!DOCTYPE html>
                     <span id="status-text">Connected to local cache</span>
                 </span>
                 <span id="last-update">Last updated: Never</span>
-                <div class="refresh-control">
-                    <span>Auto-refresh:</span>
-                    <select class="filter-select" id="refresh-rate">
-                        <option value="1000">1s</option>
-                        <option value="2000">2s</option>
-                        <option value="5000" selected>5s</option>
-                        <option value="10000">10s</option>
-                        <option value="15000">15s</option>
-                        <option value="60000">1m</option>
-                        <option value="0">Off</option>
-                    </select>
-                </div>
             </div>
             <a href="https://github.com/airframesio/postgresql-archiver" target="_blank" class="github-link">
                 <svg viewBox="0 0 16 16">
@@ -543,7 +548,7 @@ const cacheViewerHTML = `<!DOCTYPE html>
             <!-- Stats will be inserted here -->
         </div>
         
-        <div class="task-panel" id="task-panel" style="display: none;">
+        <div class="task-panel idle" id="task-panel">
             <div class="task-header">
                 <div class="task-title" id="task-title">Archiver Status</div>
                 <div class="task-status">
@@ -555,7 +560,7 @@ const cacheViewerHTML = `<!DOCTYPE html>
                 <div class="task-progress-fill" id="task-progress-fill"></div>
             </div>
             <div class="task-details">
-                <span id="task-current">No active task</span>
+                <span id="task-status-text">No active task</span>
                 <span id="task-stats"></span>
             </div>
         </div>
@@ -597,8 +602,9 @@ const cacheViewerHTML = `<!DOCTYPE html>
         let allData = [];
         let currentData = {};  // Track current data by partition key
         let currentSort = { column: 'partition', direction: 'asc' };  // Default sort by partition name
-        let autoRefreshInterval = null;
-        let refreshRate = 5000;
+        let ws = null;
+        let wsReconnectInterval = null;
+        let lastTaskState = null;  // Store last known task state to avoid flashing
         
         // Format bytes
         function formatBytes(bytes) {
@@ -647,104 +653,188 @@ const cacheViewerHTML = `<!DOCTYPE html>
             return entry.table + '|' + entry.partition;
         }
         
-        // Fetch status data
-        async function fetchStatusData() {
-            try {
-                const response = await fetch('/api/status');
-                if (!response.ok) return;
+        // WebSocket connection management
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = protocol + '//' + window.location.host + '/ws';
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = function() {
+                console.log('WebSocket connected');
+                document.getElementById('status').classList.add('connected');
+                document.getElementById('status').classList.remove('disconnected');
+                document.getElementById('status-text').textContent = 'Connected to live updates';
                 
-                const data = await response.json();
-                updateTaskPanel(data);
-            } catch (error) {
-                console.error('Error fetching status:', error);
-            }
+                // Clear reconnect interval if exists
+                if (wsReconnectInterval) {
+                    clearInterval(wsReconnectInterval);
+                    wsReconnectInterval = null;
+                }
+            };
+            
+            ws.onmessage = function(event) {
+                try {
+                    const message = JSON.parse(event.data);
+                    
+                    if (message.type === 'cache') {
+                        handleCacheData(message.data);
+                    } else if (message.type === 'status') {
+                        updateTaskPanel(message.data);
+                    }
+                } catch (error) {
+                    console.error('Error handling WebSocket message:', error);
+                }
+            };
+            
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
+            
+            ws.onclose = function() {
+                console.log('WebSocket disconnected');
+                document.getElementById('status').classList.remove('connected');
+                document.getElementById('status').classList.add('disconnected');
+                document.getElementById('status-text').textContent = 'Disconnected - reconnecting...';
+                
+                // Set up reconnection
+                if (!wsReconnectInterval) {
+                    wsReconnectInterval = setInterval(() => {
+                        console.log('Attempting to reconnect WebSocket...');
+                        connectWebSocket();
+                    }, 2000);
+                }
+            };
         }
         
         // Update task panel
         function updateTaskPanel(status) {
             const panel = document.getElementById('task-panel');
             
-            if (status.archiverRunning && status.currentTask) {
-                panel.style.display = 'block';
+            if (status.archiverRunning) {
                 panel.classList.remove('idle');
                 
                 document.getElementById('task-title').textContent = 'Archiver Running';
                 document.getElementById('task-pid').textContent = 'PID: ' + status.pid;
                 
-                const task = status.currentTask;
-                document.getElementById('task-current').textContent = task.current_task || 'Processing...';
+                // Handle task info if available
+                if (status.currentTask) {
+                    // Store the last known task state
+                    lastTaskState = status.currentTask;
+                    const task = status.currentTask;
+                    
+                    // Update current task and partition info
+                    const currentTaskText = task.current_step || task.current_task || 'Processing...';
+                    const statusElement = document.getElementById('task-status-text');
+                    
+                    if (task.current_partition) {
+                        // Show as "Table: partition - operation"
+                        statusElement.innerHTML = 'Table: <a href="#" onclick="scrollToPartition(\'' + task.current_partition + '\'); return false;" style="color: white; text-decoration: underline;">' + task.current_partition + '</a> - ' + currentTaskText;
+                    } else {
+                        statusElement.textContent = currentTaskText;
+                    }
+                } else if (lastTaskState) {
+                    // Use last known state if task info temporarily unavailable
+                    const task = lastTaskState;
+                    const currentTaskText = task.current_step || task.current_task || 'Processing...';
+                    const statusElement = document.getElementById('task-status-text');
+                    
+                    if (task.current_partition) {
+                        // Show as "Table: partition - operation"
+                        statusElement.innerHTML = 'Table: <a href="#" onclick="scrollToPartition(\'' + task.current_partition + '\'); return false;" style="color: white; text-decoration: underline;">' + task.current_partition + '</a> - ' + currentTaskText;
+                    } else {
+                        statusElement.textContent = currentTaskText;
+                    }
+                } else {
+                    // Only show initializing if we've never had task info
+                    document.getElementById('task-status-text').textContent = 'Starting...';
+                }
                 
-                if (task.total_items > 0) {
+                // Use current task or last known task for progress bar and stats
+                const taskForProgress = status.currentTask || lastTaskState;
+                if (taskForProgress && taskForProgress.total_items > 0) {
                     const progressBar = document.getElementById('task-progress-bar');
                     const progressFill = document.getElementById('task-progress-fill');
                     progressBar.style.display = 'block';
                     
-                    const percent = (task.completed_items / task.total_items) * 100;
+                    const percent = (taskForProgress.completed_items / taskForProgress.total_items) * 100;
                     progressFill.style.width = percent + '%';
                     
                     document.getElementById('task-stats').textContent = 
-                        task.completed_items + '/' + task.total_items + ' partitions (' + Math.round(percent) + '%)';
+                        taskForProgress.completed_items + '/' + taskForProgress.total_items + ' partitions (' + Math.round(percent) + '%)';
                 } else {
                     document.getElementById('task-progress-bar').style.display = 'none';
                     document.getElementById('task-stats').textContent = '';
                 }
                 
                 // Show elapsed time
-                if (task.start_time) {
-                    const start = new Date(task.start_time);
+                if (taskForProgress && taskForProgress.start_time) {
+                    const start = new Date(taskForProgress.start_time);
                     const elapsed = Math.floor((new Date() - start) / 1000);
                     const minutes = Math.floor(elapsed / 60);
                     const seconds = elapsed % 60;
                     document.getElementById('task-time').textContent = minutes + 'm ' + seconds + 's';
                 }
-            } else if (!status.archiverRunning) {
-                panel.style.display = 'block';
+            } else {
                 panel.classList.add('idle');
                 document.getElementById('task-title').textContent = 'Archiver Idle';
                 document.getElementById('task-pid').textContent = '';
-                document.getElementById('task-current').textContent = 'No active archiving process';
+                document.getElementById('task-status-text').textContent = 'No active archiving process';
                 document.getElementById('task-progress-bar').style.display = 'none';
                 document.getElementById('task-stats').textContent = '';
                 document.getElementById('task-time').textContent = '';
-            } else {
-                panel.style.display = 'none';
+                // Clear last task state when idle
+                lastTaskState = null;
             }
         }
         
-        // Fetch and update data
-        async function fetchCacheData() {
-            try {
-                const response = await fetch('/api/cache');
-                const data = await response.json();
-                
-                // Flatten all entries
-                const newData = [];
-                const tables = new Set();
-                
-                data.tables.forEach(table => {
-                    tables.add(table.tableName);
-                    table.entries.forEach(entry => {
-                        newData.push(entry);
-                    });
+        // Handle cache data from WebSocket or initial fetch
+        function handleCacheData(data) {
+            // Flatten all entries
+            const newData = [];
+            const tables = new Set();
+            
+            data.tables.forEach(table => {
+                tables.add(table.tableName);
+                table.entries.forEach(entry => {
+                    newData.push(entry);
                 });
+            });
+            
+            // Update table filter
+            updateTableFilter(Array.from(tables));
+            
+            // Update data
+            allData = newData;
+            
+            // Apply sort (always, since we have a default)
+            sortData(currentSort.column, false);
+            
+            // Update display
+            updateStats();
+            updateTable();
+            
+            document.getElementById('last-update').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+        }
+        
+        // Fetch initial data (fallback for when WebSocket is not yet connected)
+        async function fetchInitialData() {
+            try {
+                // Fetch cache data
+                const cacheResponse = await fetch('/api/cache');
+                if (cacheResponse.ok) {
+                    const cacheData = await cacheResponse.json();
+                    handleCacheData(cacheData);
+                }
                 
-                // Update table filter
-                updateTableFilter(Array.from(tables));
-                
-                // Update data
-                allData = newData;
-                
-                // Apply sort (always, since we have a default)
-                sortData(currentSort.column, false);
-                
-                // Update display
-                updateStats();
-                updateTable();
-                
-                document.getElementById('last-update').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
-                
+                // Fetch status data
+                const statusResponse = await fetch('/api/status');
+                if (statusResponse.ok) {
+                    const statusData = await statusResponse.json();
+                    updateTaskPanel(statusData);
+                }
             } catch (error) {
-                console.error('Error fetching cache data:', error);
+                console.error('Error fetching initial data:', error);
             }
         }
         
@@ -1013,17 +1103,6 @@ const cacheViewerHTML = `<!DOCTYPE html>
         document.getElementById('search-box').addEventListener('input', updateTable);
         document.getElementById('table-filter').addEventListener('change', updateTable);
         
-        document.getElementById('refresh-rate').addEventListener('change', (e) => {
-            refreshRate = parseInt(e.target.value);
-            if (autoRefreshInterval) {
-                clearInterval(autoRefreshInterval);
-                autoRefreshInterval = null;
-            }
-            if (refreshRate > 0) {
-                autoRefreshInterval = setInterval(fetchCacheData, refreshRate);
-            }
-        });
-        
         // Sort handlers
         document.addEventListener('click', (e) => {
             const th = e.target.closest('th.sortable');
@@ -1033,22 +1112,54 @@ const cacheViewerHTML = `<!DOCTYPE html>
         });
         
         // Initial load
-        fetchCacheData();
-        fetchStatusData();
+        fetchInitialData();
         updateSortIndicators();  // Show initial sort indicator
         
-        // Start auto-refresh
-        if (refreshRate > 0) {
-            autoRefreshInterval = setInterval(() => {
-                fetchCacheData();
-                fetchStatusData();
-            }, refreshRate);
+        // Connect WebSocket for real-time updates
+        connectWebSocket();
+        
+        // Function to scroll to a specific partition in the table (global for inline onclick)
+        window.scrollToPartition = function(partitionName) {
+            // Small delay to ensure table is rendered
+            setTimeout(() => {
+                const rows = document.querySelectorAll('#table-body tr');
+                for (const row of rows) {
+                    const partitionDiv = row.querySelector('td:first-child .partition-name');
+                    if (partitionDiv && partitionDiv.textContent.trim() === partitionName) {
+                        // Highlight the row temporarily
+                        const originalBg = row.style.background;
+                        row.style.background = '#fffacd';
+                        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        
+                        // Also ensure the table wrapper scrolls if needed
+                        const tableWrapper = document.querySelector('.table-wrapper');
+                        if (tableWrapper) {
+                            const rowTop = row.offsetTop;
+                            const rowHeight = row.offsetHeight;
+                            const wrapperScrollTop = tableWrapper.scrollTop;
+                            const wrapperHeight = tableWrapper.offsetHeight;
+                            
+                            if (rowTop < wrapperScrollTop || rowTop + rowHeight > wrapperScrollTop + wrapperHeight) {
+                                tableWrapper.scrollTop = rowTop - (wrapperHeight / 2) + (rowHeight / 2);
+                            }
+                        }
+                        
+                        setTimeout(() => {
+                            row.style.background = originalBg || '';
+                        }, 2000);
+                        break;
+                    }
+                }
+            }, 100);
         }
         
         // Clean up on page unload
         window.addEventListener('beforeunload', () => {
-            if (autoRefreshInterval) {
-                clearInterval(autoRefreshInterval);
+            if (ws) {
+                ws.close();
+            }
+            if (wsReconnectInterval) {
+                clearInterval(wsReconnectInterval);
             }
         });
     </script>

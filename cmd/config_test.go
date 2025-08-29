@@ -127,7 +127,7 @@ func TestConfigValidation(t *testing.T) {
 				Name:     "testdb",
 			},
 			S3: S3Config{
-				Endpoint:  "https://s3.example.com",
+				Endpoint: "https://s3.example.com",
 				// Bucket is missing
 				AccessKey: "access123",
 				SecretKey: "secret456",

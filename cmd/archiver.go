@@ -37,14 +37,14 @@ type PartitionInfo struct {
 }
 
 type ProcessResult struct {
-	Partition   PartitionInfo
-	Compressed  bool
-	Uploaded    bool
-	Skipped     bool
-	SkipReason  string
-	Error       error
+	Partition    PartitionInfo
+	Compressed   bool
+	Uploaded     bool
+	Skipped      bool
+	SkipReason   string
+	Error        error
 	BytesWritten int64
-	Stage       string
+	Stage        string
 }
 
 func NewArchiver(config *Config) *Archiver {
@@ -59,24 +59,28 @@ func (a *Archiver) Run() error {
 	if err := WritePIDFile(); err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
-	defer RemovePIDFile()
-	
+	defer func() {
+		_ = RemovePIDFile()
+	}()
+
 	// Initialize task info
 	taskInfo := &TaskInfo{
-		PID:       os.Getpid(),
-		StartTime: time.Now(),
-		Table:     a.config.Table,
-		StartDate: a.config.StartDate,
-		EndDate:   a.config.EndDate,
+		PID:         os.Getpid(),
+		StartTime:   time.Now(),
+		Table:       a.config.Table,
+		StartDate:   a.config.StartDate,
+		EndDate:     a.config.EndDate,
 		CurrentTask: "Starting archiver",
 	}
-	WriteTaskInfo(taskInfo)
-	defer RemoveTaskFile()
-	
+	_ = WriteTaskInfo(taskInfo)
+	defer func() {
+		_ = RemoveTaskFile()
+	}()
+
 	// Create channels for communication
 	errChan := make(chan error, 1)
 	resultsChan := make(chan []ProcessResult, 1)
-	
+
 	// Start the UI with the archiver reference
 	progressModel := newProgressModelWithArchiver(a.config, a, errChan, resultsChan, taskInfo)
 	program := tea.NewProgram(progressModel)
@@ -96,7 +100,7 @@ func (a *Archiver) Run() error {
 	default:
 	}
 
-	// Get results and print summary  
+	// Get results and print summary
 	select {
 	case results := <-resultsChan:
 		a.printSummary(results)
@@ -151,7 +155,7 @@ func (a *Archiver) connect() error {
 func (a *Archiver) checkTablePermissions() error {
 	// Use PostgreSQL's has_table_privilege function which is much faster
 	// This checks SELECT permission without actually running a query
-	
+
 	// Check if we have permission to SELECT from the base table (if it exists)
 	var hasPermission bool
 	checkPermissionQuery := `
@@ -160,17 +164,17 @@ func (a *Archiver) checkTablePermissions() error {
 		WHERE schemaname = 'public' 
 		AND tablename = $2
 	`
-	
+
 	err := a.db.QueryRow(checkPermissionQuery, a.config.Table, a.config.Table).Scan(&hasPermission)
 	if err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("failed to check table permissions: %w", err)
 	}
-	
+
 	// If the base table exists and we don't have permission, fail
 	if err != sql.ErrNoRows && !hasPermission {
 		return fmt.Errorf("insufficient permissions to read table '%s'", a.config.Table)
 	}
-	
+
 	// Check if we can see and access partition tables
 	pattern := a.config.Table + "_%"
 	partitionCheckQuery := `
@@ -181,14 +185,14 @@ func (a *Archiver) checkTablePermissions() error {
 		AND has_table_privilege(tablename, 'SELECT')
 		LIMIT 1
 	`
-	
+
 	var samplePartition string
 	err = a.db.QueryRow(partitionCheckQuery, pattern).Scan(&samplePartition)
 	if err != nil && err != sql.ErrNoRows {
 		// Only fail if it's not a "no rows" error
 		return fmt.Errorf("failed to check partition table permissions: %w", err)
 	}
-	
+
 	// Check if we found any partitions at all (with or without permissions)
 	if err == sql.ErrNoRows {
 		// Let's see if partitions exist but we can't access them
@@ -200,15 +204,15 @@ func (a *Archiver) checkTablePermissions() error {
 				AND tablename LIKE $1
 			)
 		`
-		a.db.QueryRow(existsQuery, pattern).Scan(&partitionExists)
-		
+		_ = a.db.QueryRow(existsQuery, pattern).Scan(&partitionExists)
+
 		if partitionExists {
 			// Partitions exist but we can't access them
 			return fmt.Errorf("partition tables exist but you don't have SELECT permissions")
 		}
 		// No partitions found yet, that's okay
 	}
-	
+
 	return nil
 }
 
@@ -233,7 +237,7 @@ func (a *Archiver) discoverPartitionsWithUI(program *tea.Program) ([]PartitionIn
 		name string
 		date time.Time
 	}
-	
+
 	var startDate, endDate time.Time
 	if a.config.StartDate != "" {
 		startDate, _ = time.Parse("2006-01-02", a.config.StartDate)
@@ -275,7 +279,7 @@ func (a *Archiver) discoverPartitionsWithUI(program *tea.Program) ([]PartitionIn
 	}
 
 	var partitions []PartitionInfo
-	
+
 	if a.config.SkipCount {
 		// Skip counting for faster startup
 		program.Send(addMessage("⏩ Skipping row counts (--skip-count enabled)"))
@@ -290,7 +294,7 @@ func (a *Archiver) discoverPartitionsWithUI(program *tea.Program) ([]PartitionIn
 		// Count rows for each partition with progress feedback
 		program.Send(changePhase(PhaseCounting, fmt.Sprintf("Counting rows in %d partitions...", len(matchingTables))))
 		program.Send(addMessage(fmt.Sprintf("📊 Counting rows in %d partitions...", len(matchingTables))))
-		
+
 		for i, table := range matchingTables {
 			// Update count progress
 			program.Send(updateCount(i+1, len(matchingTables), table.name))
@@ -307,7 +311,7 @@ func (a *Archiver) discoverPartitionsWithUI(program *tea.Program) ([]PartitionIn
 				program.Send(addMessage(fmt.Sprintf("⚠️ Failed to count %s: %v", table.name, err)))
 			}
 		}
-		
+
 		program.Send(addMessage(fmt.Sprintf("✅ Counted rows in %d partitions", len(partitions))))
 	}
 
@@ -335,7 +339,7 @@ func (a *Archiver) discoverPartitions() ([]PartitionInfo, error) {
 		name string
 		date time.Time
 	}
-	
+
 	var startDate, endDate time.Time
 	if a.config.StartDate != "" {
 		startDate, _ = time.Parse("2006-01-02", a.config.StartDate)
@@ -377,7 +381,7 @@ func (a *Archiver) discoverPartitions() ([]PartitionInfo, error) {
 	}
 
 	var partitions []PartitionInfo
-	
+
 	if a.config.SkipCount {
 		// Skip counting for faster startup
 		fmt.Println(warningStyle.Render("⏩ Skipping row counts (--skip-count enabled)"))
@@ -391,12 +395,12 @@ func (a *Archiver) discoverPartitions() ([]PartitionInfo, error) {
 	} else {
 		// Count rows for each partition with progress feedback
 		fmt.Println(infoStyle.Render(fmt.Sprintf("📊 Counting rows in %d partitions...", len(matchingTables))))
-		
+
 		for i, table := range matchingTables {
 			// Show progress spinner
-			fmt.Printf("\r%s Counting rows: %d/%d - %s", 
+			fmt.Printf("\r%s Counting rows: %d/%d - %s",
 				infoStyle.Render("⏳"),
-				i+1, 
+				i+1,
 				len(matchingTables),
 				table.name)
 
@@ -412,7 +416,7 @@ func (a *Archiver) discoverPartitions() ([]PartitionInfo, error) {
 				fmt.Println(debugStyle.Render(fmt.Sprintf("\n⚠️  Failed to count rows in %s: %v", table.name, err)))
 			}
 		}
-		
+
 		// Clear the progress line
 		fmt.Printf("\r%s\r", strings.Repeat(" ", 80))
 		fmt.Println(successStyle.Render(fmt.Sprintf("✅ Counted rows in %d partitions", len(partitions))))
@@ -463,10 +467,10 @@ func (a *Archiver) processPartitionsWithProgress(partitions []PartitionInfo, pro
 	for i, partition := range partitions {
 		result := a.ProcessPartitionWithProgress(partition, i, program)
 		results[i] = result
-		
+
 		// Send completion update
 		program.Send(completePartition(i, result))
-		
+
 		// Small delay to allow UI to update
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -477,6 +481,20 @@ func (a *Archiver) processPartitionsWithProgress(partitions []PartitionInfo, pro
 func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index int, program *tea.Program) ProcessResult {
 	result := ProcessResult{
 		Partition: partition,
+	}
+
+	// Helper function to update task info directly when stages change
+	updateTaskStage := func(stage string) {
+		// Try to read current task info and update it
+		if taskInfo, err := ReadTaskInfo(); err == nil {
+			taskInfo.CurrentStep = stage
+			taskInfo.CurrentPartition = partition.TableName
+			_ = WriteTaskInfo(taskInfo)
+		}
+		// Also send to program if available
+		if program != nil {
+			program.Send(updateProgress(stage, 0, 0))
+		}
 	}
 
 	objectKey := fmt.Sprintf("export/%s/%s/%s.jsonl.zst",
@@ -491,23 +509,21 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 	// Load cache and check if we have cached file metadata
 	cache, _ := loadPartitionCache(a.config.Table)
 	cachedSize, cachedMD5, hasCached := cache.getFileMetadata(partition.TableName, objectKey, partition.Date)
-	
+
 	if hasCached {
 		// We have cached metadata, check if it matches what's in S3
-		if program != nil {
-			program.Send(updateProgress("Checking cached file metadata...", 0, 0))
-		}
-		
+		updateTaskStage("Checking cached file metadata...")
+
 		if exists, s3Size, s3ETag := a.checkObjectExists(objectKey); exists {
 			s3ETag = strings.Trim(s3ETag, "\"")
 			isMultipart := strings.Contains(s3ETag, "-")
-			
+
 			if a.config.Debug {
 				fmt.Printf("  💾 Using cached metadata for %s:\n", partition.TableName)
 				fmt.Printf("     Cached: size=%d, md5=%s\n", cachedSize, cachedMD5)
 				fmt.Printf("     S3: size=%d, etag=%s (multipart=%v)\n", s3Size, s3ETag, isMultipart)
 			}
-			
+
 			// Check if cached metadata matches S3
 			if s3Size == cachedSize {
 				if !isMultipart && s3ETag == cachedMD5 {
@@ -535,12 +551,9 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 
 	// Extract data with progress
 	extractStart := time.Now()
-	if program != nil {
-		if partition.RowCount > 0 {
-			program.Send(updateProgress("Extracting data...", 0, partition.RowCount))
-		} else {
-			program.Send(updateProgress("Extracting data...", 0, 0))
-		}
+	updateTaskStage("Extracting data...")
+	if program != nil && partition.RowCount > 0 {
+		program.Send(updateProgress("Extracting data...", 0, partition.RowCount))
 	}
 	result.Stage = "Extracting"
 	data, err := a.extractDataWithProgress(partition, program)
@@ -548,7 +561,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 		result.Error = fmt.Errorf("extraction failed: %w", err)
 		// Save error to cache
 		cache.setError(partition.TableName, fmt.Sprintf("Extraction failed: %v", err))
-		cache.save(a.config.Table)
+		_ = cache.save(a.config.Table)
 		return result
 	}
 	extractDuration := time.Since(extractStart)
@@ -558,9 +571,10 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 
 	// Store uncompressed size
 	uncompressedSize := int64(len(data))
-	
+
 	// Compress data
 	compressStart := time.Now()
+	updateTaskStage("Compressing data...")
 	if program != nil {
 		program.Send(updateProgress("Compressing data...", 50, 100))
 	}
@@ -570,7 +584,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 		result.Error = fmt.Errorf("compression failed: %w", err)
 		// Save error to cache
 		cache.setError(partition.TableName, fmt.Sprintf("Compression failed: %v", err))
-		cache.save(a.config.Table)
+		_ = cache.save(a.config.Table)
 		return result
 	}
 	result.Compressed = true
@@ -580,7 +594,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 	}
 	compressDuration := time.Since(compressStart)
 	if a.config.Debug {
-		fmt.Printf("  ⏱️  Compression took %v for %s (%.1fx ratio)\n", 
+		fmt.Printf("  ⏱️  Compression took %v for %s (%.1fx ratio)\n",
 			compressDuration, partition.TableName, float64(len(data))/float64(len(compressed)))
 	}
 
@@ -591,23 +605,21 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 	localSize := int64(len(compressed))
 
 	// Check if already exists with matching size and hash
-	if program != nil {
-		program.Send(updateProgress("Checking if file exists...", 0, 0))
-	}
+	updateTaskStage("Checking if file exists...")
 	if exists, s3Size, s3ETag := a.checkObjectExists(objectKey); exists {
 		// Remove quotes from ETag if present
 		s3ETag = strings.Trim(s3ETag, "\"")
-		
+
 		// Check if it's a multipart upload (contains a dash)
 		isMultipart := strings.Contains(s3ETag, "-")
-		
+
 		// Always log comparison details in debug mode
 		if a.config.Debug {
 			fmt.Printf("  📊 Comparing files for %s:\n", partition.TableName)
 			fmt.Printf("     S3: size=%d, etag=%s (multipart=%v)\n", s3Size, s3ETag, isMultipart)
 			fmt.Printf("     Local: size=%d, md5=%s\n", localSize, localMD5)
 		}
-		
+
 		if s3Size == localSize {
 			// Size matches, now check hash
 			if !isMultipart && s3ETag == localMD5 {
@@ -620,7 +632,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 				}
 				// Save to cache for future runs (file is already in S3)
 				cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
-				cache.save(a.config.Table)
+				_ = cache.save(a.config.Table)
 				return result
 			} else if isMultipart {
 				// For multipart uploads, calculate the multipart ETag
@@ -637,7 +649,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 					}
 					// Save to cache for future runs (store the single-part MD5 for simplicity, file is already in S3)
 					cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
-					cache.save(a.config.Table)
+					_ = cache.save(a.config.Table)
 					return result
 				} else if a.config.Debug {
 					fmt.Printf("     ❌ Multipart ETag mismatch: S3=%s, Local=%s\n", s3ETag, localMultipartETag)
@@ -658,6 +670,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 
 	// Upload to S3
 	if !a.config.DryRun {
+		updateTaskStage("Uploading to S3...")
 		if program != nil {
 			program.Send(updateProgress("Uploading to S3...", 0, 100))
 		}
@@ -670,10 +683,10 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 		if program != nil {
 			program.Send(updateProgress("Uploading to S3...", 100, 100))
 		}
-		
+
 		// Save metadata to cache after successful upload
 		cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
-		cache.save(a.config.Table)
+		_ = cache.save(a.config.Table)
 		if a.config.Debug {
 			fmt.Printf("  💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s\n", localSize, uncompressedSize, localMD5)
 		}
@@ -685,7 +698,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 
 func (a *Archiver) extractDataWithProgress(partition PartitionInfo, program *tea.Program) ([]byte, error) {
 	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", partition.TableName)
-	
+
 	rows, err := a.db.Query(query)
 	if err != nil {
 		return nil, err
@@ -697,7 +710,7 @@ func (a *Archiver) extractDataWithProgress(partition PartitionInfo, program *tea
 
 	rowCount := int64(0)
 	var updateInterval int64 = 1000 // Default to every 1000 rows
-	
+
 	if partition.RowCount > 0 {
 		updateInterval = partition.RowCount / 100 // Update every 1%
 		if updateInterval < 1000 {
@@ -743,8 +756,8 @@ func (a *Archiver) extractDataWithProgress(partition PartitionInfo, program *tea
 
 func (a *Archiver) compressData(data []byte) ([]byte, error) {
 	var buffer bytes.Buffer
-	
-	encoder, err := zstd.NewWriter(&buffer, 
+
+	encoder, err := zstd.NewWriter(&buffer,
 		zstd.WithEncoderLevel(zstd.SpeedBetterCompression),
 		zstd.WithEncoderConcurrency(a.config.Workers))
 	if err != nil {
@@ -782,11 +795,11 @@ func (a *Archiver) checkObjectExists(key string) (bool, int64, string) {
 
 	var size int64
 	var etag string
-	
+
 	if result.ContentLength != nil {
 		size = *result.ContentLength
 	}
-	
+
 	if result.ETag != nil {
 		etag = *result.ETag
 	}
@@ -798,17 +811,17 @@ func (a *Archiver) checkObjectExists(key string) (bool, int64, string) {
 // This matches S3's algorithm for multipart uploads
 func (a *Archiver) calculateMultipartETag(data []byte) string {
 	const partSize = 5 * 1024 * 1024 * 1024 // 5GB part size (max single part size)
-	
+
 	// Calculate number of parts
 	numParts := (len(data) + partSize - 1) / partSize
-	
+
 	// If it would be a single part, just return regular MD5
 	if numParts == 1 {
 		hasher := md5.New()
 		hasher.Write(data)
 		return hex.EncodeToString(hasher.Sum(nil))
 	}
-	
+
 	// Calculate MD5 of each part and concatenate
 	var partMD5s []byte
 	for i := 0; i < numParts; i++ {
@@ -817,17 +830,17 @@ func (a *Archiver) calculateMultipartETag(data []byte) string {
 		if end > len(data) {
 			end = len(data)
 		}
-		
+
 		partHasher := md5.New()
 		partHasher.Write(data[start:end])
 		partMD5s = append(partMD5s, partHasher.Sum(nil)...)
 	}
-	
+
 	// Calculate MD5 of concatenated MD5s
 	finalHasher := md5.New()
 	finalHasher.Write(partMD5s)
 	finalMD5 := hex.EncodeToString(finalHasher.Sum(nil))
-	
+
 	// Return in S3 multipart format: MD5-numParts
 	return fmt.Sprintf("%s-%d", finalMD5, numParts)
 }
@@ -847,7 +860,7 @@ func (a *Archiver) uploadToS3(key string, data []byte) error {
 			Body:        bytes.NewReader(data),
 			ContentType: aws.String("application/zstd"),
 		}
-		
+
 		_, err := a.s3Uploader.Upload(uploadInput)
 		return err
 	} else {
@@ -858,7 +871,7 @@ func (a *Archiver) uploadToS3(key string, data []byte) error {
 			Body:        bytes.NewReader(data),
 			ContentType: aws.String("application/zstd"),
 		}
-		
+
 		_, err := a.s3Client.PutObject(putInput)
 		return err
 	}
@@ -886,18 +899,17 @@ func (a *Archiver) printSummary(results []ProcessResult) {
 	if failed > 0 {
 		fmt.Printf("%s %d\n", lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000")).Render("❌ Failed:"), failed)
 	}
-	
+
 	if totalBytes > 0 {
 		fmt.Printf("%s %.2f MB\n", infoStyle.Render("💾 Total compressed:"), float64(totalBytes)/(1024*1024))
 	}
 
 	for _, r := range results {
 		if r.Error != nil {
-			fmt.Printf("\n%s %s: %v\n", 
+			fmt.Printf("\n%s %s: %v\n",
 				lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000")).Render("❌"),
 				r.Partition.TableName,
 				r.Error)
 		}
 	}
 }
-

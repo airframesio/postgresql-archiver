@@ -48,12 +48,15 @@ type progressModel struct {
 	errChan         chan<- error
 	resultsChan     chan<- []ProcessResult
 	initialized     bool
-	pendingTables   []struct{ name string; date time.Time }
-	countedPartitions []PartitionInfo
-	currentCountIndex int
-	partitionCache  *PartitionCache
+	pendingTables   []struct {
+		name string
+		date time.Time
+	}
+	countedPartitions   []PartitionInfo
+	currentCountIndex   int
+	partitionCache      *PartitionCache
 	processingStartTime time.Time
-	taskInfo        *TaskInfo
+	taskInfo            *TaskInfo
 }
 
 type progressMsg struct {
@@ -71,7 +74,7 @@ type partitionCompleteMsg struct {
 type allCompleteMsg struct{}
 
 type phaseMsg struct {
-	phase Phase
+	phase   Phase
 	message string
 }
 
@@ -87,8 +90,8 @@ type discoveredTablesMsg struct {
 }
 
 type countProgressMsg struct {
-	current int
-	total   int
+	current   int
+	total     int
 	tableName string
 }
 
@@ -97,7 +100,7 @@ type tableCountedMsg struct {
 		name string
 		date time.Time
 	}
-	count int64
+	count     int64
 	fromCache bool
 }
 
@@ -116,7 +119,7 @@ type connectedMsg struct {
 var (
 	currentProgressStyle = lipgloss.NewStyle().
 				Margin(1, 2)
-	
+
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#626262")).
 			Margin(0, 2)
@@ -141,12 +144,22 @@ var (
 func (m *progressModel) updateTaskInfo() {
 	if m.taskInfo != nil {
 		m.taskInfo.CurrentTask = m.currentStage
+		
+		// Set current partition and step info
+		if m.currentIndex < len(m.partitions) {
+			m.taskInfo.CurrentPartition = m.partitions[m.currentIndex].TableName
+			m.taskInfo.CurrentStep = m.currentStage
+		} else {
+			m.taskInfo.CurrentPartition = ""
+			m.taskInfo.CurrentStep = ""
+		}
+		
 		if len(m.partitions) > 0 {
 			m.taskInfo.TotalItems = len(m.partitions)
 			m.taskInfo.CompletedItems = m.currentIndex
 			m.taskInfo.Progress = float64(m.currentIndex) / float64(len(m.partitions))
 		}
-		WriteTaskInfo(m.taskInfo)
+		_ = WriteTaskInfo(m.taskInfo)
 	}
 }
 
@@ -222,7 +235,7 @@ func (m *progressModel) doConnect() tea.Cmd {
 		if m.archiver == nil {
 			return messageMsg("❌ Archiver not initialized")
 		}
-		
+
 		// Connect to database
 		if err := m.archiver.connect(); err != nil {
 			if m.errChan != nil {
@@ -230,7 +243,7 @@ func (m *progressModel) doConnect() tea.Cmd {
 			}
 			return messageMsg(fmt.Sprintf("❌ Failed to connect: %v", err))
 		}
-		
+
 		// Connection successful - return a composite message
 		return connectedMsg{
 			host: m.config.Database.Host,
@@ -243,7 +256,7 @@ func (m *progressModel) doCheckPermissions() tea.Cmd {
 		if m.archiver == nil {
 			return messageMsg("❌ Archiver not initialized")
 		}
-		
+
 		// Check table permissions
 		if err := m.archiver.checkTablePermissions(); err != nil {
 			if m.errChan != nil {
@@ -252,7 +265,7 @@ func (m *progressModel) doCheckPermissions() tea.Cmd {
 			// Return error message - will need to handle exit separately
 			return messageMsg(fmt.Sprintf("❌ Permission check failed: %v", err))
 		}
-		
+
 		// Permissions verified - return success message
 		return messageMsg("✅ Table permissions verified")
 	}
@@ -285,7 +298,7 @@ func (m *progressModel) doDiscover() tea.Cmd {
 			name string
 			date time.Time
 		}
-		
+
 		var startDate, endDate time.Time
 		if m.config.StartDate != "" {
 			startDate, _ = time.Parse("2006-01-02", m.config.StartDate)
@@ -296,7 +309,7 @@ func (m *progressModel) doDiscover() tea.Cmd {
 
 		discoveredCount := 0
 		skippedCount := 0
-		
+
 		for rows.Next() {
 			var tableName string
 			if err := rows.Scan(&tableName); err != nil {
@@ -330,26 +343,29 @@ func (m *progressModel) doDiscover() tea.Cmd {
 		if len(matchingTables) == 0 {
 			return messageMsg("⚠️ No matching partitions found")
 		}
-		
+
 		return discoveredTablesMsg{
 			tables: matchingTables,
 		}
 	}
 }
 
-func (m *progressModel) startCounting(tables []struct{ name string; date time.Time }) tea.Cmd {
+func (m *progressModel) startCounting(tables []struct {
+	name string
+	date time.Time
+}) tea.Cmd {
 	// Instead of doing all counting in one go, just start with the first one
 	if len(tables) == 0 {
 		return func() tea.Msg {
 			return partitionsFoundMsg{partitions: []PartitionInfo{}}
 		}
 	}
-	
+
 	// Store the tables to count
 	m.pendingTables = tables
 	m.countedPartitions = make([]PartitionInfo, 0, len(tables))
 	m.currentCountIndex = 0
-	
+
 	// Start counting the first table
 	return m.countNextTable()
 }
@@ -365,14 +381,14 @@ func (m *progressModel) countNextTable() tea.Cmd {
 			return partitionsFoundMsg{partitions: m.countedPartitions}
 		}
 	}
-	
+
 	// Get the current table to count
 	table := m.pendingTables[m.currentCountIndex]
-	
+
 	return func() tea.Msg {
 		var count int64
 		var fromCache bool
-		
+
 		// Try to get from cache first
 		if m.partitionCache != nil {
 			if cachedCount, ok := m.partitionCache.getRowCount(table.name, table.date); ok {
@@ -380,7 +396,7 @@ func (m *progressModel) countNextTable() tea.Cmd {
 				fromCache = true
 			}
 		}
-		
+
 		// If not in cache or expired, count from database
 		if !fromCache {
 			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", table.name)
@@ -396,7 +412,7 @@ func (m *progressModel) countNextTable() tea.Cmd {
 				count = -1
 			}
 		}
-		
+
 		// Return a message with the count result
 		return tableCountedMsg{
 			table:     table,
@@ -416,37 +432,38 @@ func (m *progressModel) processNext() tea.Cmd {
 			return allCompleteMsg{}
 		}
 	}
-	
+
 	// Get current partition
 	partition := m.partitions[m.currentIndex]
 	index := m.currentIndex
-	
+
 	// Set initial stages for display and record start time
-	m.currentStage = "Checking"
+	m.currentStage = "Checking if file exists in S3"
 	m.processingStartTime = time.Now()
-	
+	m.updateTaskInfo() // Update task info with initial stage
+
 	return func() tea.Msg {
 		// Actually process the partition using the archiver
 		if m.archiver != nil && m.archiver.db != nil {
 			result := m.archiver.ProcessPartitionWithProgress(partition, index, nil)
-			
+
 			// Debug: log any errors
 			if result.Error != nil && m.config.Debug {
 				fmt.Fprintf(os.Stderr, "Error processing partition %s: %v\n", partition.TableName, result.Error)
 			}
-			
+
 			return partitionCompleteMsg{
 				index:  index,
 				result: result,
 			}
 		}
-		
+
 		// Fallback if archiver not available
 		return partitionCompleteMsg{
 			index: index,
 			result: ProcessResult{
-				Partition: partition,
-				Skipped:   true,
+				Partition:  partition,
+				Skipped:    true,
 				SkipReason: "Archiver not initialized",
 			},
 		}
@@ -476,16 +493,16 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case progress.FrameMsg:
 		progressModel, cmd := m.currentProgress.Update(msg)
 		m.currentProgress = progressModel.(progress.Model)
-		
+
 		overallModel, cmd2 := m.overallProgress.Update(msg)
 		m.overallProgress = overallModel.(progress.Model)
-		
+
 		return m, tea.Batch(cmd, cmd2)
 
 	case phaseMsg:
 		m.phase = msg.phase
 		m.currentStage = msg.message
-		
+
 		// Handle phase transitions
 		switch msg.phase {
 		case PhaseConnecting:
@@ -525,9 +542,9 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.messages) > 10 {
 			m.messages = m.messages[len(m.messages)-10:]
 		}
-		
+
 		msgStr := string(msg)
-		
+
 		// Check if we need to start the archiving process
 		if strings.Contains(msgStr, "Starting archive process") {
 			// Start the connection phase
@@ -536,7 +553,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateTaskInfo()
 			return m, m.doConnect()
 		}
-		
+
 		// Check if we need to transition phases based on the message
 		if strings.Contains(msgStr, "✅ Table permissions verified") && m.phase == PhaseCheckingPermissions {
 			// Add S3 connection message
@@ -548,40 +565,45 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.messages) > 10 {
 				m.messages = m.messages[len(m.messages)-10:]
 			}
-			
+
 			// Move to discovery phase after permissions are verified
 			m.phase = PhaseDiscovering
 			m.currentStage = "Discovering partitions..."
 			m.updateTaskInfo()
 			return m, m.doDiscover()
 		}
-		
+
 		// Check for permission failure
 		if strings.Contains(msgStr, "❌ Permission check failed") {
 			return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
 		}
-		
+
 		return m, nil
-		
+
 	case connectedMsg:
 		// Add connection success message
 		m.messages = append(m.messages, fmt.Sprintf("✅ Connected to PostgreSQL at %s", msg.host))
-		
+
 		// Start cache viewer server if enabled
 		if m.config.CacheViewer {
 			go func() {
+				// Start background goroutines for WebSocket
+				go broadcastManager()
+				go dataMonitor()
+
 				// Create a new mux to avoid conflicts
 				mux := http.NewServeMux()
 				mux.HandleFunc("/", serveCacheViewer)
 				mux.HandleFunc("/api/cache", serveCacheData)
 				mux.HandleFunc("/api/status", serveStatusData)
-				
+				mux.HandleFunc("/ws", handleWebSocket)
+
 				addr := fmt.Sprintf(":%d", m.config.ViewerPort)
 				server := &http.Server{
 					Addr:    addr,
 					Handler: mux,
 				}
-				
+
 				// Start the server
 				if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 					// Log error but don't crash the archiver
@@ -590,7 +612,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}()
 			m.messages = append(m.messages, fmt.Sprintf("🌐 Cache viewer started at http://localhost:%d", m.config.ViewerPort))
 		}
-		
+
 		if len(m.messages) > 10 {
 			m.messages = m.messages[len(m.messages)-10:]
 		}
@@ -606,7 +628,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.messages) > 10 {
 			m.messages = m.messages[len(m.messages)-10:]
 		}
-		
+
 		if m.config.SkipCount {
 			// Skip counting, create partitions with unknown counts
 			partitions := make([]PartitionInfo, len(msg.tables))
@@ -627,7 +649,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingTables = msg.tables
 			m.countedPartitions = make([]PartitionInfo, 0, len(msg.tables))
 			m.currentCountIndex = 0
-			
+
 			return m, func() tea.Msg {
 				return phaseMsg{
 					phase:   PhaseCounting,
@@ -645,24 +667,24 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.messages = m.messages[len(m.messages)-10:]
 			}
 		}
-		
+
 		m.partitions = msg.partitions
 		m.phase = PhaseProcessing
 		m.results = make([]ProcessResult, 0, len(msg.partitions))
 		m.currentIndex = 0
 		m.currentStage = "" // Clear the stage from counting
-		
+
 		// Add a message about starting processing
 		m.messages = append(m.messages, fmt.Sprintf("🚀 Starting to process %d partitions", len(msg.partitions)))
 		if len(m.messages) > 10 {
 			m.messages = m.messages[len(m.messages)-10:]
 		}
-		
+
 		// Start processing the first partition with a small delay to show completion
 		if len(msg.partitions) > 0 {
 			return m, tea.Sequence(
-				tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg { 
-					return nil 
+				tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
+					return nil
 				}),
 				m.processNext(),
 			)
@@ -678,15 +700,15 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				RowCount:  msg.count,
 			})
 		}
-		
+
 		// Update progress
 		m.currentCountIndex++
 		m.countProgress = m.currentCountIndex
 		m.currentStage = fmt.Sprintf("Counting rows: %d/%d - %s", m.currentCountIndex, m.countTotal, msg.table.name)
-		
+
 		// Continue counting the next table or finish
 		return m, m.countNextTable()
-		
+
 	case countProgressMsg:
 		m.countProgress = msg.current
 		m.countTotal = msg.total
@@ -697,8 +719,8 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentStage = msg.stage
 		m.currentRows = msg.current
 		m.totalRows = msg.total
-		m.updateTaskInfo()  // Update task info when progress changes
-		
+		m.updateTaskInfo() // Update task info when progress changes
+
 		if msg.total > 0 {
 			percent := float64(msg.current) / float64(msg.total)
 			cmd := m.currentProgress.SetPercent(percent)
@@ -709,12 +731,12 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case partitionCompleteMsg:
 		m.results = append(m.results, msg.result)
 		m.currentIndex = msg.index + 1
-		m.updateTaskInfo()  // Update task info when partition completes
-		
+		m.updateTaskInfo() // Update task info when partition completes
+
 		// Clear the current stage and reset processing start time for next partition
 		m.currentStage = ""
 		m.processingStartTime = time.Time{} // Reset to zero value
-		
+
 		// Update overall progress
 		if len(m.partitions) > 0 {
 			overallPercent := float64(m.currentIndex) / float64(len(m.partitions))
@@ -733,31 +755,31 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.phase = PhaseComplete
 		m.done = true
 		return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
-		
+
 	case stageUpdateMsg:
 		m.currentStage = msg.stage
 		m.updateTaskInfo()
 		return m, nil
-		
+
 	case stageTickMsg:
 		// Update stage based on elapsed time if we're processing
 		if m.phase == PhaseProcessing && m.currentIndex < len(m.partitions) && !m.processingStartTime.IsZero() {
 			elapsed := time.Since(m.processingStartTime)
-			
+
 			// Simulate stages based on elapsed time
 			if elapsed < 1*time.Second {
-				m.currentStage = "Checking"
+				m.currentStage = "Checking if file exists in S3"
 			} else if elapsed < 3*time.Second {
-				m.currentStage = "Extracting"
+				m.currentStage = "Extracting data"
 			} else if elapsed < 5*time.Second {
-				m.currentStage = "Compressing"
+				m.currentStage = "Compressing data"
 			} else if elapsed < 7*time.Second {
-				m.currentStage = "Uploading"
+				m.currentStage = "Uploading to S3"
 			} else {
 				m.currentStage = "Finalizing"
 			}
 			m.updateTaskInfo()
-			
+
 			// Continue ticking if still processing
 			return m, tea.Tick(time.Millisecond*500, func(t time.Time) tea.Msg {
 				return stageTickMsg(t)
@@ -777,14 +799,14 @@ func (m progressModel) View() string {
 	var sections []string
 
 	// ASCII Banner with gradient colors
-	titleStyle1 := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF7CCB")).Bold(true) 
+	titleStyle1 := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF7CCB")).Bold(true)
 	titleStyle2 := lipgloss.NewStyle().Foreground(lipgloss.Color("#FDFF8C")).Bold(true)
 	authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#999999"))
-	
+
 	// Banner with proper box drawing
-	const boxWidth = 66 // Total width including the borders (reduced by 1 more)
+	const boxWidth = 66  // Total width including the borders (reduced by 1 more)
 	const indent = "   " // 3 spaces indentation
-	
+
 	// Helper function to create a properly padded box line using lipgloss to measure width
 	makeLine := func(content string) string {
 		// Measure the actual visible width using lipgloss
@@ -797,11 +819,11 @@ func (m progressModel) View() string {
 		}
 		return fmt.Sprintf("%s║  %s%s║", indent, content, strings.Repeat(" ", padding))
 	}
-	
+
 	// Create the top and bottom borders (these are boxWidth characters wide)
 	topBorder := indent + "╔" + strings.Repeat("═", boxWidth-2) + "╗"
 	bottomBorder := indent + "╚" + strings.Repeat("═", boxWidth-2) + "╝"
-	
+
 	sections = append(sections, "")
 	sections = append(sections, topBorder)
 	sections = append(sections, makeLine(""))
@@ -829,7 +851,7 @@ func (m progressModel) View() string {
 			sections = append(sections, "     "+msg)
 		}
 	}
-	
+
 	// Add horizontal separator
 	separatorWidth := 80
 	if m.width > 0 && m.width < 200 {
@@ -850,7 +872,7 @@ func (m progressModel) View() string {
 		} else {
 			sections = append(sections, stageStyle.Render("   "+m.currentSpinner.View()+" Initializing..."))
 		}
-		
+
 	case PhaseCounting:
 		// Show counting progress with spinner, bar, and current table all on one line
 		if m.countTotal > 0 {
@@ -858,12 +880,12 @@ func (m progressModel) View() string {
 			barWidth := 30
 			progress := float64(m.countProgress) / float64(m.countTotal)
 			filled := int(progress * float64(barWidth))
-			
+
 			bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
-			
+
 			// Check if counting is complete
 			isComplete := m.countProgress >= m.countTotal
-			
+
 			// Extract just the table name from the current stage
 			tableName := ""
 			if strings.Contains(m.currentStage, " - ") {
@@ -872,7 +894,7 @@ func (m progressModel) View() string {
 					tableName = parts[1]
 				}
 			}
-			
+
 			// Show checkmark if complete, spinner if still counting
 			icon := m.currentSpinner.View()
 			currentTable := tableName
@@ -880,48 +902,48 @@ func (m progressModel) View() string {
 				icon = "✅"
 				currentTable = "Complete!"
 			}
-			
+
 			// Combine icon, label, progress bar, percentage, and current table
-			stageInfo := fmt.Sprintf("   %s Counting rows:    %s %d%% (%d/%d) - %s", 
-				icon, 
+			stageInfo := fmt.Sprintf("   %s Counting rows:    %s %d%% (%d/%d) - %s",
+				icon,
 				bar,
-				int(progress*100), 
-				m.countProgress, 
+				int(progress*100),
+				m.countProgress,
 				m.countTotal,
 				currentTable)
-			
+
 			sections = append(sections, stageStyle.Render(stageInfo))
 		}
-		
+
 	case PhaseProcessing:
 		// 1. COUNTING ROWS (completed) - Always show this first
 		if m.countTotal > 0 && m.countProgress >= m.countTotal {
 			// Show completed counting progress - same format as in progress but with checkmark and 100%
 			barWidth := 30
 			bar := strings.Repeat("█", barWidth)
-			
-			stageInfo := fmt.Sprintf("   ✅ Counting rows:    %s 100%% (%d/%d) - Complete!", 
+
+			stageInfo := fmt.Sprintf("   ✅ Counting rows:    %s 100%% (%d/%d) - Complete!",
 				bar,
-				m.countTotal, 
+				m.countTotal,
 				m.countTotal)
-			
+
 			sections = append(sections, stageStyle.Render(stageInfo))
 			sections = append(sections, "") // Add newline after counting
 		}
-		
+
 		// 2. CURRENT STEP STATUS
 		if m.currentIndex < len(m.partitions) && len(m.partitions) > 0 {
 			partition := m.partitions[m.currentIndex]
-			
+
 			// Current operation stage with spinner - show detailed operation
 			objectPath := fmt.Sprintf("export/%s/%s/%s.jsonl.zst",
 				m.config.Table,
 				partition.Date.Format("2006/01"),
 				partition.Date.Format("2006-01-02"))
-			
+
 			// Full S3 path with bucket
 			s3Path := fmt.Sprintf("s3://%s/%s", m.config.S3.Bucket, objectPath)
-			
+
 			var operationInfo string
 			// Check if we're still showing counting-related stages
 			if strings.Contains(m.currentStage, "Counting rows") {
@@ -943,7 +965,7 @@ func (m progressModel) View() string {
 					operationInfo = fmt.Sprintf("   %s Processing %s...", m.currentSpinner.View(), partition.TableName)
 				}
 				sections = append(sections, stageStyle.Render(operationInfo))
-				
+
 				// Row progress if applicable (only show for extraction which has row counts)
 				if m.totalRows > 0 && strings.Contains(m.currentStage, "Extracting") {
 					rowInfo := fmt.Sprintf("   Rows: %d / %d", m.currentRows, m.totalRows)
@@ -961,7 +983,7 @@ func (m progressModel) View() string {
 			barWidth := 30
 			progress := float64(m.currentIndex) / float64(len(m.partitions))
 			filled := int(progress * float64(barWidth))
-			
+
 			// Create a simple gradient effect using different block characters
 			var bar string
 			for i := 0; i < barWidth; i++ {
@@ -971,11 +993,11 @@ func (m progressModel) View() string {
 					bar += "░"
 				}
 			}
-			
+
 			overallInfo := fmt.Sprintf("   📊 Overall Progress: %s %d%% (%d/%d partitions)",
 				bar,
 				int(progress*100),
-				m.currentIndex, 
+				m.currentIndex,
 				len(m.partitions))
 			sections = append(sections, helpStyle.Render(overallInfo))
 		}
@@ -985,7 +1007,7 @@ func (m progressModel) View() string {
 	sections = append(sections, "") // Empty line
 	elapsed := time.Since(m.startTime)
 	stats := fmt.Sprintf("   ⏱️  Elapsed: %s", elapsed.Round(time.Second))
-	
+
 	if m.currentIndex > 0 {
 		avgTime := elapsed / time.Duration(m.currentIndex)
 		remaining := avgTime * time.Duration(len(m.partitions)-m.currentIndex)
@@ -997,12 +1019,12 @@ func (m progressModel) View() string {
 	if len(m.results) > 0 {
 		sections = append(sections, "") // Empty line
 		sections = append(sections, helpStyle.Render("   Recent completions:"))
-		
+
 		start := len(m.results) - 3
 		if start < 0 {
 			start = 0
 		}
-		
+
 		for i := start; i < len(m.results); i++ {
 			result := m.results[i]
 			status := "✅"
@@ -1011,7 +1033,7 @@ func (m progressModel) View() string {
 			} else if result.Skipped {
 				status = "⏭️"
 			}
-			
+
 			line := fmt.Sprintf("      %s %s", status, result.Partition.TableName)
 			if result.Skipped && strings.Contains(result.SkipReason, "exists") {
 				line += " (already exists)"

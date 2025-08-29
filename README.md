@@ -19,14 +19,16 @@ A high-performance CLI tool for archiving PostgreSQL partitioned table data to S
 
 - 🚀 **Parallel Processing** - Archive multiple partitions concurrently with configurable workers
 - 📊 **Beautiful Progress UI** - Real-time progress tracking with dual progress bars
-- 🌐 **Embedded Cache Viewer** - Beautiful web interface for monitoring cache and progress:
-  - Real-time task monitoring with progress bar
+- 🌐 **Embedded Cache Viewer** - Beautiful web interface with real-time updates:
+  - **WebSocket Live Updates** - Real-time data streaming without polling
+  - Interactive task monitoring showing current partition and operation
+  - Clickable partition names to jump directly to table row
   - Shows archiver status (running/idle) with PID tracking
   - Live statistics: total partitions, sizes, compression ratios
   - Sortable table with S3 upload status indicators
   - Smooth animations highlight data changes
   - Error tracking with timestamps
-  - Customizable refresh rate (1s to 60s)
+  - Auto-reconnecting WebSocket for reliability
 - 💾 **Intelligent Caching** - Advanced caching system for maximum efficiency:
   - Caches row counts for 24 hours (refreshed daily)
   - Caches file metadata permanently (size, MD5, compression ratio)
@@ -229,7 +231,12 @@ postgresql-archiver cache-viewer --port 8080
 ```
 
 Features:
-- **Real-time Updates**: Auto-refresh with customizable intervals (1s to 60s)
+- **WebSocket Real-time Updates**: Live data streaming with automatic reconnection
+- **Interactive Status Panel**: 
+  - Shows current partition being processed with clickable link
+  - Displays specific operation (e.g., "Checking if exists", "Extracting", "Compressing", "Uploading")
+  - Progress bar with completion percentage and partition count
+  - Elapsed time tracking
 - **Visual Change Detection**: Smooth animations highlight updated cells and stats
 - **S3 Upload Status**: Shows which files are uploaded vs only processed locally
 - **Comprehensive Metrics**: Shows both compressed and uncompressed sizes
@@ -239,9 +246,18 @@ Features:
 - **Sortable Columns**: Click any column header to sort (default: partition name)
 - **File Counts**: Shows total partitions, processed, uploaded, and errors
 - **Process Monitoring**: Checks if archiver is currently running via PID
-- **Task Progress**: Displays current archiving task and progress when active
+- **Connection Status**: Visual indicator shows WebSocket connection state
 
 Access the viewer at `http://localhost:8080` (or your configured port).
+
+#### Technical Details
+
+The cache viewer uses modern web technologies for optimal performance:
+- **WebSocket Protocol**: Bi-directional communication for instant updates
+- **Automatic Reconnection**: Reconnects every 2 seconds if connection drops
+- **File System Monitoring**: Watches cache directory for changes (500ms intervals)
+- **Efficient Updates**: Only transmits and renders changed data
+- **No Polling Overhead**: WebSocket eliminates the need for HTTP polling
 
 ### Interactive Progress Display
 
@@ -367,9 +383,13 @@ The archiver provides real-time monitoring capabilities:
 - Updated in real-time during processing
 
 ### Web API Endpoints
-The cache viewer provides REST API endpoints:
-- `/api/cache` - Returns all cached metadata
-- `/api/status` - Returns archiver running status and current task
+The cache viewer provides REST API and WebSocket endpoints:
+- `/api/cache` - Returns all cached metadata (REST)
+- `/api/status` - Returns archiver running status and current task (REST)
+- `/ws` - WebSocket endpoint for real-time updates
+  - Sends cache updates when files change
+  - Streams status updates during archiving
+  - Automatic reconnection support
 
 ## 🔐 Data Integrity Verification
 
@@ -554,3 +574,4 @@ Built with these awesome libraries:
 - [Viper](https://github.com/spf13/viper) - Configuration management
 - [klauspost/compress](https://github.com/klauspost/compress) - Fast zstd compression
 - [AWS SDK for Go](https://github.com/aws/aws-sdk-go) - S3 integration
+- [Gorilla WebSocket](https://github.com/gorilla/websocket) - WebSocket implementation

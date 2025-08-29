@@ -22,7 +22,7 @@ func TestPartitionCache(t *testing.T) {
 	defer os.Setenv("HOME", originalHome)
 
 	tableName := "test_table"
-	
+
 	t.Run("NewCache", func(t *testing.T) {
 		cache, err := loadPartitionCache(tableName)
 		if err != nil {
@@ -40,11 +40,11 @@ func TestPartitionCache(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
 		}
-		
+
 		partition := "test_table_20240101"
 		count := int64(1000)
 		cache.setRowCount(partition, count)
-		
+
 		// Get count for old date (should be cached)
 		oldDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 		gotCount, found := cache.getRowCount(partition, oldDate)
@@ -54,7 +54,7 @@ func TestPartitionCache(t *testing.T) {
 		if gotCount != count {
 			t.Fatalf("expected count %d, got %d", count, gotCount)
 		}
-		
+
 		// Get count for today (should not be cached)
 		today := time.Now().Truncate(24 * time.Hour)
 		_, found = cache.getRowCount(partition, today)
@@ -67,15 +67,15 @@ func TestPartitionCache(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
 		}
-		
+
 		partition := "test_table_20240101"
 		s3Key := "export/test_table/2024/01/2024-01-01.jsonl.zst"
 		compressedSize := int64(1024)
 		uncompressedSize := int64(5120)
 		md5 := "abc123"
-		
+
 		cache.setFileMetadata(partition, s3Key, compressedSize, uncompressedSize, md5, true)
-		
+
 		oldDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 		size, hash, found := cache.getFileMetadata(partition, s3Key, oldDate)
 		if !found {
@@ -87,7 +87,7 @@ func TestPartitionCache(t *testing.T) {
 		if hash != md5 {
 			t.Fatalf("expected hash %s, got %s", md5, hash)
 		}
-		
+
 		// Check S3 upload status
 		entry := cache.Entries[partition]
 		if !entry.S3Uploaded {
@@ -102,16 +102,16 @@ func TestPartitionCache(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
 		}
-		
+
 		partition := "test_table_20240101"
 		s3Key := "export/test_table/2024/01/2024-01-01.jsonl.zst"
-		
+
 		// Set file metadata first
 		cache.setFileMetadata(partition, s3Key, 1024, 5120, "abc123", true)
-		
+
 		// Update row count
 		cache.setRowCount(partition, 2000)
-		
+
 		// Check that file metadata is preserved
 		entry := cache.Entries[partition]
 		if entry.FileSize != 1024 {
@@ -132,12 +132,12 @@ func TestPartitionCache(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
 		}
-		
+
 		partition := "test_table_20240101"
 		errMsg := "connection failed"
-		
+
 		cache.setError(partition, errMsg)
-		
+
 		entry := cache.Entries[partition]
 		if entry.LastError != errMsg {
 			t.Fatalf("expected error %s, got %s", errMsg, entry.LastError)
@@ -151,7 +151,7 @@ func TestPartitionCache(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
 		}
-		
+
 		// Add entry with old row count
 		oldEntry := PartitionCacheEntry{
 			RowCount:  1000,
@@ -161,16 +161,16 @@ func TestPartitionCache(t *testing.T) {
 			FileTime:  time.Now(),
 		}
 		cache.Entries["old_partition"] = oldEntry
-		
+
 		// Add entry with recent row count
 		newEntry := PartitionCacheEntry{
 			RowCount:  2000,
 			CountTime: time.Now(),
 		}
 		cache.Entries["new_partition"] = newEntry
-		
+
 		cache.cleanExpired()
-		
+
 		// Old row count should be cleared but file metadata preserved
 		oldPartition := cache.Entries["old_partition"]
 		if oldPartition.RowCount != 0 {
@@ -179,7 +179,7 @@ func TestPartitionCache(t *testing.T) {
 		if oldPartition.FileSize != 1024 {
 			t.Fatal("file metadata should be preserved")
 		}
-		
+
 		// New row count should be preserved
 		newPartition := cache.Entries["new_partition"]
 		if newPartition.RowCount != 2000 {
@@ -191,7 +191,7 @@ func TestPartitionCache(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
 		}
-		
+
 		// Add test data
 		cache.Entries["partition1"] = PartitionCacheEntry{
 			RowCount:         1000,
@@ -201,19 +201,19 @@ func TestPartitionCache(t *testing.T) {
 			FileMD5:          "xyz789",
 			S3Uploaded:       true,
 		}
-		
+
 		// Save cache
 		err := cache.save(tableName)
 		if err != nil {
 			t.Fatal(err)
 		}
-		
+
 		// Load cache
 		loaded, err := loadPartitionCache(tableName)
 		if err != nil {
 			t.Fatal(err)
 		}
-		
+
 		// Verify data
 		entry, exists := loaded.Entries["partition1"]
 		if !exists {
@@ -240,21 +240,21 @@ func TestPartitionCache(t *testing.T) {
 				},
 			},
 		}
-		
+
 		// Save legacy cache
 		cacheDir := filepath.Join(tempDir, ".postgresql-archiver", "cache")
-		os.MkdirAll(cacheDir, 0755)
+		_ = os.MkdirAll(cacheDir, 0755)
 		legacyPath := filepath.Join(cacheDir, "legacy_table_counts.json")
-		
+
 		data, _ := json.MarshalIndent(legacyCache, "", "  ")
-		os.WriteFile(legacyPath, data, 0644)
-		
+		_ = os.WriteFile(legacyPath, data, 0644)
+
 		// Load should migrate
 		cache, err := loadPartitionCache("legacy_table")
 		if err != nil {
 			t.Fatal(err)
 		}
-		
+
 		entry, exists := cache.Entries["legacy_partition"]
 		if !exists {
 			t.Fatal("migrated partition should exist")
@@ -262,7 +262,7 @@ func TestPartitionCache(t *testing.T) {
 		if entry.RowCount != 5000 {
 			t.Fatal("migrated row count mismatch")
 		}
-		
+
 		// Legacy file should be removed
 		if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
 			t.Fatal("legacy cache file should be removed after migration")
@@ -283,12 +283,12 @@ func TestCachePathGeneration(t *testing.T) {
 
 	tableName := "my_table"
 	expectedPath := filepath.Join(tempDir, ".postgresql-archiver", "cache", "my_table_metadata.json")
-	
+
 	actualPath := getCachePath(tableName)
 	if actualPath != expectedPath {
 		t.Fatalf("expected path %s, got %s", expectedPath, actualPath)
 	}
-	
+
 	// Check directory was created
 	dir := filepath.Dir(actualPath)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {

@@ -15,23 +15,23 @@ type PartitionCache struct {
 
 type PartitionCacheEntry struct {
 	// Row count information
-	RowCount     int64     `json:"row_count"`
-	CountTime    time.Time `json:"count_time"`
-	
+	RowCount  int64     `json:"row_count"`
+	CountTime time.Time `json:"count_time"`
+
 	// File metadata (stored after processing)
-	FileSize         int64     `json:"file_size,omitempty"`          // Compressed size
+	FileSize         int64     `json:"file_size,omitempty"`         // Compressed size
 	UncompressedSize int64     `json:"uncompressed_size,omitempty"` // Original size
 	FileMD5          string    `json:"file_md5,omitempty"`
 	FileTime         time.Time `json:"file_time,omitempty"`
-	
+
 	// S3 information
 	S3Key        string    `json:"s3_key,omitempty"`
 	S3Uploaded   bool      `json:"s3_uploaded,omitempty"`
 	S3UploadTime time.Time `json:"s3_upload_time,omitempty"`
-	
+
 	// Error tracking
-	LastError    string    `json:"last_error,omitempty"`
-	ErrorTime    time.Time `json:"error_time,omitempty"`
+	LastError string    `json:"last_error,omitempty"`
+	ErrorTime time.Time `json:"error_time,omitempty"`
 }
 
 // Legacy support - keep old structure for backward compatibility
@@ -60,7 +60,7 @@ func getLegacyCachePath(tableName string) string {
 
 func loadPartitionCache(tableName string) (*PartitionCache, error) {
 	cachePath := getCachePath(tableName)
-	
+
 	// Try to load new cache format
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
@@ -91,7 +91,7 @@ func loadPartitionCache(tableName string) (*PartitionCache, error) {
 		}
 		return nil, err
 	}
-	
+
 	var cache PartitionCache
 	if err := json.Unmarshal(data, &cache); err != nil {
 		// If cache is corrupted, return empty cache
@@ -99,28 +99,28 @@ func loadPartitionCache(tableName string) (*PartitionCache, error) {
 			Entries: make(map[string]PartitionCacheEntry),
 		}, nil
 	}
-	
+
 	if cache.Entries == nil {
 		cache.Entries = make(map[string]PartitionCacheEntry)
 	}
-	
+
 	return &cache, nil
 }
 
 // Load legacy cache for migration
 func loadLegacyCache(tableName string) (*RowCountCache, error) {
 	cachePath := getLegacyCachePath(tableName)
-	
+
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var cache RowCountCache
 	if err := json.Unmarshal(data, &cache); err != nil {
 		return nil, err
 	}
-	
+
 	return &cache, nil
 }
 
@@ -130,7 +130,7 @@ func loadCache(tableName string) (*RowCountCache, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Convert to old format for backward compatibility
 	rowCountCache := &RowCountCache{
 		Counts: make(map[string]RowCountEntry),
@@ -141,18 +141,18 @@ func loadCache(tableName string) (*RowCountCache, error) {
 			Timestamp: entry.CountTime,
 		}
 	}
-	
+
 	return rowCountCache, nil
 }
 
 func (c *PartitionCache) save(tableName string) error {
 	cachePath := getCachePath(tableName)
-	
+
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	
+
 	return os.WriteFile(cachePath, data, 0644)
 }
 
@@ -168,7 +168,7 @@ func (c *RowCountCache) save(tableName string) error {
 			CountTime: entry.Timestamp,
 		}
 	}
-	
+
 	return partitionCache.save(tableName)
 }
 
@@ -178,12 +178,12 @@ func (c *PartitionCache) getFileMetadata(tablePartition string, s3Key string, pa
 	if !exists {
 		return 0, "", false
 	}
-	
+
 	// Check if we have file metadata
 	if entry.FileSize == 0 || entry.FileMD5 == "" {
 		return 0, "", false
 	}
-	
+
 	// Check if file metadata is expired (24 hours)
 	if time.Since(entry.FileTime) > 24*time.Hour {
 		// Clear file metadata but keep row count
@@ -193,7 +193,7 @@ func (c *PartitionCache) getFileMetadata(tablePartition string, s3Key string, pa
 		c.Entries[tablePartition] = entry
 		return 0, "", false
 	}
-	
+
 	// Always recalculate today's partition
 	today := time.Now().Truncate(24 * time.Hour)
 	if partitionDate.Equal(today) || partitionDate.After(today) {
@@ -204,7 +204,7 @@ func (c *PartitionCache) getFileMetadata(tablePartition string, s3Key string, pa
 		c.Entries[tablePartition] = entry
 		return 0, "", false
 	}
-	
+
 	// Verify S3 key matches (in case path structure changed)
 	if entry.S3Key != "" && entry.S3Key != s3Key {
 		// Path changed, invalidate file metadata
@@ -215,7 +215,7 @@ func (c *PartitionCache) getFileMetadata(tablePartition string, s3Key string, pa
 		c.Entries[tablePartition] = entry
 		return 0, "", false
 	}
-	
+
 	return entry.FileSize, entry.FileMD5, true
 }
 
@@ -251,20 +251,20 @@ func (c *PartitionCache) getRowCount(tablePartition string, partitionDate time.T
 	if !exists {
 		return 0, false
 	}
-	
+
 	// Check if cache is expired (24 hours)
 	if time.Since(entry.CountTime) > 24*time.Hour {
 		delete(c.Entries, tablePartition)
 		return 0, false
 	}
-	
+
 	// Always recount today's partition
 	today := time.Now().Truncate(24 * time.Hour)
 	if partitionDate.Equal(today) || partitionDate.After(today) {
 		delete(c.Entries, tablePartition)
 		return 0, false
 	}
-	
+
 	return entry.RowCount, true
 }
 
@@ -285,20 +285,20 @@ func (c *RowCountCache) getCount(tablePartition string, partitionDate time.Time)
 	if !exists {
 		return 0, false
 	}
-	
+
 	// Check if cache is expired (24 hours)
 	if time.Since(entry.Timestamp) > 24*time.Hour {
 		delete(c.Counts, tablePartition)
 		return 0, false
 	}
-	
+
 	// Always recount today's partition
 	today := time.Now().Truncate(24 * time.Hour)
 	if partitionDate.Equal(today) || partitionDate.After(today) {
 		delete(c.Counts, tablePartition)
 		return 0, false
 	}
-	
+
 	return entry.Count, true
 }
 
@@ -312,24 +312,24 @@ func (c *RowCountCache) setCount(tablePartition string, count int64) {
 func (c *PartitionCache) cleanExpired() {
 	for partition, entry := range c.Entries {
 		modified := false
-		
+
 		// Only clean expired row counts (daily)
 		if !entry.CountTime.IsZero() && time.Since(entry.CountTime) > 24*time.Hour {
 			entry.RowCount = 0
 			entry.CountTime = time.Time{}
 			modified = true
 		}
-		
+
 		// Don't expire file metadata - keep it indefinitely
 		// The metadata will be updated if the file changes
-		
+
 		// Clean old errors after 7 days
 		if !entry.ErrorTime.IsZero() && time.Since(entry.ErrorTime) > 7*24*time.Hour {
 			entry.LastError = ""
 			entry.ErrorTime = time.Time{}
 			modified = true
 		}
-		
+
 		// Update entry if modified
 		if modified {
 			// Only delete entry if it has no useful data

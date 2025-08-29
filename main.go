@@ -10,8 +10,8 @@ import (
 
 var (
 	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF0000")).
-			Bold(true)
+		Foreground(lipgloss.Color("#FF0000")).
+		Bold(true)
 )
 
 func main() {
