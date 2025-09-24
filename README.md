@@ -58,7 +58,7 @@ A high-performance CLI tool for archiving PostgreSQL partitioned table data to S
 ## 🔧 Installation
 
 ```bash
-git clone https://github.com/airframes/postgresql-archiver.git
+git clone https://github.com/airframesio/postgresql-archiver.git
 cd postgresql-archiver
 go build -o postgresql-archiver
 ```
@@ -66,7 +66,7 @@ go build -o postgresql-archiver
 Or install directly:
 
 ```bash
-go install github.com/airframes/postgresql-archiver@latest
+go install github.com/airframesio/postgresql-archiver@latest
 ```
 
 ## 🚀 Quick Start
