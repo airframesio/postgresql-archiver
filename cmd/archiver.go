@@ -117,12 +117,17 @@ func (a *Archiver) Run() error {
 }
 
 func (a *Archiver) connect() error {
-	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+	sslMode := a.config.Database.SSLMode
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 		a.config.Database.Host,
 		a.config.Database.Port,
 		a.config.Database.User,
 		a.config.Database.Password,
 		a.config.Database.Name,
+		sslMode,
 	)
 
 	db, err := sql.Open("postgres", connStr)
@@ -763,6 +768,15 @@ func (a *Archiver) extractDataWithProgress(partition PartitionInfo, program *tea
 		}
 	}
 
+	// Save the actual row count to cache if it was unknown
+	if partition.RowCount <= 0 && rowCount > 0 {
+		cache, _ := loadPartitionCache(a.config.Table)
+		if cache != nil {
+			cache.setRowCount(partition.TableName, rowCount)
+			_ = cache.save(a.config.Table)
+		}
+	}
+
 	return buffer.Bytes(), nil
 }
 
@@ -821,8 +835,9 @@ func (a *Archiver) checkObjectExists(key string) (bool, int64, string) {
 
 // calculateMultipartETag calculates the ETag for a multipart upload
 // This matches S3's algorithm for multipart uploads
+// Uses 5MB part size to match s3manager.Uploader default
 func (a *Archiver) calculateMultipartETag(data []byte) string {
-	const partSize = 5 * 1024 * 1024 * 1024 // 5GB part size (max single part size)
+	const partSize = 5 * 1024 * 1024 // 5MB part size (s3manager default)
 
 	// Calculate number of parts
 	numParts := (len(data) + partSize - 1) / partSize

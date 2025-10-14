@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
 )
@@ -282,8 +283,78 @@ func broadcastManager() {
 	}
 }
 
-// Data monitor watches for changes and broadcasts updates
+// Data monitor watches for changes and broadcasts updates using fsnotify
 func dataMonitor() {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("Failed to create file watcher, falling back to polling: %v", err)
+		dataMonitorFallback()
+		return
+	}
+	defer watcher.Close()
+
+	// Watch directories
+	homeDir, _ := os.UserHomeDir()
+	cacheDir := filepath.Join(homeDir, ".postgresql-archiver", "cache")
+	taskDir := filepath.Join(homeDir, ".postgresql-archiver")
+
+	// Create directories if they don't exist
+	_ = os.MkdirAll(cacheDir, 0755)
+	_ = os.MkdirAll(taskDir, 0755)
+
+	// Watch cache directory
+	if err := watcher.Add(cacheDir); err != nil {
+		log.Printf("Failed to watch cache directory: %v", err)
+	}
+
+	// Watch task directory (for task file changes)
+	if err := watcher.Add(taskDir); err != nil {
+		log.Printf("Failed to watch task directory: %v", err)
+	}
+
+	// Debounce timer to avoid too many updates
+	var debounceTimer *time.Timer
+	debounceDuration := 100 * time.Millisecond
+
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+
+			// Check if it's a cache or task file
+			isCacheFile := strings.HasSuffix(event.Name, ".json") && strings.Contains(event.Name, "cache")
+			isTaskFile := strings.HasSuffix(event.Name, "current_task.json")
+
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) != 0 {
+				if isCacheFile || isTaskFile {
+					// Debounce updates to avoid flooding
+					if debounceTimer != nil {
+						debounceTimer.Stop()
+					}
+					debounceTimer = time.AfterFunc(debounceDuration, func() {
+						if isCacheFile {
+							broadcastCacheUpdate()
+						}
+						if isTaskFile {
+							broadcastStatusUpdate()
+						}
+					})
+				}
+			}
+
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("File watcher error: %v", err)
+		}
+	}
+}
+
+// dataMonitorFallback is the original polling-based monitor as a fallback
+func dataMonitorFallback() {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 

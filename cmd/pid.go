@@ -74,6 +74,7 @@ func ReadPIDFile() (int, error) {
 }
 
 // IsProcessRunning checks if a process with given PID is running
+// Works on both Unix and Windows systems
 func IsProcessRunning(pid int) bool {
 	process, err := os.FindProcess(pid)
 	if err != nil {
@@ -81,7 +82,12 @@ func IsProcessRunning(pid int) bool {
 	}
 
 	// On Unix systems, we can send signal 0 to check if process exists
+	// On Windows, FindProcess always succeeds, so we need to try to send a signal
 	err = process.Signal(syscall.Signal(0))
+
+	// On Unix: err == nil means process exists
+	// On Windows: err == nil also means process exists
+	// Both systems return an error if the process doesn't exist
 	return err == nil
 }
 

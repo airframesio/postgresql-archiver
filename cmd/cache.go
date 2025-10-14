@@ -188,15 +188,8 @@ func (c *PartitionCache) getFileMetadata(tablePartition string, s3Key string, pa
 		return 0, "", false
 	}
 
-	// Check if file metadata is expired (24 hours)
-	if time.Since(entry.FileTime) > 24*time.Hour {
-		// Clear file metadata but keep row count
-		entry.FileSize = 0
-		entry.FileMD5 = ""
-		entry.FileTime = time.Time{}
-		c.Entries[tablePartition] = entry
-		return 0, "", false
-	}
+	// File metadata is cached permanently (not expired)
+	// Only today's partition needs recalculation
 
 	// Always recalculate today's partition
 	today := time.Now().Truncate(24 * time.Hour)

@@ -18,6 +18,7 @@ var (
 	dbUser      string
 	dbPassword  string
 	dbName      string
+	dbSSLMode   string
 	s3Endpoint  string
 	s3Bucket    string
 	s3AccessKey string
@@ -80,6 +81,7 @@ func init() {
 	rootCmd.Flags().StringVar(&dbUser, "db-user", "", "PostgreSQL user")
 	rootCmd.Flags().StringVar(&dbPassword, "db-password", "", "PostgreSQL password")
 	rootCmd.Flags().StringVar(&dbName, "db-name", "", "PostgreSQL database name")
+	rootCmd.Flags().StringVar(&dbSSLMode, "db-sslmode", "disable", "PostgreSQL SSL mode (disable, require, verify-ca, verify-full)")
 
 	rootCmd.Flags().StringVar(&s3Endpoint, "s3-endpoint", "", "S3-compatible endpoint URL")
 	rootCmd.Flags().StringVar(&s3Bucket, "s3-bucket", "", "S3 bucket name")
@@ -105,6 +107,7 @@ func init() {
 	_ = viper.BindPFlag("viewer_port", rootCmd.Flags().Lookup("viewer-port"))
 	_ = viper.BindPFlag("db.password", rootCmd.Flags().Lookup("db-password"))
 	_ = viper.BindPFlag("db.name", rootCmd.Flags().Lookup("db-name"))
+	_ = viper.BindPFlag("db.sslmode", rootCmd.Flags().Lookup("db-sslmode"))
 	_ = viper.BindPFlag("s3.endpoint", rootCmd.Flags().Lookup("s3-endpoint"))
 	_ = viper.BindPFlag("s3.bucket", rootCmd.Flags().Lookup("s3-bucket"))
 	_ = viper.BindPFlag("s3.access_key", rootCmd.Flags().Lookup("s3-access-key"))
@@ -155,6 +158,7 @@ func runArchive() {
 			User:     viper.GetString("db.user"),
 			Password: viper.GetString("db.password"),
 			Name:     viper.GetString("db.name"),
+			SSLMode:  viper.GetString("db.sslmode"),
 		},
 		S3: S3Config{
 			Endpoint:  viper.GetString("s3.endpoint"),

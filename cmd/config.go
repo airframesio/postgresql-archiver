@@ -25,6 +25,7 @@ type DatabaseConfig struct {
 	User     string
 	Password string
 	Name     string
+	SSLMode  string
 }
 
 type S3Config struct {
