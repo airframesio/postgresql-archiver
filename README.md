@@ -111,6 +111,7 @@ Flags:
       --db-name string         PostgreSQL database name
       --db-password string     PostgreSQL password
       --db-port int            PostgreSQL port (default 5432)
+      --db-sslmode string      PostgreSQL SSL mode (disable, require, verify-ca, verify-full) (default "disable")
       --db-user string         PostgreSQL user
   -d, --debug                  enable debug output
       --dry-run                perform a dry run without uploading
@@ -154,6 +155,7 @@ export ARCHIVE_DB_PORT=5432
 export ARCHIVE_DB_USER=myuser
 export ARCHIVE_DB_PASSWORD=mypass
 export ARCHIVE_DB_NAME=mydb
+export ARCHIVE_DB_SSLMODE=disable
 export ARCHIVE_S3_ENDPOINT=https://fsn1.your-objectstorage.com
 export ARCHIVE_S3_BUCKET=my-bucket
 export ARCHIVE_S3_ACCESS_KEY=your_key
@@ -175,6 +177,7 @@ db:
   user: myuser
   password: mypass
   name: mydb
+  sslmode: disable  # Options: disable, require, verify-ca, verify-full
 
 s3:
   endpoint: https://fsn1.your-objectstorage.com
@@ -255,7 +258,7 @@ Access the viewer at `http://localhost:8080` (or your configured port).
 The cache viewer uses modern web technologies for optimal performance:
 - **WebSocket Protocol**: Bi-directional communication for instant updates
 - **Automatic Reconnection**: Reconnects every 2 seconds if connection drops
-- **File System Monitoring**: Watches cache directory for changes (500ms intervals)
+- **Event-Driven File Monitoring**: Uses fsnotify for instant file change detection
 - **Efficient Updates**: Only transmits and renders changed data
 - **No Polling Overhead**: WebSocket eliminates the need for HTTP polling
 
@@ -575,3 +578,4 @@ Built with these awesome libraries:
 - [klauspost/compress](https://github.com/klauspost/compress) - Fast zstd compression
 - [AWS SDK for Go](https://github.com/aws/aws-sdk-go) - S3 integration
 - [Gorilla WebSocket](https://github.com/gorilla/websocket) - WebSocket implementation
+- [fsnotify](https://github.com/fsnotify/fsnotify) - Cross-platform file system notifications
