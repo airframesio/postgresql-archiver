@@ -58,6 +58,32 @@ const cacheViewerHTML = `<!DOCTYPE html>
             --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
             --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
             --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+            --shadow-2xl: 0 20px 60px rgba(0, 0, 0, 0.15);
+
+            /* Typography */
+            --font-size-xs: 0.75rem;
+            --font-size-sm: 0.875rem;
+            --font-size-base: 1rem;
+            --font-size-lg: 1.125rem;
+            --font-size-xl: 1.25rem;
+            --font-size-2xl: 1.5rem;
+            --font-size-3xl: 2rem;
+            --font-size-4xl: 2.5rem;
+            --line-height-tight: 1.2;
+            --line-height-normal: 1.5;
+            --line-height-relaxed: 1.75;
+            --font-weight-normal: 400;
+            --font-weight-medium: 500;
+            --font-weight-semibold: 600;
+            --font-weight-bold: 700;
+
+            /* Gradients */
+            --gradient-primary: linear-gradient(135deg, var(--color-primary-500) 0%, var(--color-accent-500) 100%);
+
+            /* Transitions */
+            --transition-fast: 0.15s ease;
+            --transition-base: 0.3s ease;
+            --transition-slow: 0.5s ease;
         }
 
         * {
@@ -81,51 +107,51 @@ const cacheViewerHTML = `<!DOCTYPE html>
         
         .header {
             background: rgba(255, 255, 255, 0.95);
-            border-radius: 16px;
-            padding: 30px;
-            margin-bottom: 30px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+            border-radius: var(--radius-xl);
+            padding: var(--spacing-10);
+            margin-bottom: var(--spacing-10);
+            box-shadow: var(--shadow-2xl);
             backdrop-filter: blur(10px);
             position: relative;
         }
-        
+
         .header h1 {
-            font-size: 2.5em;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-size: var(--font-size-4xl);
+            background: var(--gradient-primary);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin-bottom: 10px;
+            margin-bottom: var(--spacing-3);
         }
-        
+
         .header .subtitle {
-            color: #666;
-            font-size: 1.1em;
+            color: var(--color-neutral-600);
+            font-size: var(--font-size-lg);
             display: flex;
             align-items: center;
-            gap: 20px;
+            gap: var(--spacing-6);
             flex-wrap: wrap;
         }
         
         .github-link {
             position: absolute;
-            top: 30px;
-            right: 30px;
+            top: var(--spacing-10);
+            right: var(--spacing-10);
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 10px 20px;
-            background: #24292e;
+            gap: var(--spacing-2);
+            padding: var(--spacing-3) var(--spacing-6);
+            background: var(--color-neutral-900);
             color: white;
             text-decoration: none;
-            border-radius: 8px;
-            font-weight: 500;
-            transition: all 0.3s ease;
+            border-radius: var(--radius-sm);
+            font-weight: var(--font-weight-medium);
+            transition: all var(--transition-base);
         }
         
         .github-link:hover {
             background: #1a1e22;
             transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+            box-shadow: var(--shadow-lg);
         }
         
         .github-link svg {
@@ -137,21 +163,21 @@ const cacheViewerHTML = `<!DOCTYPE html>
         .status {
             display: inline-flex;
             align-items: center;
-            gap: 8px;
-            padding: 8px 16px;
-            background: #f0f0f0;
-            border-radius: 20px;
-            font-size: 0.9em;
+            gap: var(--spacing-2);
+            padding: var(--spacing-2) var(--spacing-4);
+            background: var(--color-neutral-100);
+            border-radius: var(--radius-full);
+            font-size: var(--font-size-sm);
         }
-        
+
         .status.connected {
-            background: #d4edda;
-            color: #155724;
+            background: var(--color-success-50);
+            color: var(--color-success-700);
         }
-        
+
         .status.disconnected {
-            background: #f8d7da;
-            color: #721c24;
+            background: var(--color-error-50);
+            color: var(--color-error-700);
         }
         
         .pulse {
@@ -185,17 +211,17 @@ const cacheViewerHTML = `<!DOCTYPE html>
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
+            gap: var(--spacing-6);
+            margin-bottom: var(--spacing-10);
         }
-        
+
         .stat-card {
             background: rgba(255, 255, 255, 0.95);
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            border-radius: var(--radius-md);
+            padding: var(--spacing-6);
+            box-shadow: var(--shadow-lg);
             backdrop-filter: blur(10px);
-            transition: transform 0.3s ease;
+            transition: transform var(--transition-base);
         }
         
         .stat-card:hover {
@@ -203,23 +229,23 @@ const cacheViewerHTML = `<!DOCTYPE html>
         }
         
         .stat-card .label {
-            color: #555;
-            font-size: 0.9em;
+            color: var(--color-neutral-700);
+            font-size: var(--font-size-sm);
             text-transform: uppercase;
             letter-spacing: 1px;
-            margin-bottom: 8px;
+            margin-bottom: var(--spacing-2);
         }
-        
+
         .stat-card .value {
-            font-size: 2em;
-            font-weight: bold;
-            color: #333;
+            font-size: var(--font-size-3xl);
+            font-weight: var(--font-weight-bold);
+            color: var(--color-neutral-800);
         }
-        
+
         .stat-card .detail {
-            font-size: 0.9em;
-            color: #666;
-            margin-top: 5px;
+            font-size: var(--font-size-sm);
+            color: var(--color-neutral-600);
+            margin-top: var(--spacing-1);
         }
         
         .table-container {
@@ -640,7 +666,15 @@ const cacheViewerHTML = `<!DOCTYPE html>
 <body>
     <div class="container">
         <div class="header">
-            <h1>📊 PostgreSQL Archiver Cache Viewer</h1>
+            <h1>
+                <svg style="display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="14" width="7" height="7"></rect>
+                    <rect x="3" y="14" width="7" height="7"></rect>
+                </svg>
+                PostgreSQL Archiver Cache Viewer
+            </h1>
             <div class="subtitle">
                 <span class="status connected" id="status" role="status" aria-live="polite">
                     <span class="pulse" aria-hidden="true"></span>
