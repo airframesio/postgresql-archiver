@@ -150,7 +150,7 @@ const cacheViewerHTML = `<!DOCTYPE html>
         }
         
         .stat-card .label {
-            color: #888;
+            color: #555;
             font-size: 0.9em;
             text-transform: uppercase;
             letter-spacing: 1px;
@@ -238,6 +238,16 @@ const cacheViewerHTML = `<!DOCTYPE html>
         .filter-select:hover {
             border-color: #667eea;
         }
+
+        .refresh-select:focus {
+            outline: 2px solid #667eea;
+            outline-offset: 2px;
+        }
+
+        .github-link:focus {
+            outline: 2px solid #667eea;
+            outline-offset: 2px;
+        }
         
         .table-wrapper {
             overflow-x: auto;
@@ -270,6 +280,12 @@ const cacheViewerHTML = `<!DOCTYPE html>
         }
         
         thead th:hover {
+            background: #f0f1f3;
+        }
+
+        thead th:focus {
+            outline: 2px solid #667eea;
+            outline-offset: -2px;
             background: #f0f1f3;
         }
         
@@ -327,7 +343,7 @@ const cacheViewerHTML = `<!DOCTYPE html>
         .hash {
             font-family: 'SF Mono', Monaco, 'Courier New', monospace;
             font-size: 0.85em;
-            color: #888;
+            color: #555;
             word-break: break-all;
         }
         
@@ -368,7 +384,7 @@ const cacheViewerHTML = `<!DOCTYPE html>
         }
         
         .status-badge.uploaded {
-            background: linear-gradient(135deg, #28a745, #20c997);
+            background: #28a745;
             color: white;
         }
         
@@ -478,7 +494,7 @@ const cacheViewerHTML = `<!DOCTYPE html>
         }
         
         .task-details a {
-            color: white !important;
+            color: white;
             text-decoration: underline;
             opacity: 1;
             transition: opacity 0.2s ease;
@@ -530,8 +546,8 @@ const cacheViewerHTML = `<!DOCTYPE html>
         <div class="header">
             <h1>📊 PostgreSQL Archiver Cache Viewer</h1>
             <div class="subtitle">
-                <span class="status connected" id="status">
-                    <span class="pulse"></span>
+                <span class="status connected" id="status" role="status" aria-live="polite">
+                    <span class="pulse" aria-hidden="true"></span>
                     <span id="status-text">Connected to local cache</span>
                 </span>
                 <span id="last-update">Last updated: Never</span>
@@ -544,7 +560,7 @@ const cacheViewerHTML = `<!DOCTYPE html>
             </a>
         </div>
         
-        <div class="stats-grid" id="stats-grid">
+        <div class="stats-grid" id="stats-grid" aria-live="polite" aria-atomic="false">
             <!-- Stats will be inserted here -->
         </div>
         
@@ -556,12 +572,12 @@ const cacheViewerHTML = `<!DOCTYPE html>
                     <span id="task-time"></span>
                 </div>
             </div>
-            <div class="task-progress-bar" id="task-progress-bar" style="display: none;">
+            <div class="task-progress-bar" id="task-progress-bar" style="display: none;" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Archiving progress">
                 <div class="task-progress-fill" id="task-progress-fill"></div>
             </div>
             <div class="task-details">
-                <span id="task-status-text">No active task</span>
-                <span id="task-stats"></span>
+                <span id="task-status-text" aria-live="polite">No active task</span>
+                <span id="task-stats" aria-live="polite"></span>
             </div>
         </div>
         
@@ -569,25 +585,25 @@ const cacheViewerHTML = `<!DOCTYPE html>
             <div class="table-header">
                 <h2 class="table-title">Cache Entries</h2>
                 <div class="controls">
-                    <select class="filter-select" id="table-filter">
+                    <select class="filter-select" id="table-filter" aria-label="Filter by table">
                         <option value="">All Tables</option>
                     </select>
-                    <input type="text" class="search-box" placeholder="Search partitions..." id="search-box">
+                    <input type="text" class="search-box" placeholder="Search partitions..." id="search-box" aria-label="Search partitions">
                 </div>
             </div>
             <div class="table-wrapper">
-                <table id="data-table">
+                <table id="data-table" aria-label="Cache entries table">
                     <thead>
                         <tr>
-                            <th class="sortable" data-column="partition">Partition</th>
-                            <th class="sortable" data-column="rowCount">Rows</th>
-                            <th class="sortable" data-column="uncompressedSize">Uncompressed</th>
-                            <th class="sortable" data-column="fileSize">Compressed</th>
-                            <th>Ratio</th>
-                            <th>MD5</th>
-                            <th class="sortable" data-column="fileTime">Age</th>
-                            <th>Status</th>
-                            <th>Error</th>
+                            <th class="sortable" data-column="partition" tabindex="0" aria-label="Partition, sortable">Partition</th>
+                            <th class="sortable" data-column="rowCount" tabindex="0" aria-label="Rows, sortable">Rows</th>
+                            <th class="sortable" data-column="uncompressedSize" tabindex="0" aria-label="Uncompressed size, sortable">Uncompressed</th>
+                            <th class="sortable" data-column="fileSize" tabindex="0" aria-label="Compressed size, sortable">Compressed</th>
+                            <th aria-label="Compression ratio">Ratio</th>
+                            <th aria-label="MD5 hash">MD5</th>
+                            <th class="sortable" data-column="fileTime" tabindex="0" aria-label="Age, sortable">Age</th>
+                            <th aria-label="Status">Status</th>
+                            <th aria-label="Error message">Error</th>
                         </tr>
                     </thead>
                     <tbody id="table-body">
@@ -729,7 +745,7 @@ const cacheViewerHTML = `<!DOCTYPE html>
                     
                     if (task.current_partition) {
                         // Show as "Table: partition - operation"
-                        statusElement.innerHTML = 'Table: <a href="#" onclick="scrollToPartition(\'' + task.current_partition + '\'); return false;" style="color: white; text-decoration: underline;">' + task.current_partition + '</a> - ' + currentTaskText;
+                        statusElement.innerHTML = 'Table: <a href="#" class="partition-link" data-partition="' + task.current_partition + '">' + task.current_partition + '</a> - ' + currentTaskText;
                     } else {
                         statusElement.textContent = currentTaskText;
                     }
@@ -741,7 +757,7 @@ const cacheViewerHTML = `<!DOCTYPE html>
                     
                     if (task.current_partition) {
                         // Show as "Table: partition - operation"
-                        statusElement.innerHTML = 'Table: <a href="#" onclick="scrollToPartition(\'' + task.current_partition + '\'); return false;" style="color: white; text-decoration: underline;">' + task.current_partition + '</a> - ' + currentTaskText;
+                        statusElement.innerHTML = 'Table: <a href="#" class="partition-link" data-partition="' + task.current_partition + '">' + task.current_partition + '</a> - ' + currentTaskText;
                     } else {
                         statusElement.textContent = currentTaskText;
                     }
@@ -756,11 +772,12 @@ const cacheViewerHTML = `<!DOCTYPE html>
                     const progressBar = document.getElementById('task-progress-bar');
                     const progressFill = document.getElementById('task-progress-fill');
                     progressBar.style.display = 'block';
-                    
+
                     const percent = (taskForProgress.completed_items / taskForProgress.total_items) * 100;
                     progressFill.style.width = percent + '%';
-                    
-                    document.getElementById('task-stats').textContent = 
+                    progressBar.setAttribute('aria-valuenow', Math.round(percent));
+
+                    document.getElementById('task-stats').textContent =
                         taskForProgress.completed_items + '/' + taskForProgress.total_items + ' partitions (' + Math.round(percent) + '%)';
                 } else {
                     document.getElementById('task-progress-bar').style.display = 'none';
@@ -1058,7 +1075,7 @@ const cacheViewerHTML = `<!DOCTYPE html>
                 <td class="size">${formatBytes(entry.uncompressedSize)}</td>
                 <td class="size">${formatBytes(entry.fileSize)}</td>
                 <td class="ratio">${ratio}</td>
-                <td class="hash" title="${entry.fileMD5 || ''}">${entry.fileMD5 ? entry.fileMD5.substring(0, 12) + '...' : '—'}</td>
+                <td class="hash">${entry.fileMD5 ? '<span title="' + entry.fileMD5 + '">' + entry.fileMD5.substring(0, 12) + '...</span>' : '—'}</td>
                 <td><span class="age ${age.class}">${age.text}</span></td>
                 <td>${statusBadge}</td>
                 <td>${hasError ? '<div class="error-text" title="' + entry.lastError + '">' + entry.lastError + '</div>' : '—'}</td>
@@ -1103,14 +1120,34 @@ const cacheViewerHTML = `<!DOCTYPE html>
         document.getElementById('search-box').addEventListener('input', updateTable);
         document.getElementById('table-filter').addEventListener('change', updateTable);
         
-        // Sort handlers
+        // Sort handlers with keyboard support
         document.addEventListener('click', (e) => {
             const th = e.target.closest('th.sortable');
             if (th) {
                 sortData(th.dataset.column);
             }
         });
-        
+
+        document.addEventListener('keydown', (e) => {
+            const th = e.target.closest('th.sortable');
+            if (th && (e.key === 'Enter' || e.key === ' ')) {
+                e.preventDefault();
+                sortData(th.dataset.column);
+            }
+        });
+
+        // Handle partition link clicks with event delegation
+        document.addEventListener('click', (e) => {
+            const link = e.target.closest('.partition-link');
+            if (link) {
+                e.preventDefault();
+                const partitionName = link.dataset.partition;
+                if (partitionName) {
+                    scrollToPartition(partitionName);
+                }
+            }
+        });
+
         // Initial load
         fetchInitialData();
         updateSortIndicators();  // Show initial sort indicator

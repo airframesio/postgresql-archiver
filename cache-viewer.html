@@ -128,6 +128,11 @@
             transform: translateY(-2px);
             box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
         }
+
+        .file-label:focus {
+            outline: 2px solid #667eea;
+            outline-offset: 2px;
+        }
         
         .stats-grid {
             display: grid;
@@ -150,7 +155,7 @@
         }
         
         .stat-card .label {
-            color: #888;
+            color: #555;
             font-size: 0.9em;
             text-transform: uppercase;
             letter-spacing: 1px;
@@ -234,6 +239,12 @@
         thead th:hover {
             background: #f0f1f3;
         }
+
+        thead th:focus {
+            outline: 2px solid #667eea;
+            outline-offset: -2px;
+            background: #f0f1f3;
+        }
         
         thead th.sortable:after {
             content: ' ↕';
@@ -282,7 +293,7 @@
         .hash {
             font-family: 'SF Mono', Monaco, 'Courier New', monospace;
             font-size: 0.85em;
-            color: #888;
+            color: #555;
             word-break: break-all;
         }
         
@@ -318,10 +329,10 @@
         }
         
         .status-badge.cached {
-            background: linear-gradient(135deg, #667eea, #764ba2);
+            background: #6c757d;
             color: white;
         }
-        
+
         .status-badge.no-file {
             background: #ffc107;
             color: #333;
@@ -388,8 +399,8 @@
         <div class="header">
             <h1>📊 PostgreSQL Archiver Cache Viewer</h1>
             <div class="subtitle">
-                <span class="status loading" id="status">
-                    <span class="pulse"></span>
+                <span class="status loading" id="status" role="status" aria-live="polite">
+                    <span class="pulse" aria-hidden="true"></span>
                     <span id="status-text">Loading cache...</span>
                 </span>
                 <span id="last-update">Last updated: Never</span>
@@ -407,14 +418,14 @@
             </div>
         </div>
         
-        <div class="stats-grid" id="stats-grid">
+        <div class="stats-grid" id="stats-grid" aria-live="polite" aria-atomic="false">
             <!-- Stats will be inserted here -->
         </div>
         
         <div class="table-container">
             <div class="table-header">
                 <h2 class="table-title">Cache Entries</h2>
-                <input type="text" class="search-box" placeholder="Search partitions..." id="search-box">
+                <input type="text" class="search-box" placeholder="Search partitions..." id="search-box" aria-label="Search partitions">
             </div>
             <div id="table-content">
                 <div class="empty-state">
@@ -625,16 +636,16 @@
             };
             
             let html = `
-                <table>
+                <table aria-label="Cache entries table">
                     <thead>
                         <tr>
-                            <th class="${sortClass('partition')}" onclick="sortData('partition')">Partition</th>
-                            <th class="${sortClass('rowCount')}" onclick="sortData('rowCount')">Row Count</th>
-                            <th class="${sortClass('fileSize')}" onclick="sortData('fileSize')">File Size</th>
-                            <th>MD5 Hash</th>
-                            <th class="${sortClass('countTime')}" onclick="sortData('countTime')">Count Age</th>
-                            <th class="${sortClass('fileTime')}" onclick="sortData('fileTime')">File Age</th>
-                            <th>Status</th>
+                            <th class="${sortClass('partition')}" data-column="partition" tabindex="0" aria-label="Partition, sortable">Partition</th>
+                            <th class="${sortClass('rowCount')}" data-column="rowCount" tabindex="0" aria-label="Row Count, sortable">Row Count</th>
+                            <th class="${sortClass('fileSize')}" data-column="fileSize" tabindex="0" aria-label="File Size, sortable">File Size</th>
+                            <th aria-label="MD5 Hash">MD5 Hash</th>
+                            <th class="${sortClass('countTime')}" data-column="countTime" tabindex="0" aria-label="Count Age, sortable">Count Age</th>
+                            <th class="${sortClass('fileTime')}" data-column="fileTime" tabindex="0" aria-label="File Age, sortable">File Age</th>
+                            <th aria-label="Status">Status</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -653,7 +664,7 @@
                         </td>
                         <td class="size">${entry.rowCount.toLocaleString()}</td>
                         <td class="size">${entry.fileSize ? formatBytes(entry.fileSize) : '-'}</td>
-                        <td class="hash" title="${entry.fileMD5}">${entry.fileMD5 ? entry.fileMD5.substring(0, 12) + '...' : '-'}</td>
+                        <td class="hash">${entry.fileMD5 ? '<span title="' + entry.fileMD5 + '">' + entry.fileMD5.substring(0, 12) + '...</span>' : '-'}</td>
                         <td><span class="age ${countAge.class}">${countAge.text}</span></td>
                         <td><span class="age ${fileAge.class}">${fileAge.text}</span></td>
                         <td>
@@ -758,6 +769,30 @@
             startAutoRefresh();
         });
         
+        // Add click event delegation for sortable headers
+        document.addEventListener('click', (e) => {
+            const th = e.target.closest('th.sortable');
+            if (th && th.dataset.column) {
+                sortData(th.dataset.column);
+            }
+        });
+
+        // Add keyboard navigation for table headers
+        document.addEventListener('keydown', (e) => {
+            const th = e.target.closest('th.sortable');
+            if (th && th.dataset.column && (e.key === 'Enter' || e.key === ' ')) {
+                e.preventDefault();
+                sortData(th.dataset.column);
+            }
+            // Add keyboard support for file label
+            if (e.target.matches('.file-label')) {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    document.getElementById('file-input').click();
+                }
+            }
+        });
+
         // Initial load message
         updateStatus('loading', 'Select cache files to view');
     </script>
