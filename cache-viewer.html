@@ -5,22 +5,75 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PostgreSQL Archiver - Cache Viewer</title>
     <style>
+        :root {
+            /* Brand Colors */
+            --color-primary-500: #667eea;
+            --color-primary-600: #5568d3;
+            --color-accent-500: #764ba2;
+
+            /* Semantic Colors */
+            --color-success-50: #d4edda;
+            --color-success-500: #28a745;
+            --color-success-700: #155724;
+            --color-warning-50: #fff3cd;
+            --color-warning-500: #ffc107;
+            --color-warning-700: #856404;
+            --color-error-50: #f8d7da;
+            --color-error-500: #dc3545;
+            --color-error-700: #721c24;
+            --color-info-50: #cce5ff;
+            --color-info-500: #17a2b8;
+
+            /* Neutral Colors */
+            --color-neutral-50: #f8f9fa;
+            --color-neutral-100: #f0f0f0;
+            --color-neutral-200: #e0e0e0;
+            --color-neutral-500: #888;
+            --color-neutral-600: #666;
+            --color-neutral-700: #555;
+            --color-neutral-800: #333;
+            --color-neutral-900: #24292e;
+
+            /* Spacing Scale (8px base) */
+            --spacing-1: 0.25rem;
+            --spacing-2: 0.5rem;
+            --spacing-3: 0.75rem;
+            --spacing-4: 1rem;
+            --spacing-5: 1.25rem;
+            --spacing-6: 1.5rem;
+            --spacing-8: 2rem;
+            --spacing-10: 2.5rem;
+
+            /* Border Radius */
+            --radius-sm: 0.5rem;
+            --radius-md: 0.75rem;
+            --radius-lg: 1rem;
+            --radius-xl: 1.25rem;
+            --radius-full: 9999px;
+
+            /* Shadows */
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, var(--color-primary-500) 0%, var(--color-accent-500) 100%);
             min-height: 100vh;
-            padding: 20px;
-            color: #333;
+            padding: var(--spacing-5);
+            color: var(--color-neutral-800);
         }
         
         .container {
-            max-width: 1400px;
+            max-width: 1600px;
             margin: 0 auto;
         }
         
@@ -361,26 +414,51 @@
             color: #999;
         }
         
+        /* Tablet styles */
+        @media (max-width: 1024px) and (min-width: 769px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        /* Mobile styles */
         @media (max-width: 768px) {
             .header h1 {
                 font-size: 1.8em;
             }
-            
+
             .stats-grid {
                 grid-template-columns: 1fr;
             }
-            
+
             .search-box {
                 min-width: 100%;
+                min-height: 44px;
+                padding: 12px 20px;
             }
-            
+
+            .file-label {
+                min-height: 44px;
+                padding: 14px 24px;
+            }
+
+            .status {
+                min-height: 44px;
+                padding: 10px 16px;
+            }
+
             .table-container {
                 padding: 15px;
             }
-            
+
             table {
                 display: block;
                 overflow-x: auto;
+            }
+
+            thead th {
+                min-height: 44px;
+                padding: 15px 12px;
             }
         }
         
@@ -616,13 +694,16 @@
             }
             
             if (filteredData.length === 0) {
+                const hasSearch = searchTerm.length > 0;
+                const clearButton = hasSearch ? '<button onclick="document.getElementById(\'search-box\').value = \'\'; document.getElementById(\'search-box\').dispatchEvent(new Event(\'input\'));" style="margin-top: 15px; padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 1em;">Clear Search</button>' : '';
                 document.getElementById('table-content').innerHTML = `
                     <div class="empty-state">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                         </svg>
-                        <h3>No Results</h3>
-                        <p>No cache entries match your search</p>
+                        <h3>${hasSearch ? 'No Results Found' : 'No Cache Data'}</h3>
+                        <p>${hasSearch ? 'No cache entries match your search. Try different keywords.' : 'Select cache files to view their contents'}</p>
+                        ${clearButton}
                     </div>
                 `;
                 return;

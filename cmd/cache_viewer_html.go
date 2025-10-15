@@ -7,18 +7,71 @@ const cacheViewerHTML = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PostgreSQL Archiver - Cache Viewer</title>
     <style>
+        :root {
+            /* Brand Colors */
+            --color-primary-500: #667eea;
+            --color-primary-600: #5568d3;
+            --color-accent-500: #764ba2;
+
+            /* Semantic Colors */
+            --color-success-50: #d4edda;
+            --color-success-500: #28a745;
+            --color-success-700: #155724;
+            --color-warning-50: #fff3cd;
+            --color-warning-500: #ffc107;
+            --color-warning-700: #856404;
+            --color-error-50: #f8d7da;
+            --color-error-500: #dc3545;
+            --color-error-700: #721c24;
+            --color-info-50: #cce5ff;
+            --color-info-500: #17a2b8;
+
+            /* Neutral Colors */
+            --color-neutral-50: #f8f9fa;
+            --color-neutral-100: #f0f0f0;
+            --color-neutral-200: #e0e0e0;
+            --color-neutral-500: #888;
+            --color-neutral-600: #666;
+            --color-neutral-700: #555;
+            --color-neutral-800: #333;
+            --color-neutral-900: #24292e;
+
+            /* Spacing Scale (8px base) */
+            --spacing-1: 0.25rem;
+            --spacing-2: 0.5rem;
+            --spacing-3: 0.75rem;
+            --spacing-4: 1rem;
+            --spacing-5: 1.25rem;
+            --spacing-6: 1.5rem;
+            --spacing-8: 2rem;
+            --spacing-10: 2.5rem;
+
+            /* Border Radius */
+            --radius-sm: 0.5rem;
+            --radius-md: 0.75rem;
+            --radius-lg: 1rem;
+            --radius-xl: 1.25rem;
+            --radius-full: 9999px;
+
+            /* Shadows */
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, var(--color-primary-500) 0%, var(--color-accent-500) 100%);
             min-height: 100vh;
-            padding: 20px;
-            color: #333;
+            padding: var(--spacing-5);
+            color: var(--color-neutral-800);
         }
         
         .container {
@@ -510,33 +563,76 @@ const cacheViewerHTML = `<!DOCTYPE html>
             padding: 60px 20px;
             color: #999;
         }
-        
+
         .empty-state h3 {
             font-size: 1.5em;
             margin-bottom: 10px;
             color: #666;
         }
+
+        .clear-search-btn {
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: var(--color-primary-500);
+            color: white;
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-size: 1em;
+            transition: all 0.3s ease;
+        }
+
+        .clear-search-btn:hover {
+            background: var(--color-primary-600);
+            transform: translateY(-2px);
+        }
+
+        .clear-search-btn:focus {
+            outline: 2px solid var(--color-primary-500);
+            outline-offset: 2px;
+        }
         
+        /* Tablet styles */
+        @media (max-width: 1024px) and (min-width: 769px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        /* Mobile styles */
         @media (max-width: 768px) {
             .header h1 {
                 font-size: 1.8em;
             }
-            
+
             .github-link {
                 position: static;
                 margin-top: 15px;
+                min-height: 44px;
             }
-            
+
             .stats-grid {
                 grid-template-columns: 1fr;
             }
-            
+
             .search-box {
                 min-width: 100%;
+                min-height: 44px;
+                padding: 12px 20px;
             }
-            
+
+            .filter-select {
+                min-height: 44px;
+                padding: 12px 40px 12px 20px;
+            }
+
             .table-container {
                 padding: 15px;
+            }
+
+            thead th {
+                min-height: 44px;
+                padding: 15px 12px;
             }
         }
     </style>
@@ -707,16 +803,34 @@ const cacheViewerHTML = `<!DOCTYPE html>
                 console.error('WebSocket error:', error);
             };
             
-            ws.onclose = function() {
-                console.log('WebSocket disconnected');
+            ws.onclose = function(event) {
+                console.log('WebSocket disconnected', event);
                 document.getElementById('status').classList.remove('connected');
                 document.getElementById('status').classList.add('disconnected');
-                document.getElementById('status-text').textContent = 'Disconnected - reconnecting...';
-                
-                // Set up reconnection
+
+                // Provide better error messaging
+                if (event.wasClean) {
+                    document.getElementById('status-text').textContent = 'Connection closed - reconnecting...';
+                } else {
+                    document.getElementById('status-text').textContent = 'Connection lost - attempting to reconnect...';
+                }
+
+                // Set up reconnection with exponential backoff
                 if (!wsReconnectInterval) {
+                    let reconnectAttempts = 0;
                     wsReconnectInterval = setInterval(() => {
-                        console.log('Attempting to reconnect WebSocket...');
+                        reconnectAttempts++;
+                        const maxAttempts = 30;
+
+                        if (reconnectAttempts > maxAttempts) {
+                            clearInterval(wsReconnectInterval);
+                            wsReconnectInterval = null;
+                            document.getElementById('status-text').textContent = 'Connection failed - please refresh the page';
+                            return;
+                        }
+
+                        console.log(` + "`" + `Reconnect attempt ${reconnectAttempts}/${maxAttempts}` + "`" + `);
+                        document.getElementById('status-text').textContent = ` + "`" + `Reconnecting (${reconnectAttempts}/${maxAttempts})...` + "`" + `;
                         connectWebSocket();
                     }, 2000);
                 }
@@ -988,37 +1102,61 @@ const cacheViewerHTML = `<!DOCTYPE html>
         function updateTable() {
             const searchTerm = document.getElementById('search-box').value;
             const tableFilter = document.getElementById('table-filter').value;
-            
+
             let filteredData = allData;
-            
+
             if (tableFilter) {
                 filteredData = filteredData.filter(d => d.table === tableFilter);
             }
-            
+
             if (searchTerm) {
                 const search = searchTerm.toLowerCase();
-                filteredData = filteredData.filter(d => 
+                filteredData = filteredData.filter(d =>
                     d.partition.toLowerCase().includes(search) ||
                     d.table.toLowerCase().includes(search)
                 );
             }
-            
+
             const tbody = document.getElementById('table-body');
+
+            // Handle empty state
+            if (filteredData.length === 0 && (searchTerm || tableFilter)) {
+                tbody.innerHTML = ` + "`" + `
+                    <tr>
+                        <td colspan="9" style="text-align: center; padding: 60px 20px;">
+                            <div class="empty-state">
+                                <h3>No Results Found</h3>
+                                <p>No cache entries match your filters. Try adjusting your search or filter.</p>
+                                <button class="clear-search-btn" id="clear-filters-btn">Clear Filters</button>
+                            </div>
+                        </td>
+                    </tr>
+                ` + "`" + `;
+
+                // Add event listener for clear button
+                document.getElementById('clear-filters-btn')?.addEventListener('click', () => {
+                    document.getElementById('search-box').value = '';
+                    document.getElementById('table-filter').value = '';
+                    updateTable();
+                });
+                return;
+            }
+
             const existingRowsMap = {};
-            
+
             // Build map of existing rows
             tbody.querySelectorAll('tr').forEach(row => {
                 existingRowsMap[row.dataset.key] = row;
             });
-            
+
             // Clear tbody
             tbody.innerHTML = '';
-            
+
             // Add rows in sorted order
             filteredData.forEach(entry => {
                 const key = getRowKey(entry);
                 let row = existingRowsMap[key];
-                
+
                 if (row) {
                     // Update existing row
                     updateRow(row, entry);
@@ -1026,7 +1164,7 @@ const cacheViewerHTML = `<!DOCTYPE html>
                     // Create new row
                     row = createRow(entry);
                 }
-                
+
                 tbody.appendChild(row);
             });
         }
