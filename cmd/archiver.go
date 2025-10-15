@@ -136,6 +136,7 @@ func (a *Archiver) connect() error {
 	}
 
 	if err := db.Ping(); err != nil {
+		db.Close()
 		return err
 	}
 
@@ -148,6 +149,8 @@ func (a *Archiver) connect() error {
 		S3ForcePathStyle: aws.Bool(true),
 	})
 	if err != nil {
+		db.Close()
+		a.db = nil
 		return fmt.Errorf("failed to create S3 session: %w", err)
 	}
 

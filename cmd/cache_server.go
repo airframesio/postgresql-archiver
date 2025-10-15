@@ -28,6 +28,9 @@ var (
 	clients   = make(map[*websocket.Conn]bool)
 	clientsMu sync.RWMutex
 	broadcast = make(chan interface{}, 100)
+
+	// Ensure background goroutines are started only once
+	startOnce sync.Once
 )
 
 var cacheServerCmd = &cobra.Command{
@@ -80,6 +83,14 @@ type WSMessage struct {
 	Data interface{} `json:"data"`
 }
 
+// startBackgroundServices ensures broadcast manager and data monitor are started only once
+func startBackgroundServices() {
+	startOnce.Do(func() {
+		go broadcastManager()
+		go dataMonitor()
+	})
+}
+
 func runCacheServer(cmd *cobra.Command, args []string) error {
 	// Set up HTTP routes
 	http.HandleFunc("/", serveCacheViewer)
@@ -87,9 +98,8 @@ func runCacheServer(cmd *cobra.Command, args []string) error {
 	http.HandleFunc("/api/status", serveStatusData)
 	http.HandleFunc("/ws", handleWebSocket)
 
-	// Start background goroutines
-	go broadcastManager()
-	go dataMonitor()
+	// Start background goroutines (only starts once even if called multiple times)
+	startBackgroundServices()
 
 	addr := fmt.Sprintf(":%d", serverPort)
 	fmt.Printf("\n🚀 PostgreSQL Archiver Cache Viewer\n")
@@ -273,13 +283,25 @@ func broadcastManager() {
 	for {
 		msg := <-broadcast
 		clientsMu.RLock()
+		// Collect failed clients while holding read lock
+		var failedClients []*websocket.Conn
 		for client := range clients {
 			err := client.WriteJSON(msg)
 			if err != nil {
-				client.Close()
+				failedClients = append(failedClients, client)
 			}
 		}
 		clientsMu.RUnlock()
+
+		// Clean up failed clients with write lock
+		if len(failedClients) > 0 {
+			clientsMu.Lock()
+			for _, client := range failedClients {
+				delete(clients, client)
+				client.Close()
+			}
+			clientsMu.Unlock()
+		}
 	}
 }
 

@@ -572,11 +572,10 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Start cache viewer server if enabled
 		if m.config.CacheViewer {
-			go func() {
-				// Start background goroutines for WebSocket
-				go broadcastManager()
-				go dataMonitor()
+			// Start background goroutines (only starts once even if called multiple times)
+			startBackgroundServices()
 
+			go func() {
 				// Create a new mux to avoid conflicts
 				mux := http.NewServeMux()
 				mux.HandleFunc("/", serveCacheViewer)
