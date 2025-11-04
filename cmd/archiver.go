@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"database/sql"
 	"encoding/hex"
@@ -54,7 +55,7 @@ func NewArchiver(config *Config) *Archiver {
 	}
 }
 
-func (a *Archiver) Run() error {
+func (a *Archiver) Run(ctx context.Context) error {
 	// Write PID file
 	if err := WritePIDFile(); err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
@@ -82,7 +83,7 @@ func (a *Archiver) Run() error {
 	resultsChan := make(chan []ProcessResult, 1)
 
 	// Start the UI with the archiver reference
-	progressModel := newProgressModelWithArchiver(a.config, a, errChan, resultsChan, taskInfo)
+	progressModel := newProgressModelWithArchiver(ctx, a.config, a, errChan, resultsChan, taskInfo)
 	program := tea.NewProgram(progressModel)
 
 	// Run the TUI (this will handle everything internally)
@@ -116,7 +117,7 @@ func (a *Archiver) Run() error {
 	return nil
 }
 
-func (a *Archiver) connect() error {
+func (a *Archiver) connect(ctx context.Context) error {
 	sslMode := a.config.Database.SSLMode
 	if sslMode == "" {
 		sslMode = "disable"
@@ -135,7 +136,7 @@ func (a *Archiver) connect() error {
 		return err
 	}
 
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return err
 	}
@@ -160,20 +161,20 @@ func (a *Archiver) connect() error {
 	return nil
 }
 
-func (a *Archiver) checkTablePermissions() error {
+func (a *Archiver) checkTablePermissions(ctx context.Context) error {
 	// Use PostgreSQL's has_table_privilege function which is much faster
 	// This checks SELECT permission without actually running a query
 
 	// Check if we have permission to SELECT from the base table (if it exists)
 	var hasPermission bool
 	checkPermissionQuery := `
-		SELECT has_table_privilege($1, 'SELECT') 
-		FROM pg_tables 
-		WHERE schemaname = 'public' 
+		SELECT has_table_privilege($1, 'SELECT')
+		FROM pg_tables
+		WHERE schemaname = 'public'
 		AND tablename = $2
 	`
 
-	err := a.db.QueryRow(checkPermissionQuery, a.config.Table, a.config.Table).Scan(&hasPermission)
+	err := a.db.QueryRowContext(ctx, checkPermissionQuery, a.config.Table, a.config.Table).Scan(&hasPermission)
 	if err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("failed to check table permissions: %w", err)
 	}
@@ -195,7 +196,7 @@ func (a *Archiver) checkTablePermissions() error {
 	`
 
 	var samplePartition string
-	err = a.db.QueryRow(partitionCheckQuery, pattern).Scan(&samplePartition)
+	err = a.db.QueryRowContext(ctx, partitionCheckQuery, pattern).Scan(&samplePartition)
 	if err != nil && err != sql.ErrNoRows {
 		// Only fail if it's not a "no rows" error
 		return fmt.Errorf("failed to check partition table permissions: %w", err)
@@ -207,12 +208,12 @@ func (a *Archiver) checkTablePermissions() error {
 		var partitionExists bool
 		existsQuery := `
 			SELECT EXISTS (
-				SELECT 1 FROM pg_tables 
-				WHERE schemaname = 'public' 
+				SELECT 1 FROM pg_tables
+				WHERE schemaname = 'public'
 				AND tablename LIKE $1
 			)
 		`
-		_ = a.db.QueryRow(existsQuery, pattern).Scan(&partitionExists)
+		_ = a.db.QueryRowContext(ctx, existsQuery, pattern).Scan(&partitionExists)
 
 		if partitionExists {
 			// Partitions exist but we can't access them

@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -177,8 +180,23 @@ func runArchive() {
 		os.Exit(1)
 	}
 
+	// Create a context that can be cancelled by signals (SIGTERM, SIGINT)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Set up signal handling
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigChan
+		if debug {
+			fmt.Println(debugStyle.Render(fmt.Sprintf("📌 Received signal: %v", sig)))
+		}
+		cancel()
+	}()
+
 	archiver := NewArchiver(config)
-	if err := archiver.Run(); err != nil {
+	if err := archiver.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, warningStyle.Render("❌ Archive failed: "+err.Error()))
 		os.Exit(1)
 	}

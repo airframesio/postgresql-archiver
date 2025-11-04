@@ -45,8 +45,17 @@ jobs:
       run: staticcheck ./...
     
     - name: Run tests
-      run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
-    
+      run: CGO_ENABLED=0 go test -v -coverprofile=coverage.out -covermode=atomic ./...
+
+    - name: Check coverage gates
+      run: |
+        coverage=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | sed 's/%//')
+        echo "Code coverage: ${coverage}%"
+        if (( $(echo "$coverage < 18" | bc -l) )); then
+          echo "::error::Coverage ${coverage}% is below 18% threshold"
+          exit 1
+        fi
+
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -47,6 +48,7 @@ type progressModel struct {
 	errChan         chan<- error
 	resultsChan     chan<- []ProcessResult
 	initialized     bool
+	ctx             context.Context
 	pendingTables   []struct {
 		name string
 		date time.Time
@@ -147,7 +149,7 @@ func (m *progressModel) updateTaskInfo() {
 	}
 }
 
-func newProgressModelWithArchiver(config *Config, archiver *Archiver, errChan chan<- error, resultsChan chan<- []ProcessResult, taskInfo *TaskInfo) progressModel {
+func newProgressModelWithArchiver(ctx context.Context, config *Config, archiver *Archiver, errChan chan<- error, resultsChan chan<- []ProcessResult, taskInfo *TaskInfo) progressModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -184,6 +186,7 @@ func newProgressModelWithArchiver(config *Config, archiver *Archiver, errChan ch
 		errChan:         errChan,
 		resultsChan:     resultsChan,
 		initialized:     false,
+		ctx:             ctx,
 		partitionCache:  cache,
 		taskInfo:        taskInfo,
 	}
@@ -224,7 +227,7 @@ func (m *progressModel) doConnect() tea.Cmd {
 		}
 
 		// Connect to database
-		if err := m.archiver.connect(); err != nil {
+		if err := m.archiver.connect(m.ctx); err != nil {
 			if m.errChan != nil {
 				m.errChan <- err
 			}
@@ -245,7 +248,7 @@ func (m *progressModel) doCheckPermissions() tea.Cmd {
 		}
 
 		// Check table permissions
-		if err := m.archiver.checkTablePermissions(); err != nil {
+		if err := m.archiver.checkTablePermissions(m.ctx); err != nil {
 			if m.errChan != nil {
 				m.errChan <- fmt.Errorf("permission check failed: %w", err)
 			}
