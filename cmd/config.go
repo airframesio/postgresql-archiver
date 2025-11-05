@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const regionAuto = "auto"
+
 type Config struct {
 	Debug       bool
 	DryRun      bool
@@ -54,7 +56,7 @@ func isValidTableName(name string) bool {
 
 // isValidRegion validates that an S3 region is reasonable
 func isValidRegion(region string) bool {
-	// Empty region is not valid (except for "auto" which is handled separately)
+	// Empty region is not valid (except for regionAuto which is handled separately)
 	if region == "" {
 		return false
 	}
@@ -98,7 +100,7 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate S3 region
-	if c.S3.Region != "" && c.S3.Region != "auto" {
+	if c.S3.Region != "" && c.S3.Region != regionAuto {
 		if !isValidRegion(c.S3.Region) {
 			return fmt.Errorf("S3 region contains invalid characters or is too long: %s", c.S3.Region)
 		}

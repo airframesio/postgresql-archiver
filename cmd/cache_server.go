@@ -107,7 +107,13 @@ func runCacheServer(_ *cobra.Command, _ []string) error {
 	fmt.Printf("🌐 Open your browser to view cache data\n")
 	fmt.Printf("⌨️  Press Ctrl+C to stop the server\n\n")
 
-	return http.ListenAndServe(addr, nil)
+	server := &http.Server{
+		Addr:              addr,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+	}
+	return server.ListenAndServe()
 }
 
 func serveCacheViewer(w http.ResponseWriter, _ *http.Request) {

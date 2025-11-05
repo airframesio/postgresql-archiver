@@ -597,7 +597,10 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				addr := fmt.Sprintf(":%d", m.config.ViewerPort)
 				server := &http.Server{
-					Addr:    addr,
+					Addr:              addr,
+				ReadHeaderTimeout: 10 * time.Second,
+				ReadTimeout:       30 * time.Second,
+				WriteTimeout:      30 * time.Second,
 					Handler: mux,
 				}
 

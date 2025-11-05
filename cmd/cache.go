@@ -155,7 +155,7 @@ func (c *PartitionCache) save(tableName string) error {
 		return err
 	}
 
-	return os.WriteFile(cachePath, data, 0o644)
+	return os.WriteFile(cachePath, data, 0o600)
 }
 
 // Backward compatibility wrapper - kept for potential future use

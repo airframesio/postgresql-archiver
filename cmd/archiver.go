@@ -23,6 +23,11 @@ import (
 	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
+// Stage constants
+const (
+	StageSkipped = "Skipped"
+)
+
 type Archiver struct {
 	config       *Config
 	db           *sql.DB
@@ -551,7 +556,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 					// Cached metadata matches S3 - skip without extraction
 					result.Skipped = true
 					result.SkipReason = fmt.Sprintf("Cached metadata matches S3 (size=%d, md5=%s)", cachedSize, cachedMD5)
-					result.Stage = "Skipped"
+					result.Stage = StageSkipped
 					result.BytesWritten = cachedSize
 					if a.config.Debug {
 						fmt.Printf("     ✅ Skipping based on cache: Size and MD5 match\n")
@@ -647,7 +652,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 				// Single-part upload with matching MD5
 				result.Skipped = true
 				result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and MD5 (%s)", s3Size, s3ETag)
-				result.Stage = "Skipped"
+				result.Stage = StageSkipped
 				if a.config.Debug {
 					fmt.Printf("     ✅ Skipping: Size and MD5 match\n")
 				}
@@ -664,7 +669,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 				if s3ETag == localMultipartETag {
 					result.Skipped = true
 					result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and multipart ETag (%s)", s3Size, s3ETag)
-					result.Stage = "Skipped"
+					result.Stage = StageSkipped
 					if a.config.Debug {
 						fmt.Printf("     ✅ Skipping: Size and multipart ETag match\n")
 					}

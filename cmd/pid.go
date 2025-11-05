@@ -48,7 +48,7 @@ func WritePIDFile() error {
 	}
 
 	pid := os.Getpid()
-	return os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o644)
+	return os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o600)
 }
 
 // RemovePIDFile removes the PID file
@@ -107,7 +107,7 @@ func WriteTaskInfo(info *TaskInfo) error {
 		return fmt.Errorf("failed to marshal task info: %w", err)
 	}
 
-	return os.WriteFile(taskPath, data, 0o644)
+	return os.WriteFile(taskPath, data, 0o600)
 }
 
 // ReadTaskInfo reads current task information from file
