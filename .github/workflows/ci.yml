@@ -78,7 +78,18 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21'
+        go-version: '1.23'
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    
+    - name: Install minification dependencies
+      run: npm install
+    
+    - name: Minify web assets
+      run: ./scripts/minify.sh
     
     - name: Build for multiple platforms
       run: |
@@ -113,7 +124,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21'
+        go-version: '1.23'
     
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v6

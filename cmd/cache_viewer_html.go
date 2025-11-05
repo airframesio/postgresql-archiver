@@ -5,27 +5,27 @@ import (
 	"strings"
 )
 
-// Embed the web assets
+// Embed the web assets (minified for production)
 //
-//go:embed web/viewer.html web/styles.css web/script.js
+//go:embed web/viewer.min.html web/styles.min.css web/script.min.js
 var webAssets embed.FS
 
 // Generate HTML with embedded assets
 func generateCacheViewerHTML() string {
-	// Read the HTML file
-	htmlContent, err := webAssets.ReadFile("web/viewer.html")
+	// Read the minified HTML file
+	htmlContent, err := webAssets.ReadFile("web/viewer.min.html")
 	if err != nil {
 		return fallbackHTML()
 	}
 
-	// Read the CSS file
-	cssContent, err := webAssets.ReadFile("web/styles.css")
+	// Read the minified CSS file
+	cssContent, err := webAssets.ReadFile("web/styles.min.css")
 	if err != nil {
 		return fallbackHTML()
 	}
 
-	// Read the JavaScript file
-	jsContent, err := webAssets.ReadFile("web/script.js")
+	// Read the minified JavaScript file
+	jsContent, err := webAssets.ReadFile("web/script.min.js")
 	if err != nil {
 		return fallbackHTML()
 	}
@@ -35,13 +35,13 @@ func generateCacheViewerHTML() string {
 	css := string(cssContent)
 	js := string(jsContent)
 
-	// Replace the stylesheet link with inline CSS
-	html = strings.Replace(html, `    <link rel="stylesheet" href="styles.css">`,
-		`    <style>`+"\n"+css+"\n"+`    </style>`, 1)
+	// Replace the stylesheet link with inline CSS (minified HTML has no spaces/indentation)
+	html = strings.Replace(html, `<link rel="stylesheet"href="styles.css">`,
+		`<style>`+css+`</style>`, 1)
 
-	// Replace the script src with inline script
-	html = strings.Replace(html, `    <script src="script.js"></script>`,
-		`    <script>`+"\n"+js+"\n"+`    </script>`, 1)
+	// Replace the script src with inline script (minified HTML has no spaces/indentation)
+	html = strings.Replace(html, `<script src="script.js">`,
+		`<script>`+js, 1)
 
 	return html
 }

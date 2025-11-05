@@ -1,0 +1,22 @@
+{
+  "name": "postgresql-archiver",
+  "version": "1.0.0",
+  "description": "[![CI](https://github.com/airframesio/postgresql-archiver/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/airframesio/postgresql-archiver/actions/workflows/ci.yml) [![Go Report Card](https://goreportcard.com/badge/github.com/airframesio/postgresql-archiver)](https://goreportcard.com/report/github.com/airframesio/postgresql-archiver) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Go Version](https://img.shields.io/github/go-mod/go-version/airframesio/postgresql-archiver)](go.mod)",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "minify": "./scripts/minify.sh",
+    "build": "npm run minify && go build",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "csso-cli": "^4.0.2",
+    "html-minifier-terser": "^7.2.0",
+    "terser": "^5.44.0"
+  }
+}

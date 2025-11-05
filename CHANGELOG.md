@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Web Asset Minification:**
+  - Automated minification of CSS, JavaScript, and HTML files
+  - 38% size reduction (98,389 bytes → 60,995 bytes)
+  - Integrated build script (`scripts/minify.sh`) using industry-standard tools
+  - CI/CD integration to automatically minify assets before building binaries
+  - npm scripts for convenient minification (`npm run minify`)
+  - Tools: csso-cli (CSS), terser (JavaScript), html-minifier-terser (HTML)
 - **Complete UI/UX Overhaul:**
   - Comprehensive accessibility improvements achieving WCAG 2.1 AA compliance
   - Universal focus indicators (2px outline, 3px for buttons with box-shadow)
