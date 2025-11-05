@@ -120,7 +120,7 @@ thead th[tabindex]:focus-visible {
     top: -100px;
     left: 0;
     background: var(--color-primary-500);
-    color: white;
+    color: var(--color-neutral-700);
     padding: var(--spacing-4) var(--spacing-6);
     text-decoration: none;
     font-weight: var(--font-weight-semibold);
@@ -131,7 +131,7 @@ thead th[tabindex]:focus-visible {
 
 .skip-link:focus {
     top: 0;
-    outline: 3px solid white;
+    outline: 3px solid var(--color-neutral-700);
     outline-offset: 2px;
 }
 
@@ -694,7 +694,7 @@ td.updated {
     margin-top: 15px;
     padding: 10px 20px;
     background: var(--color-primary-500);
-    color: white;
+    color: var(--color-neutral-700);
     border: none;
     border-radius: var(--radius-sm);
     cursor: pointer;
