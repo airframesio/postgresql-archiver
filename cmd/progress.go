@@ -508,7 +508,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentStage = msg.message
 
 		// Handle phase transitions
-		switch msg.phase {
+		switch msg.phase { //nolint:exhaustive // PhaseComplete is terminal
 		case PhaseConnecting:
 			// Start the connection process
 			return m, m.doConnect()
@@ -865,7 +865,7 @@ func (m progressModel) View() string {
 	sections = append(sections, "")
 
 	// Phase-specific content
-	switch m.phase {
+	switch m.phase { //nolint:exhaustive // PhaseComplete is terminal
 	case PhaseConnecting, PhaseCheckingPermissions, PhaseDiscovering:
 		// Show current operation with spinner
 		if m.currentStage != "" {

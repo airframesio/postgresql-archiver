@@ -3,7 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // MD5 used for checksums, not cryptography
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -726,7 +726,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 func (a *Archiver) extractDataWithProgress(partition PartitionInfo, program *tea.Program) ([]byte, error) {
 	// Use pq.QuoteIdentifier to safely quote the table name
 	quotedTable := pq.QuoteIdentifier(partition.TableName)
-	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable)
+	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable) //nolint:gosec // Table name is quoted with pq.QuoteIdentifier
 
 	rows, err := a.db.Query(query)
 	if err != nil {
