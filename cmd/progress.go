@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/lib/pq"
 )
 
 type Phase int
@@ -397,7 +399,7 @@ func (m *progressModel) countNextTable() tea.Cmd {
 
 		// If not in cache or expired, count from database
 		if !fromCache {
-			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", table.name)
+			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", pq.QuoteIdentifier(table.name))
 			if err := m.archiver.db.QueryRow(countQuery).Scan(&count); err == nil {
 				// Save to cache (preserving existing metadata)
 				if m.partitionCache != nil {
@@ -605,7 +607,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				// Start the server
-				if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					// Log error but don't crash the archiver
 					fmt.Printf("Cache viewer server error: %v\n", err)
 				}

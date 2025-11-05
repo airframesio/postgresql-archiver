@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -20,7 +21,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/klauspost/compress/zstd"
-	_ "github.com/lib/pq" // PostgreSQL driver
+	"github.com/lib/pq"
 )
 
 // Stage constants
@@ -180,12 +181,12 @@ func (a *Archiver) checkTablePermissions(ctx context.Context) error {
 	`
 
 	err := a.db.QueryRowContext(ctx, checkPermissionQuery, a.config.Table, a.config.Table).Scan(&hasPermission)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("failed to check table permissions: %w", err)
 	}
 
 	// If the base table exists and we don't have permission, fail
-	if err != sql.ErrNoRows && !hasPermission {
+	if !errors.Is(err, sql.ErrNoRows) && !hasPermission {
 		return fmt.Errorf("insufficient permissions to read table '%s'", a.config.Table)
 	}
 
@@ -202,13 +203,13 @@ func (a *Archiver) checkTablePermissions(ctx context.Context) error {
 
 	var samplePartition string
 	err = a.db.QueryRowContext(ctx, partitionCheckQuery, pattern).Scan(&samplePartition)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		// Only fail if it's not a "no rows" error
 		return fmt.Errorf("failed to check partition table permissions: %w", err)
 	}
 
 	// Check if we found any partitions at all (with or without permissions)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// Let's see if partitions exist but we can't access them
 		var partitionExists bool
 		existsQuery := `
@@ -316,7 +317,7 @@ func (a *Archiver) discoverPartitionsWithUI(program *tea.Program) ([]PartitionIn
 			// Update count progress
 			program.Send(updateCount(i+1, len(matchingTables), table.name))
 
-			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", table.name)
+			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", pq.QuoteIdentifier(table.name))
 			var count int64
 			if err := a.db.QueryRow(countQuery).Scan(&count); err == nil {
 				partitions = append(partitions, PartitionInfo{
@@ -425,7 +426,7 @@ func (a *Archiver) discoverPartitions() ([]PartitionInfo, error) {
 				len(matchingTables),
 				table.name)
 
-			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", table.name)
+			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", pq.QuoteIdentifier(table.name))
 			var count int64
 			if err := a.db.QueryRow(countQuery).Scan(&count); err == nil {
 				partitions = append(partitions, PartitionInfo{
@@ -723,7 +724,9 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 }
 
 func (a *Archiver) extractDataWithProgress(partition PartitionInfo, program *tea.Program) ([]byte, error) {
-	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", partition.TableName)
+	// Use pq.QuoteIdentifier to safely quote the table name
+	quotedTable := pq.QuoteIdentifier(partition.TableName)
+	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable)
 
 	rows, err := a.db.Query(query)
 	if err != nil {
