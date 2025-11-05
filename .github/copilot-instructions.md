@@ -17,7 +17,7 @@ This is a high-performance CLI tool written in Go for archiving PostgreSQL parti
 - **Viper**: Configuration management
 - **zstd (klauspost/compress)**: High-performance compression
 - **lib/pq**: PostgreSQL driver
-- **WebSocket (gorilla/websocket)**: Real-time cache viewer updates
+- **WebSocket (github.com/gorilla/websocket)**: Real-time cache viewer updates
 
 ## Code Structure
 
