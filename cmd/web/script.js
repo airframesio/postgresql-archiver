@@ -15,6 +15,19 @@ function escapeHTML(str) {
     return div.innerHTML;
 }
 
+// Escape HTML attributes to prevent XSS in attribute context
+function escapeHTMLAttr(str) {
+    if (str === null || str === undefined) {
+        return '';
+    }
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/'/g, '&#39;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
 // Screen reader announcement helper (WCAG 2.1 AA compliant)
 function announceToScreenReader(message) {
     let announcementRegion = document.getElementById('sr-announcements');
@@ -255,8 +268,18 @@ function updateTaskPanel(status) {
             const statusElement = document.getElementById('task-status-text');
 
             if (task.current_partition) {
-                // Show as "Table: partition - operation"
-                statusElement.innerHTML = 'Table: <a href="#" class="partition-link" data-partition="' + escapeHTML(task.current_partition) + '">' + escapeHTML(task.current_partition) + '</a> - ' + escapeHTML(currentTaskText);
+                // Show as "Table: partition - operation" using safe DOM manipulation
+                statusElement.textContent = ''; // Clear existing content
+                statusElement.appendChild(document.createTextNode('Table: '));
+                
+                const link = document.createElement('a');
+                link.href = '#';
+                link.className = 'partition-link';
+                link.setAttribute('data-partition', task.current_partition);
+                link.textContent = task.current_partition;
+                statusElement.appendChild(link);
+                
+                statusElement.appendChild(document.createTextNode(' - ' + currentTaskText));
             } else {
                 statusElement.textContent = currentTaskText;
             }
@@ -267,8 +290,18 @@ function updateTaskPanel(status) {
             const statusElement = document.getElementById('task-status-text');
 
             if (task.current_partition) {
-                // Show as "Table: partition - operation"
-                statusElement.innerHTML = 'Table: <a href="#" class="partition-link" data-partition="' + escapeHTML(task.current_partition) + '">' + escapeHTML(task.current_partition) + '</a> - ' + escapeHTML(currentTaskText);
+                // Show as "Table: partition - operation" using safe DOM manipulation
+                statusElement.textContent = ''; // Clear existing content
+                statusElement.appendChild(document.createTextNode('Table: '));
+                
+                const link = document.createElement('a');
+                link.href = '#';
+                link.className = 'partition-link';
+                link.setAttribute('data-partition', task.current_partition);
+                link.textContent = task.current_partition;
+                statusElement.appendChild(link);
+                
+                statusElement.appendChild(document.createTextNode(' - ' + currentTaskText));
             } else {
                 statusElement.textContent = currentTaskText;
             }
@@ -613,10 +646,10 @@ function updateRow(row, entry) {
         '<td class="size">' + formatBytes(entry.uncompressedSize) + '</td>' +
         '<td class="size">' + formatBytes(entry.fileSize) + '</td>' +
         '<td class="ratio">' + ratio + '</td>' +
-        '<td class="hash">' + (entry.fileMD5 ? '<span title="' + escapeHTML(entry.fileMD5) + '">' + escapeHTML(entry.fileMD5.substring(0, 12)) + '...</span>' : '—') + '</td>' +
+        '<td class="hash">' + (entry.fileMD5 ? '<span title="' + escapeHTMLAttr(entry.fileMD5) + '">' + escapeHTML(entry.fileMD5.substring(0, 12)) + '...</span>' : '—') + '</td>' +
         '<td><span class="age ' + age.class + '">' + age.text + '</span></td>' +
         '<td>' + statusBadge + '</td>' +
-        '<td>' + (hasError ? '<div class="error-text" title="' + escapeHTML(entry.lastError) + '">' + escapeHTML(entry.lastError) + '</div>' : '—') + '</td>';
+        '<td>' + (hasError ? '<div class="error-text" title="' + escapeHTMLAttr(entry.lastError) + '">' + escapeHTML(entry.lastError) + '</div>' : '—') + '</td>';
 
     // Check for changes and animate updated cells
     const newValues = {
