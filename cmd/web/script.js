@@ -393,7 +393,7 @@ function updateStats() {
     const totalUncompressed = allData.reduce((sum, d) => sum + (d.uncompressedSize || 0), 0);
     const totalRows = allData.reduce((sum, d) => sum + (d.rowCount || 0), 0);
 
-    const avgRatio = totalUncompressed > 0 ? (totalUncompressed / totalCompressed).toFixed(1) : '—';
+    const avgRatio = calculateRatio(totalUncompressed, totalCompressed);
 
     // Store old values
     const statsGrid = document.getElementById('stats-grid');
@@ -416,7 +416,7 @@ function updateStats() {
         '</div>' +
         '<div class="stat-card">' +
         '<div class="label">Compression</div>' +
-        '<div class="value">' + avgRatio + 'x</div>' +
+        '<div class="value">' + avgRatio + '</div>' +
         '<div class="detail">Average ratio</div>' +
         '</div>' +
         '<div class="stat-card">' +
@@ -429,7 +429,7 @@ function updateStats() {
     const newValues = {
         partitions: totalPartitions.toLocaleString(),
         size: formatBytes(totalCompressed),
-        ratio: avgRatio + 'x',
+        ratio: avgRatio,
         rows: totalRows.toLocaleString()
     };
 
