@@ -20,6 +20,10 @@ if ! go fmt ./...; then
     echo "Run 'go fmt ./...' to fix formatting"
     exit 1
 fi
+if ! git diff --quiet; then
+    echo -e "${RED}✗ Formatting changes applied. Please review and re-stage before committing.${NC}"
+    exit 1
+fi
 echo -e "${GREEN}✓ Code formatting OK${NC}"
 
 # 2. Run go vet
