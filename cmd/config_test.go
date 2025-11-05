@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -310,6 +311,352 @@ func TestConfigValidation(t *testing.T) {
 		}
 		if config.ViewerPort != 8080 {
 			t.Fatalf("expected viewer port 8080, got %d", config.ViewerPort)
+		}
+	})
+
+	t.Run("InvalidDatabasePort", func(t *testing.T) {
+		testCases := []struct {
+			name string
+			port int
+		}{
+			{"zero port", 0},
+			{"negative port", -1},
+			{"port too large", 65536},
+			{"very large port", 100000},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				config := &Config{
+					Database: DatabaseConfig{
+						Host:     "localhost",
+						Port:     tc.port,
+						User:     "testuser",
+						Password: "testpass",
+						Name:     "testdb",
+					},
+					S3: S3Config{
+						Endpoint:  "https://s3.example.com",
+						Bucket:    "test-bucket",
+						AccessKey: "access123",
+						SecretKey: "secret456",
+						Region:    "us-east-1",
+					},
+					Table:   "test_table",
+					Workers: 4,
+				}
+
+				err := config.Validate()
+				if err == nil {
+					t.Fatalf("should return error for invalid port %d", tc.port)
+				}
+			})
+		}
+	})
+
+	t.Run("InvalidS3Region", func(t *testing.T) {
+		testCases := []struct {
+			name   string
+			region string
+		}{
+			{"region with spaces", "us east 1"},
+			{"region with special chars", "us-east-1!"},
+			{"region too long", "this-is-a-very-long-region-name-that-exceeds-the-maximum-allowed-length"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				config := &Config{
+					Database: DatabaseConfig{
+						Host:     "localhost",
+						Port:     5432,
+						User:     "testuser",
+						Password: "testpass",
+						Name:     "testdb",
+					},
+					S3: S3Config{
+						Endpoint:  "https://s3.example.com",
+						Bucket:    "test-bucket",
+						AccessKey: "access123",
+						SecretKey: "secret456",
+						Region:    tc.region,
+					},
+					Table:   "test_table",
+					Workers: 4,
+				}
+
+				err := config.Validate()
+				if err == nil {
+					t.Fatalf("should return error for invalid region '%s'", tc.region)
+				}
+			})
+		}
+	})
+
+	t.Run("ValidS3Regions", func(t *testing.T) {
+		testCases := []string{
+			"auto",
+			"us-east-1",
+			"us-west-2",
+			"eu-central-1",
+			"ap-southeast-1",
+		}
+
+		for _, region := range testCases {
+			t.Run(region, func(t *testing.T) {
+				config := &Config{
+					Database: DatabaseConfig{
+						Host:     "localhost",
+						Port:     5432,
+						User:     "testuser",
+						Password: "testpass",
+						Name:     "testdb",
+					},
+					S3: S3Config{
+						Endpoint:  "https://s3.example.com",
+						Bucket:    "test-bucket",
+						AccessKey: "access123",
+						SecretKey: "secret456",
+						Region:    region,
+					},
+					Table:   "test_table",
+					Workers: 4,
+				}
+
+				err := config.Validate()
+				if err != nil {
+					t.Fatalf("valid region '%s' should not return error: %v", region, err)
+				}
+			})
+		}
+	})
+
+	t.Run("InvalidTableNames", func(t *testing.T) {
+		testCases := []struct {
+			name      string
+			tableName string
+		}{
+			{"starts with number", "1table"},
+			{"contains special chars", "table-name"},
+			{"contains spaces", "table name"},
+			{"SQL injection attempt", "table'; DROP TABLE users--"},
+			{"too long", "this_is_a_very_long_table_name_that_exceeds_the_maximum_allowed_length_of_63_characters"},
+			{"contains quotes", "table'name"},
+			{"contains semicolon", "table;name"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				config := &Config{
+					Database: DatabaseConfig{
+						Host:     "localhost",
+						Port:     5432,
+						User:     "testuser",
+						Password: "testpass",
+						Name:     "testdb",
+					},
+					S3: S3Config{
+						Endpoint:  "https://s3.example.com",
+						Bucket:    "test-bucket",
+						AccessKey: "access123",
+						SecretKey: "secret456",
+						Region:    "us-east-1",
+					},
+					Table:   tc.tableName,
+					Workers: 4,
+				}
+
+				err := config.Validate()
+				if err == nil {
+					t.Fatalf("should return error for invalid table name '%s'", tc.tableName)
+				}
+			})
+		}
+	})
+
+	t.Run("ValidTableNames", func(t *testing.T) {
+		testCases := []string{
+			"test_table",
+			"_private_table",
+			"TableName",
+			"table123",
+			"a",
+			"_",
+		}
+
+		for _, tableName := range testCases {
+			t.Run(tableName, func(t *testing.T) {
+				config := &Config{
+					Database: DatabaseConfig{
+						Host:     "localhost",
+						Port:     5432,
+						User:     "testuser",
+						Password: "testpass",
+						Name:     "testdb",
+					},
+					S3: S3Config{
+						Endpoint:  "https://s3.example.com",
+						Bucket:    "test-bucket",
+						AccessKey: "access123",
+						SecretKey: "secret456",
+						Region:    "us-east-1",
+					},
+					Table:   tableName,
+					Workers: 4,
+				}
+
+				err := config.Validate()
+				if err != nil {
+					t.Fatalf("valid table name '%s' should not return error: %v", tableName, err)
+				}
+			})
+		}
+	})
+
+	t.Run("InvalidWorkersCount", func(t *testing.T) {
+		testCases := []struct {
+			name    string
+			workers int
+		}{
+			{"zero workers", 0},
+			{"negative workers", -1},
+			{"too many workers", 1001},
+			{"excessive workers", 10000},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				config := &Config{
+					Database: DatabaseConfig{
+						Host:     "localhost",
+						Port:     5432,
+						User:     "testuser",
+						Password: "testpass",
+						Name:     "testdb",
+					},
+					S3: S3Config{
+						Endpoint:  "https://s3.example.com",
+						Bucket:    "test-bucket",
+						AccessKey: "access123",
+						SecretKey: "secret456",
+						Region:    "us-east-1",
+					},
+					Table:   "test_table",
+					Workers: tc.workers,
+				}
+
+				err := config.Validate()
+				if err == nil {
+					t.Fatalf("should return error for invalid workers count %d", tc.workers)
+				}
+			})
+		}
+	})
+
+	t.Run("ValidWorkersCount", func(t *testing.T) {
+		testCases := []int{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000}
+
+		for _, workers := range testCases {
+			t.Run(fmt.Sprintf("%d workers", workers), func(t *testing.T) {
+				config := &Config{
+					Database: DatabaseConfig{
+						Host:     "localhost",
+						Port:     5432,
+						User:     "testuser",
+						Password: "testpass",
+						Name:     "testdb",
+					},
+					S3: S3Config{
+						Endpoint:  "https://s3.example.com",
+						Bucket:    "test-bucket",
+						AccessKey: "access123",
+						SecretKey: "secret456",
+						Region:    "us-east-1",
+					},
+					Table:   "test_table",
+					Workers: workers,
+				}
+
+				err := config.Validate()
+				if err != nil {
+					t.Fatalf("valid workers count %d should not return error: %v", workers, err)
+				}
+			})
+		}
+	})
+}
+
+func TestTableNameValidation(t *testing.T) {
+	t.Run("ValidTableNames", func(t *testing.T) {
+		validNames := []string{
+			"test_table",
+			"_underscore_prefix",
+			"CamelCase",
+			"table123",
+			"a",
+			"_",
+			"table_with_multiple_underscores",
+		}
+
+		for _, name := range validNames {
+			if !isValidTableName(name) {
+				t.Errorf("table name '%s' should be valid", name)
+			}
+		}
+	})
+
+	t.Run("InvalidTableNames", func(t *testing.T) {
+		invalidNames := []string{
+			"",
+			"123table",
+			"table-name",
+			"table name",
+			"table;drop",
+			"table'name",
+			"table\"name",
+			"table.name",
+			string(make([]byte, 64)), // 64 characters - too long
+		}
+
+		for _, name := range invalidNames {
+			if isValidTableName(name) {
+				t.Errorf("table name '%s' should be invalid", name)
+			}
+		}
+	})
+}
+
+func TestRegionValidation(t *testing.T) {
+	t.Run("ValidRegions", func(t *testing.T) {
+		validRegions := []string{
+			"us-east-1",
+			"us-west-2",
+			"eu-central-1",
+			"ap-southeast-1",
+			"custom_region",
+			"region-123",
+		}
+
+		for _, region := range validRegions {
+			if !isValidRegion(region) {
+				t.Errorf("region '%s' should be valid", region)
+			}
+		}
+	})
+
+	t.Run("InvalidRegions", func(t *testing.T) {
+		invalidRegions := []string{
+			"",
+			"us east 1",
+			"us-east-1!",
+			"region@test",
+			string(make([]byte, 51)), // 51 characters - too long
+		}
+
+		for _, region := range invalidRegions {
+			if isValidRegion(region) {
+				t.Errorf("region '%s' should be invalid", region)
+			}
 		}
 	})
 }
