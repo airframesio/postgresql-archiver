@@ -2,6 +2,7 @@
     /* Brand Colors */
     --color-primary-500: #667eea;
     --color-primary-600: #5568d3;
+    --color-primary-700: #4c5dd1;  /* Darker variant for white text (4.5:1 WCAG AA) */
     --color-accent-500: #764ba2;
 
     /* Semantic Colors */
