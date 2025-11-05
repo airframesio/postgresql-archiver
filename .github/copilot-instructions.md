@@ -241,13 +241,13 @@ archiver := &Archiver{
 
 ## Contributing Workflow
 
-1. Create a feature branch from `main` or `develop`
+1. Create a feature branch from `main`
 2. Make changes following these guidelines
 3. Write/update tests for your changes
 4. Run the full test suite locally
 5. Run linters and fix any issues
 6. Build for multiple platforms to ensure compatibility
-7. Submit a PR to `main` or `develop`
+7. Submit a PR to `main`
 8. Ensure CI passes before requesting review
 
 ## Additional Notes
