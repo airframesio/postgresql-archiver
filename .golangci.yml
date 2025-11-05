@@ -16,7 +16,7 @@ run:
 linters:
   # Enable recommended linters
   enable:
-    - asasadors        # Check for pass []any as any in variadic func(...)
+    - asasalint        # Check for pass []any as any in variadic func(...)
     - asciicheck       # Check for non-ASCII identifiers
     - bidichk          # Check for dangerous Unicode character sequences
     - bodyclose        # Check whether HTTP response body is closed
