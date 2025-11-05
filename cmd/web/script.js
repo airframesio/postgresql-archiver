@@ -5,6 +5,16 @@ let ws = null;
 let wsReconnectInterval = null;
 let lastTaskState = null;  // Store last known task state to avoid flashing
 
+// HTML escape function to prevent XSS attacks
+function escapeHTML(str) {
+    if (str === null || str === undefined) {
+        return '';
+    }
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 // Screen reader announcement helper (WCAG 2.1 AA compliant)
 function announceToScreenReader(message) {
     let announcementRegion = document.getElementById('sr-announcements');
@@ -47,8 +57,8 @@ function showAlert(type, title, description = '', duration = 5000) {
     alert.innerHTML = `
         <div class="alert-icon">${iconSvg[type]}</div>
         <div class="alert-content">
-            <div class="alert-title">${title}</div>
-            ${description ? `<div class="alert-description">${description}</div>` : ''}
+            <div class="alert-title">${escapeHTML(title)}</div>
+            ${description ? `<div class="alert-description">${escapeHTML(description)}</div>` : ''}
         </div>
         <button class="alert-close" aria-label="Close alert">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -246,7 +256,7 @@ function updateTaskPanel(status) {
 
             if (task.current_partition) {
                 // Show as "Table: partition - operation"
-                statusElement.innerHTML = 'Table: <a href="#" class="partition-link" data-partition="' + task.current_partition + '">' + task.current_partition + '</a> - ' + currentTaskText;
+                statusElement.innerHTML = 'Table: <a href="#" class="partition-link" data-partition="' + escapeHTML(task.current_partition) + '">' + escapeHTML(task.current_partition) + '</a> - ' + escapeHTML(currentTaskText);
             } else {
                 statusElement.textContent = currentTaskText;
             }
@@ -258,7 +268,7 @@ function updateTaskPanel(status) {
 
             if (task.current_partition) {
                 // Show as "Table: partition - operation"
-                statusElement.innerHTML = 'Table: <a href="#" class="partition-link" data-partition="' + task.current_partition + '">' + task.current_partition + '</a> - ' + currentTaskText;
+                statusElement.innerHTML = 'Table: <a href="#" class="partition-link" data-partition="' + escapeHTML(task.current_partition) + '">' + escapeHTML(task.current_partition) + '</a> - ' + escapeHTML(currentTaskText);
             } else {
                 statusElement.textContent = currentTaskText;
             }
@@ -596,17 +606,17 @@ function updateRow(row, entry) {
     };
 
     row.innerHTML = '<td>' +
-        '<div class="partition-name">' + entry.partition + '</div>' +
-        '<div class="table-name">' + entry.table + '</div>' +
+        '<div class="partition-name">' + escapeHTML(entry.partition) + '</div>' +
+        '<div class="table-name">' + escapeHTML(entry.table) + '</div>' +
         '</td>' +
         '<td class="size">' + (entry.rowCount ? entry.rowCount.toLocaleString() : '—') + '</td>' +
         '<td class="size">' + formatBytes(entry.uncompressedSize) + '</td>' +
         '<td class="size">' + formatBytes(entry.fileSize) + '</td>' +
         '<td class="ratio">' + ratio + '</td>' +
-        '<td class="hash">' + (entry.fileMD5 ? '<span title="' + entry.fileMD5 + '">' + entry.fileMD5.substring(0, 12) + '...</span>' : '—') + '</td>' +
+        '<td class="hash">' + (entry.fileMD5 ? '<span title="' + escapeHTML(entry.fileMD5) + '">' + escapeHTML(entry.fileMD5.substring(0, 12)) + '...</span>' : '—') + '</td>' +
         '<td><span class="age ' + age.class + '">' + age.text + '</span></td>' +
         '<td>' + statusBadge + '</td>' +
-        '<td>' + (hasError ? '<div class="error-text" title="' + entry.lastError + '">' + entry.lastError + '</div>' : '—') + '</td>';
+        '<td>' + (hasError ? '<div class="error-text" title="' + escapeHTML(entry.lastError) + '">' + escapeHTML(entry.lastError) + '</div>' : '—') + '</td>';
 
     // Check for changes and animate updated cells
     const newValues = {
