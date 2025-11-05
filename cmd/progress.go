@@ -329,6 +329,11 @@ func (m *progressModel) doDiscover() tea.Cmd {
 			}{name: tableName, date: date})
 		}
 
+		// Check for errors from iterating over rows
+		if err := rows.Err(); err != nil {
+			return messageMsg(fmt.Sprintf("❌ Failed to scan partitions: %v", err))
+		}
+
 		// Return the discovered tables
 		if len(matchingTables) == 0 {
 			return messageMsg("⚠️ No matching partitions found")
@@ -485,10 +490,14 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case progress.FrameMsg:
 		progressModel, cmd := m.currentProgress.Update(msg)
-		m.currentProgress = progressModel.(progress.Model)
+		if pm, ok := progressModel.(progress.Model); ok {
+			m.currentProgress = pm
+		}
 
 		overallModel, cmd2 := m.overallProgress.Update(msg)
-		m.overallProgress = overallModel.(progress.Model)
+		if om, ok := overallModel.(progress.Model); ok {
+			m.overallProgress = om
+		}
 
 		return m, tea.Batch(cmd, cmd2)
 
@@ -630,19 +639,19 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				return partitionsFoundMsg{partitions: partitions}
 			}
-		} else {
-			// Start counting phase
-			m.countTotal = len(msg.tables)
-			m.countProgress = 0
-			m.pendingTables = msg.tables
-			m.countedPartitions = make([]PartitionInfo, 0, len(msg.tables))
-			m.currentCountIndex = 0
+		}
 
-			return m, func() tea.Msg {
-				return phaseMsg{
-					phase:   PhaseCounting,
-					message: fmt.Sprintf("Counting rows in %d partitions...", len(msg.tables)),
-				}
+		// Start counting phase
+		m.countTotal = len(msg.tables)
+		m.countProgress = 0
+		m.pendingTables = msg.tables
+		m.countedPartitions = make([]PartitionInfo, 0, len(msg.tables))
+		m.currentCountIndex = 0
+
+		return m, func() tea.Msg {
+			return phaseMsg{
+				phase:   PhaseCounting,
+				message: fmt.Sprintf("Counting rows in %d partitions...", len(msg.tables)),
 			}
 		}
 

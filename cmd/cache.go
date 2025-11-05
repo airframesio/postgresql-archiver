@@ -47,7 +47,7 @@ type RowCountEntry struct {
 func getCachePath(tableName string) string {
 	homeDir, _ := os.UserHomeDir()
 	cacheDir := filepath.Join(homeDir, ".postgresql-archiver", "cache")
-	_ = os.MkdirAll(cacheDir, 0755)
+	_ = os.MkdirAll(cacheDir, 0o755)
 	return filepath.Join(cacheDir, fmt.Sprintf("%s_metadata.json", tableName))
 }
 
@@ -155,7 +155,7 @@ func (c *PartitionCache) save(tableName string) error {
 		return err
 	}
 
-	return os.WriteFile(cachePath, data, 0644)
+	return os.WriteFile(cachePath, data, 0o644)
 }
 
 // Backward compatibility wrapper - kept for potential future use

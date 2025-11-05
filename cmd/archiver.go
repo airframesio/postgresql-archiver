@@ -20,7 +20,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/klauspost/compress/zstd"
-	_ "github.com/lib/pq"
+	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
 type Archiver struct {
@@ -620,7 +620,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 	}
 
 	// Calculate MD5 hash of compressed data
-	hasher := md5.New()
+	hasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
 	hasher.Write(compressed)
 	localMD5 := hex.EncodeToString(hasher.Sum(nil))
 	localSize := int64(len(compressed))
@@ -763,6 +763,11 @@ func (a *Archiver) extractDataWithProgress(partition PartitionInfo, program *tea
 		}
 	}
 
+	// Check for errors from iterating over rows
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	// Final update
 	if program != nil {
 		if partition.RowCount > 0 {
@@ -848,7 +853,7 @@ func (a *Archiver) calculateMultipartETag(data []byte) string {
 
 	// If it would be a single part, just return regular MD5
 	if numParts == 1 {
-		hasher := md5.New()
+		hasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
 		hasher.Write(data)
 		return hex.EncodeToString(hasher.Sum(nil))
 	}
@@ -862,13 +867,13 @@ func (a *Archiver) calculateMultipartETag(data []byte) string {
 			end = len(data)
 		}
 
-		partHasher := md5.New()
+		partHasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
 		partHasher.Write(data[start:end])
 		partMD5s = append(partMD5s, partHasher.Sum(nil)...)
 	}
 
 	// Calculate MD5 of concatenated MD5s
-	finalHasher := md5.New()
+	finalHasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
 	finalHasher.Write(partMD5s)
 	finalMD5 := hex.EncodeToString(finalHasher.Sum(nil))
 
@@ -894,18 +899,18 @@ func (a *Archiver) uploadToS3(key string, data []byte) error {
 
 		_, err := a.s3Uploader.Upload(uploadInput)
 		return err
-	} else {
-		// Use simple PutObject for smaller files
-		putInput := &s3.PutObjectInput{
-			Bucket:      aws.String(a.config.S3.Bucket),
-			Key:         aws.String(key),
-			Body:        bytes.NewReader(data),
-			ContentType: aws.String("application/zstd"),
-		}
-
-		_, err := a.s3Client.PutObject(putInput)
-		return err
 	}
+
+	// Use simple PutObject for smaller files
+	putInput := &s3.PutObjectInput{
+		Bucket:      aws.String(a.config.S3.Bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String("application/zstd"),
+	}
+
+	_, err := a.s3Client.PutObject(putInput)
+	return err
 }
 
 func (a *Archiver) printSummary(results []ProcessResult) {

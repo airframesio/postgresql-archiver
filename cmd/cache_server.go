@@ -19,7 +19,7 @@ import (
 var (
 	serverPort int
 	upgrader   = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
+		CheckOrigin: func(_ *http.Request) bool {
 			return true // Allow all origins for local development
 		},
 	}
@@ -91,7 +91,7 @@ func startBackgroundServices() {
 	})
 }
 
-func runCacheServer(cmd *cobra.Command, args []string) error {
+func runCacheServer(_ *cobra.Command, _ []string) error {
 	// Set up HTTP routes
 	http.HandleFunc("/", serveCacheViewer)
 	http.HandleFunc("/api/cache", serveCacheData)
@@ -110,13 +110,13 @@ func runCacheServer(cmd *cobra.Command, args []string) error {
 	return http.ListenAndServe(addr, nil)
 }
 
-func serveCacheViewer(w http.ResponseWriter, r *http.Request) {
+func serveCacheViewer(w http.ResponseWriter, _ *http.Request) {
 	html := getCacheViewerHTML()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(html))
 }
 
-func serveCacheData(w http.ResponseWriter, r *http.Request) {
+func serveCacheData(w http.ResponseWriter, _ *http.Request) {
 	// Enable CORS for local development
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
@@ -215,7 +215,7 @@ func serveCacheData(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(response)
 }
 
-func serveStatusData(w http.ResponseWriter, r *http.Request) {
+func serveStatusData(w http.ResponseWriter, _ *http.Request) {
 	// Enable CORS for local development
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
@@ -321,8 +321,8 @@ func dataMonitor() {
 	taskDir := filepath.Join(homeDir, ".postgresql-archiver")
 
 	// Create directories if they don't exist
-	_ = os.MkdirAll(cacheDir, 0755)
-	_ = os.MkdirAll(taskDir, 0755)
+	_ = os.MkdirAll(cacheDir, 0o755)
+	_ = os.MkdirAll(taskDir, 0o755)
 
 	// Watch cache directory
 	if err := watcher.Add(cacheDir); err != nil {

@@ -243,11 +243,11 @@ func TestPartitionCache(t *testing.T) {
 
 		// Save legacy cache
 		cacheDir := filepath.Join(tempDir, ".postgresql-archiver", "cache")
-		_ = os.MkdirAll(cacheDir, 0755)
+		_ = os.MkdirAll(cacheDir, 0o755)
 		legacyPath := filepath.Join(cacheDir, "legacy_table_counts.json")
 
 		data, _ := json.MarshalIndent(legacyCache, "", "  ")
-		_ = os.WriteFile(legacyPath, data, 0644)
+		_ = os.WriteFile(legacyPath, data, 0o644)
 
 		// Load should migrate
 		cache, err := loadPartitionCache("legacy_table")
