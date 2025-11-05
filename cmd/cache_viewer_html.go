@@ -7,25 +7,25 @@ import (
 
 // Embed the web assets
 //
-//go:embed web/viewer.html web/styles.css web/script.js
+//go:embed cmd/web/viewer.html cmd/web/styles.css cmd/web/script.js
 var webAssets embed.FS
 
 // Generate HTML with embedded assets
 func generateCacheViewerHTML() string {
 	// Read the HTML file
-	htmlContent, err := webAssets.ReadFile("web/viewer.html")
+	htmlContent, err := webAssets.ReadFile("cmd/web/viewer.html")
 	if err != nil {
 		return fallbackHTML()
 	}
 
 	// Read the CSS file
-	cssContent, err := webAssets.ReadFile("web/styles.css")
+	cssContent, err := webAssets.ReadFile("cmd/web/styles.css")
 	if err != nil {
 		return fallbackHTML()
 	}
 
 	// Read the JavaScript file
-	jsContent, err := webAssets.ReadFile("web/script.js")
+	jsContent, err := webAssets.ReadFile("cmd/web/script.js")
 	if err != nil {
 		return fallbackHTML()
 	}
