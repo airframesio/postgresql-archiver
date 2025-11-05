@@ -8,11 +8,6 @@ run:
   # Include test files
   tests: true
 
-  # Skip some directories
-  skip-dirs:
-    - vendor
-    - .git
-
 linters:
   # Enable recommended linters
   enable:
@@ -28,7 +23,7 @@ linters:
     - errname          # Checks that sentinel errors are prefixed with the Err and error types are suffixed with Error
     - errorlint        # Errorlint is a linter for that can be used to find code that will cause problems with the error wrapping scheme introduced in Go 1.13
     - exhaustive       # Check exhaustiveness of enum switch statements
-    - exportloopref    # Checks for pointers to enclosing loop variables
+    - copyloopvar      # Checks for pointers to enclosing loop variables
     - forbidigo        # Forbid identifiers
     - forcetypeassert  # Finds forced type assertions
     - gochecksumtype   # Run exhaustiveness checks on types which have the `//sumtype:decl` annotation
@@ -36,13 +31,11 @@ linters:
     - goconst          # Finds repeated strings that could be replaced by a constant
     - gocyclo          # Computes and checks the cyclomatic complexity of functions
     - godox            # Checks for TODO, BUG, FIXME comments
-    - goerr113         # Checks the handling of errors in go code
+    - err113           # Checks the handling of errors in go code
     - gofmt            # Gofmt checks whether code was gofmt-ed. By default this tool runs with -s option to check for code simplification
     - gofumpt          # Gofumpt is a stricter gofmt
     - goheader         # Checks is file header matches to pattern
     - goimports        # Goimports does everything that gofmt does
-    - golint           # Golint differs from gofmt. Gofmt reformats Go source code, whereas golint prints out style mistakes
-    - gomnd            # An analyzer to detect magic numbers
     - gomoddirectives  # Manage the use of 'replace', 'retract', and 'exclude' directives in go.mod
     - gomodguard       # Allow and disallow lists for direct go module dependencies. This is different from depguard where this is only for direct modules
     - goprintffuncname # Checks that printf-like functions are named with f at the end
@@ -54,7 +47,6 @@ linters:
     - nakedret         # Finds naked returns in functions greater than a specified function length
     - noctx            # Finds sending http request without context.Context
     - nolintlint       # Reports ill-formed or insufficient nolint directives
-    - nosnowflakedb    # Reports sql.OpenDB with 'snowflake' as the driver
     - nosprintfhostport # Checks for mismatched host and port separators in URL passed to net.SplitHostPort
     - prealloc         # Finds slice declarations that could potentially be preallocated
     - predeclared      # Finds code that shadows one of Go's predeclared identifiers
@@ -78,12 +70,14 @@ linters:
     - nestif           # Nested if statements (OK in some cases)
     - nlreturn         # Named return statements not followed by newline
     - interfacebloat   # A linter that checks the number of methods inside an interface
-    - gocognit         # Computes cognitive complexity (can be high for business logic)
 
 issues:
   # Maximum issues to show
   max-issues-per-linter: 0
   max-same-issues: 0
+
+  # Use default exclude directories
+  exclude-dirs-use-default: true
 
   # Exclude patterns
   exclude-rules:
@@ -118,9 +112,6 @@ output:
   formats:
     - format: colored-line-number
       path: stdout
-
-  # Show issues only for new changes (when using git)
-  unrelated-files: false
 
 severity:
   # Set the default severity for unset linters
