@@ -182,7 +182,7 @@ The archiver handles multiple partition naming formats:
 - Use `go get` to add new dependencies
 - Run `go mod tidy` to clean up
 - Verify with `go mod verify`
-- Check for vulnerabilities with known tools
+- Check for vulnerabilities with `govulncheck` or similar security scanning tools
 
 ### Updating Dependencies
 - Review changes carefully, especially for core dependencies
