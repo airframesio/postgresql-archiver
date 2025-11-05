@@ -3,10 +3,11 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // MD5 used for checksums, not cryptography
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -20,7 +21,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/klauspost/compress/zstd"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
+)
+
+// Stage constants
+const (
+	StageSkipped = "Skipped"
 )
 
 type Archiver struct {
@@ -175,12 +181,12 @@ func (a *Archiver) checkTablePermissions(ctx context.Context) error {
 	`
 
 	err := a.db.QueryRowContext(ctx, checkPermissionQuery, a.config.Table, a.config.Table).Scan(&hasPermission)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("failed to check table permissions: %w", err)
 	}
 
 	// If the base table exists and we don't have permission, fail
-	if err != sql.ErrNoRows && !hasPermission {
+	if !errors.Is(err, sql.ErrNoRows) && !hasPermission {
 		return fmt.Errorf("insufficient permissions to read table '%s'", a.config.Table)
 	}
 
@@ -197,13 +203,13 @@ func (a *Archiver) checkTablePermissions(ctx context.Context) error {
 
 	var samplePartition string
 	err = a.db.QueryRowContext(ctx, partitionCheckQuery, pattern).Scan(&samplePartition)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		// Only fail if it's not a "no rows" error
 		return fmt.Errorf("failed to check partition table permissions: %w", err)
 	}
 
 	// Check if we found any partitions at all (with or without permissions)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// Let's see if partitions exist but we can't access them
 		var partitionExists bool
 		existsQuery := `
@@ -311,7 +317,7 @@ func (a *Archiver) discoverPartitionsWithUI(program *tea.Program) ([]PartitionIn
 			// Update count progress
 			program.Send(updateCount(i+1, len(matchingTables), table.name))
 
-			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", table.name)
+			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", pq.QuoteIdentifier(table.name))
 			var count int64
 			if err := a.db.QueryRow(countQuery).Scan(&count); err == nil {
 				partitions = append(partitions, PartitionInfo{
@@ -420,7 +426,7 @@ func (a *Archiver) discoverPartitions() ([]PartitionInfo, error) {
 				len(matchingTables),
 				table.name)
 
-			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", table.name)
+			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", pq.QuoteIdentifier(table.name))
 			var count int64
 			if err := a.db.QueryRow(countQuery).Scan(&count); err == nil {
 				partitions = append(partitions, PartitionInfo{
@@ -551,7 +557,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 					// Cached metadata matches S3 - skip without extraction
 					result.Skipped = true
 					result.SkipReason = fmt.Sprintf("Cached metadata matches S3 (size=%d, md5=%s)", cachedSize, cachedMD5)
-					result.Stage = "Skipped"
+					result.Stage = StageSkipped
 					result.BytesWritten = cachedSize
 					if a.config.Debug {
 						fmt.Printf("     ✅ Skipping based on cache: Size and MD5 match\n")
@@ -620,7 +626,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 	}
 
 	// Calculate MD5 hash of compressed data
-	hasher := md5.New()
+	hasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
 	hasher.Write(compressed)
 	localMD5 := hex.EncodeToString(hasher.Sum(nil))
 	localSize := int64(len(compressed))
@@ -647,7 +653,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 				// Single-part upload with matching MD5
 				result.Skipped = true
 				result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and MD5 (%s)", s3Size, s3ETag)
-				result.Stage = "Skipped"
+				result.Stage = StageSkipped
 				if a.config.Debug {
 					fmt.Printf("     ✅ Skipping: Size and MD5 match\n")
 				}
@@ -664,7 +670,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 				if s3ETag == localMultipartETag {
 					result.Skipped = true
 					result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and multipart ETag (%s)", s3Size, s3ETag)
-					result.Stage = "Skipped"
+					result.Stage = StageSkipped
 					if a.config.Debug {
 						fmt.Printf("     ✅ Skipping: Size and multipart ETag match\n")
 					}
@@ -718,7 +724,9 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 }
 
 func (a *Archiver) extractDataWithProgress(partition PartitionInfo, program *tea.Program) ([]byte, error) {
-	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", partition.TableName)
+	// Use pq.QuoteIdentifier to safely quote the table name
+	quotedTable := pq.QuoteIdentifier(partition.TableName)
+	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable) //nolint:gosec // Table name is quoted with pq.QuoteIdentifier
 
 	rows, err := a.db.Query(query)
 	if err != nil {
@@ -761,6 +769,11 @@ func (a *Archiver) extractDataWithProgress(partition PartitionInfo, program *tea
 				program.Send(updateProgress(fmt.Sprintf("Extracting data (%d rows so far)...", rowCount), 0, 0))
 			}
 		}
+	}
+
+	// Check for errors from iterating over rows
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	// Final update
@@ -848,7 +861,7 @@ func (a *Archiver) calculateMultipartETag(data []byte) string {
 
 	// If it would be a single part, just return regular MD5
 	if numParts == 1 {
-		hasher := md5.New()
+		hasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
 		hasher.Write(data)
 		return hex.EncodeToString(hasher.Sum(nil))
 	}
@@ -862,13 +875,13 @@ func (a *Archiver) calculateMultipartETag(data []byte) string {
 			end = len(data)
 		}
 
-		partHasher := md5.New()
+		partHasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
 		partHasher.Write(data[start:end])
 		partMD5s = append(partMD5s, partHasher.Sum(nil)...)
 	}
 
 	// Calculate MD5 of concatenated MD5s
-	finalHasher := md5.New()
+	finalHasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
 	finalHasher.Write(partMD5s)
 	finalMD5 := hex.EncodeToString(finalHasher.Sum(nil))
 
@@ -894,18 +907,18 @@ func (a *Archiver) uploadToS3(key string, data []byte) error {
 
 		_, err := a.s3Uploader.Upload(uploadInput)
 		return err
-	} else {
-		// Use simple PutObject for smaller files
-		putInput := &s3.PutObjectInput{
-			Bucket:      aws.String(a.config.S3.Bucket),
-			Key:         aws.String(key),
-			Body:        bytes.NewReader(data),
-			ContentType: aws.String("application/zstd"),
-		}
-
-		_, err := a.s3Client.PutObject(putInput)
-		return err
 	}
+
+	// Use simple PutObject for smaller files
+	putInput := &s3.PutObjectInput{
+		Bucket:      aws.String(a.config.S3.Bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String("application/zstd"),
+	}
+
+	_, err := a.s3Client.PutObject(putInput)
+	return err
 }
 
 func (a *Archiver) printSummary(results []ProcessResult) {

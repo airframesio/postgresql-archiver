@@ -63,7 +63,7 @@ var rootCmd = &cobra.Command{
 
 A CLI tool to efficiently archive PostgreSQL partitioned table data to object storage.
 Extracts data by day, converts to JSONL, compresses with zstd, and uploads to S3-compatible storage.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		runArchive()
 	},
 }

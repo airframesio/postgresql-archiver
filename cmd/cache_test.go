@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const testTablePartition = "test_table_20240101"
+
 func TestPartitionCache(t *testing.T) {
 	// Create a temporary directory for test cache
 	tempDir, err := os.MkdirTemp("", "cache_test")
@@ -41,7 +43,7 @@ func TestPartitionCache(t *testing.T) {
 			Entries: make(map[string]PartitionCacheEntry),
 		}
 
-		partition := "test_table_20240101"
+		partition := testTablePartition
 		count := int64(1000)
 		cache.setRowCount(partition, count)
 
@@ -68,7 +70,7 @@ func TestPartitionCache(t *testing.T) {
 			Entries: make(map[string]PartitionCacheEntry),
 		}
 
-		partition := "test_table_20240101"
+		partition := testTablePartition
 		s3Key := "export/test_table/2024/01/2024-01-01.jsonl.zst"
 		compressedSize := int64(1024)
 		uncompressedSize := int64(5120)
@@ -103,7 +105,7 @@ func TestPartitionCache(t *testing.T) {
 			Entries: make(map[string]PartitionCacheEntry),
 		}
 
-		partition := "test_table_20240101"
+		partition := testTablePartition
 		s3Key := "export/test_table/2024/01/2024-01-01.jsonl.zst"
 
 		// Set file metadata first
@@ -133,7 +135,7 @@ func TestPartitionCache(t *testing.T) {
 			Entries: make(map[string]PartitionCacheEntry),
 		}
 
-		partition := "test_table_20240101"
+		partition := testTablePartition
 		errMsg := "connection failed"
 
 		cache.setError(partition, errMsg)
@@ -243,11 +245,11 @@ func TestPartitionCache(t *testing.T) {
 
 		// Save legacy cache
 		cacheDir := filepath.Join(tempDir, ".postgresql-archiver", "cache")
-		_ = os.MkdirAll(cacheDir, 0755)
+		_ = os.MkdirAll(cacheDir, 0o755)
 		legacyPath := filepath.Join(cacheDir, "legacy_table_counts.json")
 
 		data, _ := json.MarshalIndent(legacyCache, "", "  ")
-		_ = os.WriteFile(legacyPath, data, 0644)
+		_ = os.WriteFile(legacyPath, data, 0o644)
 
 		// Load should migrate
 		cache, err := loadPartitionCache("legacy_table")

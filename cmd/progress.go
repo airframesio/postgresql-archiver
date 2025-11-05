@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/lib/pq"
 )
 
 type Phase int
@@ -329,6 +331,11 @@ func (m *progressModel) doDiscover() tea.Cmd {
 			}{name: tableName, date: date})
 		}
 
+		// Check for errors from iterating over rows
+		if err := rows.Err(); err != nil {
+			return messageMsg(fmt.Sprintf("❌ Failed to scan partitions: %v", err))
+		}
+
 		// Return the discovered tables
 		if len(matchingTables) == 0 {
 			return messageMsg("⚠️ No matching partitions found")
@@ -392,7 +399,7 @@ func (m *progressModel) countNextTable() tea.Cmd {
 
 		// If not in cache or expired, count from database
 		if !fromCache {
-			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", table.name)
+			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", pq.QuoteIdentifier(table.name))
 			if err := m.archiver.db.QueryRow(countQuery).Scan(&count); err == nil {
 				// Save to cache (preserving existing metadata)
 				if m.partitionCache != nil {
@@ -485,10 +492,14 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case progress.FrameMsg:
 		progressModel, cmd := m.currentProgress.Update(msg)
-		m.currentProgress = progressModel.(progress.Model)
+		if pm, ok := progressModel.(progress.Model); ok {
+			m.currentProgress = pm
+		}
 
 		overallModel, cmd2 := m.overallProgress.Update(msg)
-		m.overallProgress = overallModel.(progress.Model)
+		if om, ok := overallModel.(progress.Model); ok {
+			m.overallProgress = om
+		}
 
 		return m, tea.Batch(cmd, cmd2)
 
@@ -497,7 +508,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentStage = msg.message
 
 		// Handle phase transitions
-		switch msg.phase {
+		switch msg.phase { //nolint:exhaustive // PhaseComplete is terminal
 		case PhaseConnecting:
 			// Start the connection process
 			return m, m.doConnect()
@@ -588,12 +599,15 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				addr := fmt.Sprintf(":%d", m.config.ViewerPort)
 				server := &http.Server{
-					Addr:    addr,
+					Addr:              addr,
+				ReadHeaderTimeout: 10 * time.Second,
+				ReadTimeout:       30 * time.Second,
+				WriteTimeout:      30 * time.Second,
 					Handler: mux,
 				}
 
 				// Start the server
-				if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					// Log error but don't crash the archiver
 					fmt.Printf("Cache viewer server error: %v\n", err)
 				}
@@ -630,19 +644,19 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				return partitionsFoundMsg{partitions: partitions}
 			}
-		} else {
-			// Start counting phase
-			m.countTotal = len(msg.tables)
-			m.countProgress = 0
-			m.pendingTables = msg.tables
-			m.countedPartitions = make([]PartitionInfo, 0, len(msg.tables))
-			m.currentCountIndex = 0
+		}
 
-			return m, func() tea.Msg {
-				return phaseMsg{
-					phase:   PhaseCounting,
-					message: fmt.Sprintf("Counting rows in %d partitions...", len(msg.tables)),
-				}
+		// Start counting phase
+		m.countTotal = len(msg.tables)
+		m.countProgress = 0
+		m.pendingTables = msg.tables
+		m.countedPartitions = make([]PartitionInfo, 0, len(msg.tables))
+		m.currentCountIndex = 0
+
+		return m, func() tea.Msg {
+			return phaseMsg{
+				phase:   PhaseCounting,
+				message: fmt.Sprintf("Counting rows in %d partitions...", len(msg.tables)),
 			}
 		}
 
@@ -851,7 +865,7 @@ func (m progressModel) View() string {
 	sections = append(sections, "")
 
 	// Phase-specific content
-	switch m.phase {
+	switch m.phase { //nolint:exhaustive // PhaseComplete is terminal
 	case PhaseConnecting, PhaseCheckingPermissions, PhaseDiscovering:
 		// Show current operation with spinner
 		if m.currentStage != "" {

@@ -43,12 +43,12 @@ func WritePIDFile() error {
 	pidPath := GetPIDFilePath()
 	dir := filepath.Dir(pidPath)
 
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	pid := os.Getpid()
-	return os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0644)
+	return os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o600)
 }
 
 // RemovePIDFile removes the PID file
@@ -96,7 +96,7 @@ func WriteTaskInfo(info *TaskInfo) error {
 	taskPath := GetTaskFilePath()
 	dir := filepath.Dir(taskPath)
 
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
@@ -107,7 +107,7 @@ func WriteTaskInfo(info *TaskInfo) error {
 		return fmt.Errorf("failed to marshal task info: %w", err)
 	}
 
-	return os.WriteFile(taskPath, data, 0644)
+	return os.WriteFile(taskPath, data, 0o600)
 }
 
 // ReadTaskInfo reads current task information from file
