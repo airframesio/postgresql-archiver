@@ -530,11 +530,20 @@ docker run --rm \
 git clone https://github.com/airframesio/postgresql-archiver.git
 cd postgresql-archiver
 
-# Install dependencies
+# Install Go dependencies
 go mod download
 
-# Build the binary
+# Install Node.js dependencies (for web asset minification)
+npm install
+
+# Minify web assets (CSS, JavaScript, HTML)
+npm run minify
+
+# Build the binary (with minified assets embedded)
 go build -o postgresql-archiver
+
+# Or use the npm build script which minifies and builds in one command
+npm run build
 
 # Run tests
 go test ./...
@@ -544,6 +553,30 @@ GOOS=linux GOARCH=amd64 go build -o postgresql-archiver-linux-amd64
 GOOS=darwin GOARCH=arm64 go build -o postgresql-archiver-darwin-arm64
 GOOS=windows GOARCH=amd64 go build -o postgresql-archiver.exe
 ```
+
+### Web Asset Minification
+
+The cache viewer web UI uses minified assets in production builds to reduce load times:
+
+- **Original size**: 98,389 bytes (HTML + CSS + JS + design system)
+- **Minified size**: 60,995 bytes (38% reduction)
+
+The minification process:
+1. Uses `csso-cli` for CSS minification
+2. Uses `terser` for JavaScript minification with mangling and compression
+3. Uses `html-minifier-terser` for HTML minification
+4. Automatically runs in CI/CD before building binaries
+
+To minify manually:
+```bash
+# Run the minification script
+./scripts/minify.sh
+
+# Or use npm
+npm run minify
+```
+
+The minified files are automatically embedded into the Go binary during build.
 
 ### CI/CD
 

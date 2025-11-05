@@ -80,6 +80,17 @@ jobs:
       with:
         go-version: '1.21'
     
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    
+    - name: Install minification dependencies
+      run: npm install
+    
+    - name: Minify web assets
+      run: ./scripts/minify.sh
+    
     - name: Build for multiple platforms
       run: |
         # Linux AMD64
