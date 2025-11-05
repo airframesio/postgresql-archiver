@@ -731,7 +731,7 @@ window.scrollToPartition = function(partitionName) {
             }
         }
     }, 100);
-}
+};
 
 // Clean up on page unload
 window.addEventListener('beforeunload', () => {
