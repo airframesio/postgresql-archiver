@@ -16,6 +16,10 @@ import (
 )
 
 var (
+	// signalContext is set by main() before Cobra initialization
+	// This ensures signal handling is set up before any library can interfere
+	signalContext context.Context
+
 	cfgFile          string
 	debug            bool
 	dbHost           string
@@ -65,6 +69,12 @@ var (
 
 	logger *slog.Logger
 )
+
+// SetSignalContext stores the signal-aware context created in main()
+// This must be called before Execute() to ensure proper signal handling
+func SetSignalContext(ctx context.Context) {
+	signalContext = ctx
+}
 
 // initLogger initializes the slog logger based on debug flag
 func initLogger(isDebug bool) {
@@ -241,10 +251,16 @@ func runArchive() {
 	}
 	logger.Debug("Configuration validated successfully")
 
-	// Use signal.NotifyContext to automatically cancel context on SIGINT/SIGTERM
-	// This is the modern Go 1.16+ approach and is more reliable than manual signal handling
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	// Use the signal context created in main() before Cobra initialization
+	// This ensures signals were registered before any library interference
+	ctx := signalContext
+	if ctx == nil {
+		// Fallback if SetSignalContext wasn't called (shouldn't happen)
+		logger.Warn("Signal context not set, creating fallback...")
+		var stop context.CancelFunc
+		ctx, stop = signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+	}
 
 	// Set up a goroutine to force-exit if graceful shutdown takes too long
 	exited := make(chan struct{})

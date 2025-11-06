@@ -173,7 +173,11 @@ func (a *Archiver) Run(ctx context.Context) error {
 	}
 
 	// Start the UI with the archiver reference (normal mode)
-	progressModel := newProgressModelWithArchiver(ctx, a.config, a, errChan, resultsChan, taskInfo)
+	// Create a cancellable context so the TUI can stop operations
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	progressModel := newProgressModelWithArchiver(ctx, cancel, a.config, a, errChan, resultsChan, taskInfo)
 	// CRITICAL: Disable Bubble Tea's signal handler so our custom handler can work
 	program := tea.NewProgram(progressModel, tea.WithoutSignalHandler())
 

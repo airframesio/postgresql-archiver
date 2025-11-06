@@ -51,6 +51,7 @@ type progressModel struct {
 	resultsChan     chan<- []ProcessResult
 	initialized     bool
 	ctx             context.Context
+	cancel          context.CancelFunc // Cancel function to stop all operations
 	pendingTables   []struct {
 		name string
 		date time.Time
@@ -160,7 +161,7 @@ func (m *progressModel) updateTaskInfo() {
 	}
 }
 
-func newProgressModelWithArchiver(ctx context.Context, config *Config, archiver *Archiver, errChan chan<- error, resultsChan chan<- []ProcessResult, taskInfo *TaskInfo) progressModel {
+func newProgressModelWithArchiver(ctx context.Context, cancel context.CancelFunc, config *Config, archiver *Archiver, errChan chan<- error, resultsChan chan<- []ProcessResult, taskInfo *TaskInfo) progressModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -198,6 +199,7 @@ func newProgressModelWithArchiver(ctx context.Context, config *Config, archiver 
 		resultsChan:     resultsChan,
 		initialized:     false,
 		ctx:             ctx,
+		cancel:          cancel,
 		partitionCache:  cache,
 		taskInfo:        taskInfo,
 	}
@@ -526,6 +528,10 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m progressModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" || msg.String() == "q" {
 		m.done = true
+		// Cancel the context to stop all archival operations
+		if m.cancel != nil {
+			m.cancel()
+		}
 		return m, tea.Quit
 	}
 	return m, nil
