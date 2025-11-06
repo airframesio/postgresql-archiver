@@ -227,7 +227,7 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, program *tea.Program,
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 	// Only log in debug mode (when TUI is not active)
-	if program == nil {
+	if a.config.Debug {
 		a.logger.Info("✅ Connected to database")
 	}
 
@@ -235,7 +235,7 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, program *tea.Program,
 	if err := a.checkTablePermissions(ctx); err != nil {
 		return fmt.Errorf("permission check failed: %w", err)
 	}
-	if program == nil {
+	if a.config.Debug {
 		a.logger.Info("✅ Table permissions verified")
 	}
 
@@ -1146,7 +1146,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 		_ = cache.save(a.config.Table)
 
 		// Only log in debug mode when TUI is disabled
-		if program == nil {
+		if a.config.Debug {
 			a.logger.Info(fmt.Sprintf("      ✅ Uploaded %s (%d bytes)", filename, len(compressed)))
 		}
 	}
