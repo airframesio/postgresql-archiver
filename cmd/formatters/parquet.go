@@ -36,48 +36,31 @@ func (f *ParquetFormatter) Format(rows []map[string]interface{}) ([]byte, error)
 	var buffer bytes.Buffer
 
 	// Build schema from first row
-	schema, columns := buildSchemaFromRow(rows[0])
+	schema, _ := buildSchemaFromRow(rows[0])
 
-	// Map compression type to parquet compression codec
-	var writerOptions []parquet.WriterOption
-
-	// Add schema as a writer option
-	writerOptions = append(writerOptions, parquet.SchemaOf(schema))
-
-	// Add compression option
+	// Map compression type to parquet compression codec and create writer
+	var writer *parquet.GenericWriter[map[string]any]
 	switch f.compression {
 	case "zstd":
-		writerOptions = append(writerOptions, parquet.Compression(&parquet.Zstd))
+		writer = parquet.NewGenericWriter[map[string]any](&buffer, schema, parquet.Compression(&parquet.Zstd))
 	case "gzip":
-		writerOptions = append(writerOptions, parquet.Compression(&parquet.Gzip))
+		writer = parquet.NewGenericWriter[map[string]any](&buffer, schema, parquet.Compression(&parquet.Gzip))
 	case "lz4":
-		writerOptions = append(writerOptions, parquet.Compression(&parquet.Lz4Raw))
+		writer = parquet.NewGenericWriter[map[string]any](&buffer, schema, parquet.Compression(&parquet.Lz4Raw))
 	case "snappy":
-		writerOptions = append(writerOptions, parquet.Compression(&parquet.Snappy))
+		writer = parquet.NewGenericWriter[map[string]any](&buffer, schema, parquet.Compression(&parquet.Snappy))
 	case "none":
-		writerOptions = append(writerOptions, parquet.Compression(&parquet.Uncompressed))
+		writer = parquet.NewGenericWriter[map[string]any](&buffer, schema, parquet.Compression(&parquet.Uncompressed))
 	default:
 		// Default to Snappy (standard for Parquet)
-		writerOptions = append(writerOptions, parquet.Compression(&parquet.Snappy))
+		writer = parquet.NewGenericWriter[map[string]any](&buffer, schema, parquet.Compression(&parquet.Snappy))
 	}
-
-	// Create parquet writer with options
-	writer := parquet.NewWriter(&buffer, writerOptions...)
 	defer writer.Close()
 
-	// Write each row
-	for _, row := range rows {
-		// Convert map to parquet row format
-		parquetRow := make(parquet.Row, 0, len(columns))
-		for i, col := range columns {
-			value := row[col]
-			parquetRow = append(parquetRow, parquet.ValueOf(value).Level(0, 0, i))
-		}
-
-		_, err := writer.WriteRows([]parquet.Row{parquetRow})
-		if err != nil {
-			return nil, fmt.Errorf("failed to write parquet row: %w", err)
-		}
+	// Write rows directly - GenericWriter handles the conversion
+	_, err := writer.Write(rows)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write parquet rows: %w", err)
 	}
 
 	// Close writer to flush data
