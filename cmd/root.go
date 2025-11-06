@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -241,75 +240,21 @@ func runArchive() {
 	}
 	logger.Debug("Configuration validated successfully")
 
-	// Create a context that can be cancelled by signals (SIGTERM, SIGINT)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Create a context that will be cancelled by signals
+	// Using signal.NotifyContext instead of manual signal.Notify
+	fmt.Fprintln(os.Stderr, "[DEBUG] Creating signal context with NotifyContext...")
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	fmt.Fprintln(os.Stderr, "[DEBUG] Signal context created, signals will cancel context")
 
-	// Set up signal handling with immediate exit
-	// After multiple attempts at graceful shutdown that didn't work reliably,
-	// we now use the nuclear option: immediate process termination
-	fmt.Fprintln(os.Stderr, "[DEBUG] Setting up signal handler...")
-	sigChan := make(chan os.Signal, 1)
-	fmt.Fprintf(os.Stderr, "[DEBUG] Signal channel created: %v\n", sigChan)
-
-	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
-	fmt.Fprintln(os.Stderr, "[DEBUG] signal.Notify called for SIGTERM and SIGINT")
-	fmt.Fprintln(os.Stderr, "[DEBUG] CTRL-C should now be caught by this process")
-
-	// Track if we've already received first signal
-	var firstSignalReceived bool
-	var signalMutex sync.Mutex
-
-	fmt.Fprintln(os.Stderr, "[DEBUG] About to launch signal handler goroutine...")
+	// Monitor for cancellation and immediately exit
 	go func() {
-		// Print to stderr to ensure it's not buffered
-		fmt.Fprintln(os.Stderr, "[DEBUG] =====> Signal handler goroutine IS RUNNING <======")
-		fmt.Fprintln(os.Stderr, "[DEBUG] Press CTRL-C to test signal handling")
-
-		for {
-			fmt.Fprintln(os.Stderr, "[DEBUG] Blocking on sigChan, waiting for signal...")
-			sig := <-sigChan
-			fmt.Fprintf(os.Stderr, "[DEBUG] SIGNAL RECEIVED: %v\n", sig)
-
-			signalMutex.Lock()
-			isFirst := !firstSignalReceived
-			if isFirst {
-				firstSignalReceived = true
-			}
-			signalMutex.Unlock()
-
-			fmt.Fprintf(os.Stderr, "[DEBUG] isFirst=%v\n", isFirst)
-
-			if isFirst {
-				// First signal: brief wait then force exit
-				fmt.Fprintln(os.Stderr, "[DEBUG] First signal - logging and starting exit timer")
-				logger.Info(fmt.Sprintf("⚠️  Received signal: %v - exiting in 100ms (press CTRL-C again for immediate exit)", sig))
-				fmt.Fprintln(os.Stderr, "[DEBUG] Logged message, cancelling context")
-
-				// Cancel context (might help with cleanup)
-				cancel()
-				fmt.Fprintln(os.Stderr, "[DEBUG] Context cancelled, starting exit goroutine")
-
-				// Wait very briefly in a goroutine, so we can still catch second signal
-				go func() {
-					fmt.Fprintln(os.Stderr, "[DEBUG] Exit goroutine started, sleeping 100ms...")
-					time.Sleep(100 * time.Millisecond)
-					fmt.Fprintln(os.Stderr, "[DEBUG] Sleep complete, about to call os.Exit(130)")
-					logger.Info("Forcing process exit...")
-					fmt.Fprintln(os.Stderr, "[DEBUG] CALLING os.Exit(130) NOW!")
-					os.Exit(130) // Standard exit code for SIGINT
-					fmt.Fprintln(os.Stderr, "[DEBUG] THIS LINE SHOULD NEVER PRINT - IF YOU SEE THIS, os.Exit() FAILED")
-				}()
-				fmt.Fprintln(os.Stderr, "[DEBUG] Exit goroutine launched, continuing to wait for signals")
-			} else {
-				// Second signal: immediate exit (no wait)
-				fmt.Fprintf(os.Stderr, "[DEBUG] Second signal - exiting immediately!\n")
-				logger.Error(fmt.Sprintf("❌ Received second signal: %v - forcing immediate exit NOW!", sig))
-				fmt.Fprintln(os.Stderr, "[DEBUG] CALLING os.Exit(130) NOW from second signal!")
-				os.Exit(130)
-				fmt.Fprintln(os.Stderr, "[DEBUG] THIS LINE SHOULD NEVER PRINT - IF YOU SEE THIS, os.Exit() FAILED")
-			}
-		}
+		fmt.Fprintln(os.Stderr, "[DEBUG] Signal monitor goroutine started, waiting for ctx.Done()...")
+		<-ctx.Done() // This will block until signal is received
+		fmt.Fprintln(os.Stderr, "[DEBUG] !!!!! ctx.Done() FIRED - SIGNAL WAS RECEIVED !!!!!")
+		fmt.Fprintln(os.Stderr, "[DEBUG] Exiting immediately with os.Exit(130)")
+		fmt.Fprintf(os.Stderr, "\n⚠️  Interrupted by user - exiting now!\n")
+		os.Exit(130)
 	}()
 
 	logger.Debug("Creating archiver...")
