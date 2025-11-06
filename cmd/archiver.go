@@ -77,6 +77,7 @@ type ProcessResult struct {
 	Error        error
 	BytesWritten int64
 	Stage        string
+	S3Key        string // S3 object key for uploaded file
 }
 
 func NewArchiver(config *Config, logger *slog.Logger) *Archiver {
@@ -1025,6 +1026,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	}
 
 	result.Stage = "Complete"
+	result.S3Key = objectKey
 	return result
 }
 
@@ -1161,6 +1163,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 	}
 
 	result.Stage = "Complete"
+	result.S3Key = objectKey
 	return result
 }
 
