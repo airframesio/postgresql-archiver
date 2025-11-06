@@ -39,6 +39,19 @@ var (
 	ErrS3UploaderNotInitialized = errors.New("S3 uploader not initialized")
 )
 
+// isConnectionError checks if an error is due to a closed or broken database connection
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "bad connection") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "sql: database is closed")
+}
+
 type Archiver struct {
 	config       *Config
 	db           *sql.DB
@@ -108,36 +121,53 @@ func (a *Archiver) Run(ctx context.Context) error {
 	if a.config.Debug {
 		a.logger.Info("Running in debug mode - TUI disabled for better log visibility")
 
+		// Track goroutine completion separately from errors
+		done := make(chan struct{})
+
 		// Run archival process directly without TUI
 		go func() {
+			defer close(done)
 			err := a.runArchivalProcess(ctx, nil, taskInfo)
 			errChan <- err
 		}()
 
 		// Wait for completion or cancellation
-		for {
-			select {
-			case err := <-errChan:
-				if err != nil && !errors.Is(err, context.Canceled) {
-					return err
-				}
-				if errors.Is(err, context.Canceled) {
-					a.logger.Info("⚠️  Archival process cancelled by user")
-				} else {
-					a.logger.Info("✅ Archival process completed")
-				}
+		select {
+		case err := <-errChan:
+			// Normal completion
+			if err != nil && !errors.Is(err, context.Canceled) {
 				return err
-			case <-ctx.Done():
-				a.logger.Info("⚠️  Cancellation requested, waiting up to 3 seconds for cleanup...")
-				// Wait for the goroutine to finish cleanup, but with timeout
+			}
+			if errors.Is(err, context.Canceled) {
+				a.logger.Info("⚠️  Archival process cancelled by user")
+			} else {
+				a.logger.Info("✅ Archival process completed")
+			}
+			return err
+		case <-ctx.Done():
+			// Cancellation detected - force close database connection immediately
+			a.logger.Info("⚠️  Cancellation detected - closing database connection to abort queries...")
+			if a.db != nil {
+				if err := a.db.Close(); err != nil {
+					a.logger.Debug(fmt.Sprintf("Error closing database: %v", err))
+				}
+			}
+
+			// Wait briefly for goroutine to detect closed connection and exit gracefully
+			select {
+			case <-done:
+				a.logger.Info("✅ Goroutine exited after connection close")
+				// Get the error if available
 				select {
 				case err := <-errChan:
-					a.logger.Info("✅ Cleanup completed")
 					return err
-				case <-time.After(3 * time.Second):
-					a.logger.Error("⚠️  Cleanup timeout - forcing exit")
-					return fmt.Errorf("cleanup timeout after cancellation")
+				default:
+					return context.Canceled
 				}
+			case <-time.After(500 * time.Millisecond):
+				// Goroutine didn't exit in time - force exit the process
+				a.logger.Error("⚠️  Goroutine still running after 500ms - forcing process exit")
+				os.Exit(130) // Standard exit code for SIGINT
 			}
 		}
 	}
@@ -179,15 +209,18 @@ func (a *Archiver) Run(ctx context.Context) error {
 
 // runArchivalProcess runs the archival process without the TUI (for debug mode)
 func (a *Archiver) runArchivalProcess(ctx context.Context, program *tea.Program, taskInfo *TaskInfo) error {
+	// Ensure database is always closed on exit
+	defer func() {
+		if a.db != nil {
+			a.db.Close()
+			a.db = nil
+		}
+	}()
+
 	a.logger.Debug("Connecting to database...")
 	if err := a.connect(ctx); err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
-	defer func() {
-		if a.db != nil {
-			a.db.Close()
-		}
-	}()
 	a.logger.Info("✅ Connected to database")
 
 	a.logger.Debug("Checking table permissions...")
@@ -214,10 +247,10 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, program *tea.Program,
 	pattern := a.config.Table + "_%"
 	rows, err := a.db.QueryContext(ctx, query, pattern)
 	if err != nil {
-		// Check if error is due to cancellation
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			a.logger.Info("⚠️  Query cancelled before execution")
-			return err
+		// Check if error is due to cancellation or closed connection
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isConnectionError(err) {
+			a.logger.Info("⚠️  Query cancelled or connection closed")
+			return context.Canceled
 		}
 		return fmt.Errorf("failed to query partitions: %w", err)
 	}
@@ -1422,10 +1455,10 @@ func (a *Archiver) extractRowsWithProgress(partition PartitionInfo, program *tea
 
 	rows, err := a.db.QueryContext(a.ctx, query)
 	if err != nil {
-		// Check if error is due to cancellation
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			a.logger.Debug("  ⚠️  Query cancelled before execution")
-			return nil, err
+		// Check if error is due to cancellation or closed connection
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isConnectionError(err) {
+			a.logger.Debug("  ⚠️  Query cancelled or connection closed")
+			return nil, context.Canceled
 		}
 		return nil, err
 	}
@@ -1531,10 +1564,10 @@ func (a *Archiver) extractRowsWithDateFilter(partition PartitionInfo, startTime,
 
 	rows, err := a.db.QueryContext(a.ctx, query, startTime, endTime)
 	if err != nil {
-		// Check if error is due to cancellation
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			a.logger.Debug("  ⚠️  Filtered query cancelled before execution")
-			return nil, err
+		// Check if error is due to cancellation or closed connection
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isConnectionError(err) {
+			a.logger.Debug("  ⚠️  Filtered query cancelled or connection closed")
+			return nil, context.Canceled
 		}
 		return nil, err
 	}
