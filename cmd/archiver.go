@@ -110,14 +110,18 @@ func (a *Archiver) Run(ctx context.Context) error {
 			errChan <- err
 		}()
 
-		// Wait for completion
-		err := <-errChan
-		if err != nil {
-			return err
+		// Wait for completion or cancellation
+		select {
+		case err := <-errChan:
+			if err != nil {
+				return err
+			}
+			a.logger.Info("✅ Archival process completed")
+			return nil
+		case <-ctx.Done():
+			a.logger.Info("⚠️  Archival process cancelled by user")
+			return ctx.Err()
 		}
-
-		a.logger.Info("✅ Archival process completed")
-		return nil
 	}
 
 	// Start the UI with the archiver reference (normal mode)
@@ -225,6 +229,15 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, program *tea.Program,
 	a.logger.Debug("Processing partitions...")
 	var results []ProcessResult
 	for _, partition := range partitions {
+		// Check if context was cancelled
+		select {
+		case <-ctx.Done():
+			a.logger.Info("⚠️  Stopping partition processing due to cancellation")
+			return ctx.Err()
+		default:
+			// Continue processing
+		}
+
 		a.logger.Info(fmt.Sprintf("Processing partition: %s", partition.TableName))
 		result := a.ProcessPartitionWithProgress(partition, nil)
 		results = append(results, result)
@@ -649,9 +662,22 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program
 	pathTemplate := NewPathTemplate(a.config.S3.PathTemplate)
 	basePath := pathTemplate.Generate(a.config.Table, partition.Date)
 
-	// Get formatter and compressor
-	formatter := formatters.GetFormatter(a.config.OutputFormat)
-	compressor, err := compressors.GetCompressor(a.config.Compression)
+	// Get formatter with compression support
+	formatter := formatters.GetFormatterWithCompression(a.config.OutputFormat, a.config.Compression)
+
+	// For formats with internal compression (like Parquet), skip external compression
+	var compressor compressors.Compressor
+	var compressionExt string
+	var err error
+	if formatters.UsesInternalCompression(a.config.OutputFormat) {
+		// Use "none" compressor for formats that handle compression internally
+		compressor, err = compressors.GetCompressor("none")
+		compressionExt = "" // No compression extension for internally compressed formats
+	} else {
+		// Use configured compressor for other formats
+		compressor, err = compressors.GetCompressor(a.config.Compression)
+		compressionExt = compressor.Extension()
+	}
 	if err != nil {
 		result.Error = fmt.Errorf("failed to get compressor: %w", err)
 		result.Stage = "Setup"
@@ -664,7 +690,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program
 		partition.Date,
 		a.config.OutputDuration,
 		formatter.Extension(),
-		compressor.Extension(),
+		compressionExt,
 	)
 
 	objectKey := basePath + "/" + filename

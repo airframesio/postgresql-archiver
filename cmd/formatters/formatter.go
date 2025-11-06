@@ -25,3 +25,23 @@ func GetFormatter(format string) Formatter {
 		return NewJSONLFormatter() // Default to JSONL
 	}
 }
+
+// GetFormatterWithCompression returns the appropriate formatter with compression settings
+// For Parquet, this enables internal compression. For other formats, compression parameter is ignored.
+func GetFormatterWithCompression(format string, compression string) Formatter {
+	switch format {
+	case "jsonl":
+		return NewJSONLFormatter()
+	case "csv":
+		return NewCSVFormatter()
+	case "parquet":
+		return NewParquetFormatterWithCompression(compression)
+	default:
+		return NewJSONLFormatter() // Default to JSONL
+	}
+}
+
+// UsesInternalCompression returns true if the format handles compression internally
+func UsesInternalCompression(format string) bool {
+	return format == "parquet"
+}

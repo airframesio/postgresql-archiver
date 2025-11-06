@@ -9,11 +9,22 @@ import (
 )
 
 // ParquetFormatter handles Parquet format output
-type ParquetFormatter struct{}
+type ParquetFormatter struct {
+	compression string
+}
 
 // NewParquetFormatter creates a new Parquet formatter
 func NewParquetFormatter() *ParquetFormatter {
-	return &ParquetFormatter{}
+	return &ParquetFormatter{
+		compression: "snappy", // Default Parquet compression
+	}
+}
+
+// NewParquetFormatterWithCompression creates a Parquet formatter with specified compression
+func NewParquetFormatterWithCompression(compression string) *ParquetFormatter {
+	return &ParquetFormatter{
+		compression: compression,
+	}
 }
 
 // Format converts rows to Parquet format
@@ -27,8 +38,31 @@ func (f *ParquetFormatter) Format(rows []map[string]interface{}) ([]byte, error)
 	// Build schema from first row
 	schema, columns := buildSchemaFromRow(rows[0])
 
-	// Create parquet writer with the dynamic schema
-	writer := parquet.NewWriter(&buffer, schema)
+	// Map compression type to parquet compression codec
+	var writerOptions []parquet.WriterOption
+
+	// Add schema as a writer option
+	writerOptions = append(writerOptions, parquet.SchemaOf(schema))
+
+	// Add compression option
+	switch f.compression {
+	case "zstd":
+		writerOptions = append(writerOptions, parquet.Compression(&parquet.Zstd))
+	case "gzip":
+		writerOptions = append(writerOptions, parquet.Compression(&parquet.Gzip))
+	case "lz4":
+		writerOptions = append(writerOptions, parquet.Compression(&parquet.Lz4Raw))
+	case "snappy":
+		writerOptions = append(writerOptions, parquet.Compression(&parquet.Snappy))
+	case "none":
+		writerOptions = append(writerOptions, parquet.Compression(&parquet.Uncompressed))
+	default:
+		// Default to Snappy (standard for Parquet)
+		writerOptions = append(writerOptions, parquet.Compression(&parquet.Snappy))
+	}
+
+	// Create parquet writer with options
+	writer := parquet.NewWriter(&buffer, writerOptions...)
 	defer writer.Close()
 
 	// Write each row
