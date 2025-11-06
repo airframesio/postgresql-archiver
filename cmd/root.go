@@ -129,8 +129,8 @@ func init() {
 	rootCmd.Flags().IntVar(&compressionLevel, "compression-level", 3, "compression level (zstd: 1-22, lz4/gzip: 1-9, none: 0)")
 	rootCmd.Flags().StringVar(&dateColumn, "date-column", "", "timestamp column name for duration-based splitting (optional)")
 
-	_ = rootCmd.MarkFlagRequired("table")
-	_ = rootCmd.MarkFlagRequired("path-template")
+	// Note: We don't use MarkFlagRequired because it checks before viper loads the config file.
+	// Instead, validation happens in config.Validate() which runs after all config sources are loaded.
 
 	_ = viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
 	_ = viper.BindPFlag("db.host", rootCmd.Flags().Lookup("db-host"))
