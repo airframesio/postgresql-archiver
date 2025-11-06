@@ -29,6 +29,12 @@ const (
 	StageSkipped = "Skipped"
 )
 
+// Error definitions
+var (
+	ErrInsufficientPermissions = errors.New("insufficient permissions to read table")
+	ErrPartitionNoPermissions  = errors.New("partition tables exist but you don't have SELECT permissions")
+)
+
 type Archiver struct {
 	config       *Config
 	db           *sql.DB
@@ -187,7 +193,7 @@ func (a *Archiver) checkTablePermissions(ctx context.Context) error {
 
 	// If the base table exists and we don't have permission, fail
 	if !errors.Is(err, sql.ErrNoRows) && !hasPermission {
-		return fmt.Errorf("insufficient permissions to read table '%s'", a.config.Table)
+		return fmt.Errorf("%w: %s", ErrInsufficientPermissions, a.config.Table)
 	}
 
 	// Check if we can see and access partition tables
@@ -223,7 +229,7 @@ func (a *Archiver) checkTablePermissions(ctx context.Context) error {
 
 		if partitionExists {
 			// Partitions exist but we can't access them
-			return fmt.Errorf("partition tables exist but you don't have SELECT permissions")
+			return ErrPartitionNoPermissions
 		}
 		// No partitions found yet, that's okay
 	}
@@ -505,7 +511,7 @@ func (a *Archiver) processPartitionsWithProgress(partitions []PartitionInfo, pro
 }
 */
 
-func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index int, program *tea.Program) ProcessResult {
+func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, _ int, program *tea.Program) ProcessResult {
 	result := ProcessResult{
 		Partition: partition,
 	}
@@ -533,166 +539,35 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 	// Small delay to ensure UI can update
 	time.Sleep(50 * time.Millisecond)
 
-	// Load cache and check if we have cached file metadata
+	// Load cache
 	cache, _ := loadPartitionCache(a.config.Table)
-	cachedSize, cachedMD5, hasCached := cache.getFileMetadata(partition.TableName, objectKey, partition.Date)
 
-	if hasCached {
-		// We have cached metadata, check if it matches what's in S3
-		updateTaskStage("Checking cached file metadata...")
-
-		if exists, s3Size, s3ETag := a.checkObjectExists(objectKey); exists {
-			s3ETag = strings.Trim(s3ETag, "\"")
-			isMultipart := strings.Contains(s3ETag, "-")
-
-			if a.config.Debug {
-				fmt.Printf("  💾 Using cached metadata for %s:\n", partition.TableName)
-				fmt.Printf("     Cached: size=%d, md5=%s\n", cachedSize, cachedMD5)
-				fmt.Printf("     S3: size=%d, etag=%s (multipart=%v)\n", s3Size, s3ETag, isMultipart)
-			}
-
-			// Check if cached metadata matches S3
-			if s3Size == cachedSize {
-				if !isMultipart && s3ETag == cachedMD5 {
-					// Cached metadata matches S3 - skip without extraction
-					result.Skipped = true
-					result.SkipReason = fmt.Sprintf("Cached metadata matches S3 (size=%d, md5=%s)", cachedSize, cachedMD5)
-					result.Stage = StageSkipped
-					result.BytesWritten = cachedSize
-					if a.config.Debug {
-						fmt.Printf("     ✅ Skipping based on cache: Size and MD5 match\n")
-					}
-					return result
-				} else if isMultipart {
-					// For multipart, we can't verify without the actual data
-					// But if size matches exactly, it's likely the same file
-					if a.config.Debug {
-						fmt.Printf("     ℹ️  Multipart upload with matching size, proceeding with extraction to verify\n")
-					}
-				}
-			}
-		} else if a.config.Debug {
-			fmt.Printf("  💾 Have cached metadata but file doesn't exist in S3, will upload\n")
-		}
+	// Check if we can skip based on cached metadata
+	if shouldSkip, skipResult := a.checkCachedMetadata(partition, objectKey, cache, updateTaskStage); shouldSkip {
+		return skipResult
 	}
 
-	// Extract data with progress
-	extractStart := time.Now()
-	updateTaskStage("Extracting data...")
-	if program != nil && partition.RowCount > 0 {
-		program.Send(updateProgress("Extracting data...", 0, partition.RowCount))
-	}
-	result.Stage = "Extracting"
-	data, err := a.extractDataWithProgress(partition, program)
+	// Extract data
+	data, uncompressedSize, err := a.extractPartitionData(partition, program, cache, updateTaskStage)
 	if err != nil {
-		result.Error = fmt.Errorf("extraction failed: %w", err)
-		// Save error to cache
-		cache.setError(partition.TableName, fmt.Sprintf("Extraction failed: %v", err))
-		_ = cache.save(a.config.Table)
+		result.Error = err
+		result.Stage = "Extracting"
 		return result
 	}
-	extractDuration := time.Since(extractStart)
-	if a.config.Debug {
-		fmt.Printf("  ⏱️  Extraction took %v for %s\n", extractDuration, partition.TableName)
-	}
-
-	// Store uncompressed size
-	uncompressedSize := int64(len(data))
 
 	// Compress data
-	compressStart := time.Now()
-	updateTaskStage("Compressing data...")
-	if program != nil {
-		program.Send(updateProgress("Compressing data...", 50, 100))
-	}
-	result.Stage = "Compressing"
-	compressed, err := a.compressData(data)
+	compressed, localMD5, err := a.compressPartitionData(data, partition, program, cache, updateTaskStage)
 	if err != nil {
-		result.Error = fmt.Errorf("compression failed: %w", err)
-		// Save error to cache
-		cache.setError(partition.TableName, fmt.Sprintf("Compression failed: %v", err))
-		_ = cache.save(a.config.Table)
+		result.Error = err
+		result.Stage = "Compressing"
 		return result
 	}
 	result.Compressed = true
 	result.BytesWritten = int64(len(compressed))
-	if program != nil {
-		program.Send(updateProgress("Compressing data...", 100, 100))
-	}
-	compressDuration := time.Since(compressStart)
-	if a.config.Debug {
-		fmt.Printf("  ⏱️  Compression took %v for %s (%.1fx ratio)\n",
-			compressDuration, partition.TableName, float64(len(data))/float64(len(compressed)))
-	}
 
-	// Calculate MD5 hash of compressed data
-	hasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
-	hasher.Write(compressed)
-	localMD5 := hex.EncodeToString(hasher.Sum(nil))
-	localSize := int64(len(compressed))
-
-	// Check if already exists with matching size and hash
-	updateTaskStage("Checking if file exists...")
-	if exists, s3Size, s3ETag := a.checkObjectExists(objectKey); exists {
-		// Remove quotes from ETag if present
-		s3ETag = strings.Trim(s3ETag, "\"")
-
-		// Check if it's a multipart upload (contains a dash)
-		isMultipart := strings.Contains(s3ETag, "-")
-
-		// Always log comparison details in debug mode
-		if a.config.Debug {
-			fmt.Printf("  📊 Comparing files for %s:\n", partition.TableName)
-			fmt.Printf("     S3: size=%d, etag=%s (multipart=%v)\n", s3Size, s3ETag, isMultipart)
-			fmt.Printf("     Local: size=%d, md5=%s\n", localSize, localMD5)
-		}
-
-		if s3Size == localSize {
-			// Size matches, now check hash
-			if !isMultipart && s3ETag == localMD5 {
-				// Single-part upload with matching MD5
-				result.Skipped = true
-				result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and MD5 (%s)", s3Size, s3ETag)
-				result.Stage = StageSkipped
-				if a.config.Debug {
-					fmt.Printf("     ✅ Skipping: Size and MD5 match\n")
-				}
-				// Save to cache for future runs (file is already in S3)
-				cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
-				_ = cache.save(a.config.Table)
-				return result
-			} else if isMultipart {
-				// For multipart uploads, calculate the multipart ETag
-				localMultipartETag := a.calculateMultipartETag(compressed)
-				if a.config.Debug {
-					fmt.Printf("     Local multipart ETag: %s\n", localMultipartETag)
-				}
-				if s3ETag == localMultipartETag {
-					result.Skipped = true
-					result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and multipart ETag (%s)", s3Size, s3ETag)
-					result.Stage = StageSkipped
-					if a.config.Debug {
-						fmt.Printf("     ✅ Skipping: Size and multipart ETag match\n")
-					}
-					// Save to cache for future runs (store the single-part MD5 for simplicity, file is already in S3)
-					cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
-					_ = cache.save(a.config.Table)
-					return result
-				} else if a.config.Debug {
-					fmt.Printf("     ❌ Multipart ETag mismatch: S3=%s, Local=%s\n", s3ETag, localMultipartETag)
-				}
-			} else if a.config.Debug {
-				fmt.Printf("     ❌ MD5 mismatch: S3=%s, Local=%s\n", s3ETag, localMD5)
-			}
-		} else if a.config.Debug {
-			fmt.Printf("     ❌ Size mismatch: S3=%d, Local=%d\n", s3Size, localSize)
-		}
-		// Size or hash doesn't match, we'll re-upload
-		if a.config.Debug {
-			fmt.Printf("     🔄 Will re-upload due to differences\n")
-		}
-	} else if a.config.Debug {
-		fmt.Printf("  📊 File does not exist in S3: %s\n", objectKey)
+	// Check if we can skip upload
+	if shouldSkip, skipResult := a.checkExistingFile(partition, objectKey, compressed, localMD5, int64(len(compressed)), uncompressedSize, cache, updateTaskStage); shouldSkip {
+		return skipResult
 	}
 
 	// Upload to S3
@@ -712,15 +587,207 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index i
 		}
 
 		// Save metadata to cache after successful upload
-		cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
+		cache.setFileMetadata(partition.TableName, objectKey, int64(len(compressed)), uncompressedSize, localMD5, true)
 		_ = cache.save(a.config.Table)
 		if a.config.Debug {
-			fmt.Printf("  💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s\n", localSize, uncompressedSize, localMD5)
+			fmt.Printf("  💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s\n", len(compressed), uncompressedSize, localMD5)
 		}
 	}
 
 	result.Stage = "Complete"
 	return result
+}
+
+// checkCachedMetadata checks if we can skip processing based on cached metadata
+func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string, cache *PartitionCache, updateTaskStage func(string)) (bool, ProcessResult) {
+	result := ProcessResult{
+		Partition: partition,
+	}
+
+	cachedSize, cachedMD5, hasCached := cache.getFileMetadata(partition.TableName, objectKey, partition.Date)
+	if !hasCached {
+		return false, result
+	}
+
+	// We have cached metadata, check if it matches what's in S3
+	updateTaskStage("Checking cached file metadata...")
+
+	exists, s3Size, s3ETag := a.checkObjectExists(objectKey)
+	if !exists {
+		if a.config.Debug {
+			fmt.Printf("  💾 Have cached metadata but file doesn't exist in S3, will upload\n")
+		}
+		return false, result
+	}
+
+	s3ETag = strings.Trim(s3ETag, "\"")
+	isMultipart := strings.Contains(s3ETag, "-")
+
+	if a.config.Debug {
+		fmt.Printf("  💾 Using cached metadata for %s:\n", partition.TableName)
+		fmt.Printf("     Cached: size=%d, md5=%s\n", cachedSize, cachedMD5)
+		fmt.Printf("     S3: size=%d, etag=%s (multipart=%v)\n", s3Size, s3ETag, isMultipart)
+	}
+
+	// Check if cached metadata matches S3
+	if s3Size == cachedSize {
+		if !isMultipart && s3ETag == cachedMD5 {
+			// Cached metadata matches S3 - skip without extraction
+			result.Skipped = true
+			result.SkipReason = fmt.Sprintf("Cached metadata matches S3 (size=%d, md5=%s)", cachedSize, cachedMD5)
+			result.Stage = StageSkipped
+			result.BytesWritten = cachedSize
+			if a.config.Debug {
+				fmt.Printf("     ✅ Skipping based on cache: Size and MD5 match\n")
+			}
+			return true, result
+		} else if isMultipart && a.config.Debug {
+			fmt.Printf("     ℹ️  Multipart upload with matching size, proceeding with extraction to verify\n")
+		}
+	}
+
+	return false, result
+}
+
+// extractPartitionData extracts data from the partition
+func (a *Archiver) extractPartitionData(partition PartitionInfo, program *tea.Program, cache *PartitionCache, updateTaskStage func(string)) ([]byte, int64, error) {
+	extractStart := time.Now()
+	updateTaskStage("Extracting data...")
+	if program != nil && partition.RowCount > 0 {
+		program.Send(updateProgress("Extracting data...", 0, partition.RowCount))
+	}
+
+	data, err := a.extractDataWithProgress(partition, program)
+	if err != nil {
+		// Save error to cache
+		cache.setError(partition.TableName, fmt.Sprintf("Extraction failed: %v", err))
+		_ = cache.save(a.config.Table)
+		return nil, 0, fmt.Errorf("extraction failed: %w", err)
+	}
+
+	extractDuration := time.Since(extractStart)
+	if a.config.Debug {
+		fmt.Printf("  ⏱️  Extraction took %v for %s\n", extractDuration, partition.TableName)
+	}
+
+	return data, int64(len(data)), nil
+}
+
+// compressPartitionData compresses the extracted data
+func (a *Archiver) compressPartitionData(data []byte, partition PartitionInfo, program *tea.Program, cache *PartitionCache, updateTaskStage func(string)) ([]byte, string, error) {
+	compressStart := time.Now()
+	updateTaskStage("Compressing data...")
+	if program != nil {
+		program.Send(updateProgress("Compressing data...", 50, 100))
+	}
+
+	compressed, err := a.compressData(data)
+	if err != nil {
+		// Save error to cache
+		cache.setError(partition.TableName, fmt.Sprintf("Compression failed: %v", err))
+		_ = cache.save(a.config.Table)
+		return nil, "", fmt.Errorf("compression failed: %w", err)
+	}
+
+	if program != nil {
+		program.Send(updateProgress("Compressing data...", 100, 100))
+	}
+
+	compressDuration := time.Since(compressStart)
+	if a.config.Debug {
+		fmt.Printf("  ⏱️  Compression took %v for %s (%.1fx ratio)\n",
+			compressDuration, partition.TableName, float64(len(data))/float64(len(compressed)))
+	}
+
+	// Calculate MD5 hash of compressed data
+	hasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
+	hasher.Write(compressed)
+	localMD5 := hex.EncodeToString(hasher.Sum(nil))
+
+	return compressed, localMD5, nil
+}
+
+// checkExistingFile checks if file exists in S3 and matches local version
+func (a *Archiver) checkExistingFile(partition PartitionInfo, objectKey string, compressed []byte, localMD5 string, localSize, uncompressedSize int64, cache *PartitionCache, updateTaskStage func(string)) (bool, ProcessResult) {
+	result := ProcessResult{
+		Partition:    partition,
+		Compressed:   true,
+		BytesWritten: localSize,
+	}
+
+	updateTaskStage("Checking if file exists...")
+	exists, s3Size, s3ETag := a.checkObjectExists(objectKey)
+	if !exists {
+		if a.config.Debug {
+			fmt.Printf("  📊 File does not exist in S3: %s\n", objectKey)
+		}
+		return false, result
+	}
+
+	// Remove quotes from ETag if present
+	s3ETag = strings.Trim(s3ETag, "\"")
+	isMultipart := strings.Contains(s3ETag, "-")
+
+	// Always log comparison details in debug mode
+	if a.config.Debug {
+		fmt.Printf("  📊 Comparing files for %s:\n", partition.TableName)
+		fmt.Printf("     S3: size=%d, etag=%s (multipart=%v)\n", s3Size, s3ETag, isMultipart)
+		fmt.Printf("     Local: size=%d, md5=%s\n", localSize, localMD5)
+	}
+
+	if s3Size != localSize {
+		if a.config.Debug {
+			fmt.Printf("     ❌ Size mismatch: S3=%d, Local=%d\n", s3Size, localSize)
+		}
+		return false, result
+	}
+
+	// Size matches, check hash
+	if !isMultipart && s3ETag == localMD5 {
+		// Single-part upload with matching MD5
+		result.Skipped = true
+		result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and MD5 (%s)", s3Size, s3ETag)
+		result.Stage = StageSkipped
+		if a.config.Debug {
+			fmt.Printf("     ✅ Skipping: Size and MD5 match\n")
+		}
+		// Save to cache for future runs
+		cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
+		_ = cache.save(a.config.Table)
+		return true, result
+	}
+
+	if isMultipart {
+		// For multipart uploads, calculate the multipart ETag
+		localMultipartETag := a.calculateMultipartETag(compressed)
+		if a.config.Debug {
+			fmt.Printf("     Local multipart ETag: %s\n", localMultipartETag)
+		}
+		if s3ETag == localMultipartETag {
+			result.Skipped = true
+			result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and multipart ETag (%s)", s3Size, s3ETag)
+			result.Stage = StageSkipped
+			if a.config.Debug {
+				fmt.Printf("     ✅ Skipping: Size and multipart ETag match\n")
+			}
+			// Save to cache for future runs
+			cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
+			_ = cache.save(a.config.Table)
+			return true, result
+		}
+		if a.config.Debug {
+			fmt.Printf("     ❌ Multipart ETag mismatch: S3=%s, Local=%s\n", s3ETag, localMultipartETag)
+		}
+	} else if a.config.Debug {
+		fmt.Printf("     ❌ MD5 mismatch: S3=%s, Local=%s\n", s3ETag, localMD5)
+	}
+
+	// Size or hash doesn't match, we'll re-upload
+	if a.config.Debug {
+		fmt.Printf("     🔄 Will re-upload due to differences\n")
+	}
+
+	return false, result
 }
 
 func (a *Archiver) extractDataWithProgress(partition PartitionInfo, program *tea.Program) ([]byte, error) {

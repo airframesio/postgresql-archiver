@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestConfigValidation(t *testing.T) {
+func TestConfigValidation_ValidConfig(t *testing.T) {
 	t.Run("ValidConfig", func(t *testing.T) {
 		config := &Config{
 			Database: DatabaseConfig{
@@ -33,7 +33,9 @@ func TestConfigValidation(t *testing.T) {
 			t.Fatalf("valid config should not return error: %v", err)
 		}
 	})
+}
 
+func TestConfigValidation_MissingDatabaseFields(t *testing.T) {
 	t.Run("MissingDatabaseUser", func(t *testing.T) {
 		config := &Config{
 			Database: DatabaseConfig{
@@ -89,7 +91,9 @@ func TestConfigValidation(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+}
 
+func TestConfigValidation_MissingS3Fields(t *testing.T) {
 	t.Run("MissingS3Endpoint", func(t *testing.T) {
 		config := &Config{
 			Database: DatabaseConfig{
@@ -172,7 +176,9 @@ func TestConfigValidation(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+}
 
+func TestConfigValidation_MissingTable(t *testing.T) {
 	t.Run("MissingTable", func(t *testing.T) {
 		config := &Config{
 			Database: DatabaseConfig{
@@ -200,7 +206,9 @@ func TestConfigValidation(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+}
 
+func TestConfigValidation_InvalidDateFormat(t *testing.T) {
 	t.Run("InvalidDateFormat", func(t *testing.T) {
 		config := &Config{
 			Database: DatabaseConfig{
@@ -226,7 +234,9 @@ func TestConfigValidation(t *testing.T) {
 			t.Fatal("should return error for invalid date format")
 		}
 	})
+}
 
+func TestConfigValidation_DefaultValues(t *testing.T) {
 	t.Run("DefaultValues", func(t *testing.T) {
 		config := &Config{
 			Database: DatabaseConfig{
@@ -278,7 +288,9 @@ func TestConfigValidation(t *testing.T) {
 			t.Fatalf("expected default workers 4, got %d", config.Workers)
 		}
 	})
+}
 
+func TestConfigValidation_CacheViewerConfig(t *testing.T) {
 	t.Run("CacheViewerConfig", func(t *testing.T) {
 		config := &Config{
 			Database: DatabaseConfig{
@@ -313,7 +325,9 @@ func TestConfigValidation(t *testing.T) {
 			t.Fatalf("expected viewer port 8080, got %d", config.ViewerPort)
 		}
 	})
+}
 
+func TestConfigValidation_InvalidDatabasePort(t *testing.T) {
 	t.Run("InvalidDatabasePort", func(t *testing.T) {
 		testCases := []struct {
 			name string
@@ -353,7 +367,9 @@ func TestConfigValidation(t *testing.T) {
 			})
 		}
 	})
+}
 
+func TestConfigValidation_InvalidS3Region(t *testing.T) {
 	t.Run("InvalidS3Region", func(t *testing.T) {
 		testCases := []struct {
 			name   string
@@ -392,7 +408,9 @@ func TestConfigValidation(t *testing.T) {
 			})
 		}
 	})
+}
 
+func TestConfigValidation_ValidS3Regions(t *testing.T) {
 	t.Run("ValidS3Regions", func(t *testing.T) {
 		testCases := []string{
 			"auto",
@@ -430,7 +448,9 @@ func TestConfigValidation(t *testing.T) {
 			})
 		}
 	})
+}
 
+func TestConfigValidation_InvalidTableNames(t *testing.T) {
 	t.Run("InvalidTableNames", func(t *testing.T) {
 		testCases := []struct {
 			name      string
@@ -473,7 +493,9 @@ func TestConfigValidation(t *testing.T) {
 			})
 		}
 	})
+}
 
+func TestConfigValidation_ValidTableNames(t *testing.T) {
 	t.Run("ValidTableNames", func(t *testing.T) {
 		testCases := []string{
 			"test_table",
@@ -512,7 +534,9 @@ func TestConfigValidation(t *testing.T) {
 			})
 		}
 	})
+}
 
+func TestConfigValidation_InvalidWorkersCount(t *testing.T) {
 	t.Run("InvalidWorkersCount", func(t *testing.T) {
 		testCases := []struct {
 			name    string
@@ -552,7 +576,9 @@ func TestConfigValidation(t *testing.T) {
 			})
 		}
 	})
+}
 
+func TestConfigValidation_ValidWorkersCount(t *testing.T) {
 	t.Run("ValidWorkersCount", func(t *testing.T) {
 		testCases := []int{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000}
 
