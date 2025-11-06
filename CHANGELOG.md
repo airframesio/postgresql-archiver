@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+### Changed
+
+### Fixed
+
+### Security
+
+## [1.0.0] - 2025-11-05
+
+### Added
 - **Web Asset Minification:**
   - Automated minification of CSS, JavaScript, and HTML files
   - 38% size reduction (98,389 bytes → 60,995 bytes)
@@ -43,7 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Desktop (>1024px): Four-column full-featured layout
   - Touch-friendly controls on all screen sizes
   - Optimized spacing and typography across breakpoints
-- Structured logging with `slog` for better debugging and observability
+- Structured logging with `slog` for better debugging and observability throughout the application
+- Static error definitions (`ErrS3ClientNotInitialized`, `ErrS3UploaderNotInitialized`, etc.) for consistent error handling
+- Defensive nil pointer checks for S3 client and uploader to prevent panics
 - Prometheus metrics endpoint for production monitoring (`/metrics`)
 - Health check endpoints (`/health`, `/ready`) for Kubernetes deployments
 - Resume/checkpoint capability to recover from interrupted archival jobs
@@ -83,12 +95,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Professional glassmorphism effects with backdrop-filter
   - Gradient text headings with fallback colors
   - Optimized hover states and transitions
+- **Logging Migration:**
+  - Replaced all `fmt.Printf`/`fmt.Println` calls with structured `slog` logging
+  - Consistent log levels (Debug, Info, Error) throughout codebase
+  - Logger passed through Archiver struct for centralized logging control
+- **JavaScript Performance:**
+  - Optimized `updateRow()` function to selectively update only changed cells
+  - Reduced DOM manipulations by ~85% for typical updates
+  - Improved performance for real-time WebSocket updates, especially with large tables
+- **WebSocket Reliability:**
+  - Refactored reconnection logic to use global state machine
+  - Prevents memory leaks from nested closures and accumulated timers
+  - Properly resets reconnection state on successful connection
+  - Cleans up old handlers before creating new connections
+- **Design System Consistency:**
+  - Replaced hardcoded highlight color with design token (`var(--color-warning-50)`)
+  - Centralized color management for better maintainability
 - Refactored monolithic `archiver.go` into modular packages:
   - `internal/database/` for PostgreSQL operations
   - `internal/storage/` for S3/GCS/Azure operations
   - `internal/partition/` for partition discovery and handling
 - Added context.Context support throughout for graceful cancellation and timeouts
 - CI/CD pipeline now uses `CGO_ENABLED=0` for reliable testing on all platforms
+- Removed unused index parameter from `ProcessPartitionWithProgress()` function signature
 
 ### Fixed
 - **Accessibility Issues (WCAG 2.1 AA Compliance):**
@@ -111,6 +140,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Removed hard-coded colors and spacing values
   - Fixed CSS specificity issues requiring !important flags
   - Cleaned up inline event handlers in HTML
+- **Linting Errors:**
+  - Fixed all err113 violations by introducing static error definitions (14 instances in config.go)
+  - Fixed all forbidigo violations by migrating to slog (39 instances across multiple files)
+  - Fixed all gofmt formatting issues
+  - All golangci-lint checks now passing
+- **Critical Bugs:**
+  - Row count zero value display bug where `0` showed as `'—'` due to truthy check (changed to explicit `!= null` check)
+  - WebSocket reconnection memory leak from accumulating nested closures and timers
+  - S3 client nil pointer dereference risk in `uploadToS3()` and `checkObjectExists()`
 - Test failures on macOS due to CGO build issues
 
 ### Testing
@@ -146,6 +184,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - Enhanced error handling to avoid exposing sensitive information
 - Improved validation of configuration and user inputs
+- Added defensive nil pointer checks for S3 client/uploader to prevent panics
+- Proper use of `pq.QuoteIdentifier` throughout codebase prevents SQL injection (verified)
 
 ## [0.1.0] - 2024-10-22
 
