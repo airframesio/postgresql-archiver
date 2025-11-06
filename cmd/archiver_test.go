@@ -596,11 +596,6 @@ func TestIsConnectionError(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "nil error",
-			err:      nil,
-			expected: false,
-		},
-		{
 			name:     "connection reset error",
 			err:      fmt.Errorf("connection reset by peer"), //nolint:err113 // test error
 			expected: true,

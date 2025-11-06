@@ -1151,22 +1151,24 @@ func (m progressModel) renderProcessingSummary() []string {
 			sections = append(sections, line)
 		}
 
-		// Show recent slice results (current partition's in-progress work)
-		recentSlices := m.sliceResults.getRecent(5)
-		for _, sliceRes := range recentSlices {
-			var line string
-			if sliceRes.result.Skipped {
-				line = fmt.Sprintf("   ⏭  %s - %s", sliceRes.date, sliceRes.result.SkipReason)
-			} else if sliceRes.result.Error != nil {
-				line = fmt.Sprintf("   ❌ %s - Error: %v", sliceRes.date, sliceRes.result.Error)
-			} else if sliceRes.result.Uploaded && sliceRes.result.S3Key != "" {
-				line = fmt.Sprintf("   ✅ %s → s3://%s/%s (%d bytes) - Completed in %.1f seconds", sliceRes.date, m.config.S3.Bucket, sliceRes.result.S3Key, sliceRes.result.BytesWritten, sliceRes.result.Duration.Seconds())
-			} else if sliceRes.result.Uploaded {
-				line = fmt.Sprintf("   ✅ %s - Uploaded %d bytes - Completed in %.1f seconds", sliceRes.date, sliceRes.result.BytesWritten, sliceRes.result.Duration.Seconds())
-			} else {
-				line = fmt.Sprintf("   ⏸  %s - In progress", sliceRes.date)
+		// Show recent slice results (current partition's in-progress work) only if date-column is configured
+		if m.config.DateColumn != "" {
+			recentSlices := m.sliceResults.getRecent(5)
+			for _, sliceRes := range recentSlices {
+				var line string
+				if sliceRes.result.Skipped {
+					line = fmt.Sprintf("   ⏭  %s - %s", sliceRes.date, sliceRes.result.SkipReason)
+				} else if sliceRes.result.Error != nil {
+					line = fmt.Sprintf("   ❌ %s - Error: %v", sliceRes.date, sliceRes.result.Error)
+				} else if sliceRes.result.Uploaded && sliceRes.result.S3Key != "" {
+					line = fmt.Sprintf("   ✅ %s → s3://%s/%s (%d bytes) - Completed in %.1f seconds", sliceRes.date, m.config.S3.Bucket, sliceRes.result.S3Key, sliceRes.result.BytesWritten, sliceRes.result.Duration.Seconds())
+				} else if sliceRes.result.Uploaded {
+					line = fmt.Sprintf("   ✅ %s - Uploaded %d bytes - Completed in %.1f seconds", sliceRes.date, sliceRes.result.BytesWritten, sliceRes.result.Duration.Seconds())
+				} else {
+					line = fmt.Sprintf("   ⏸  %s - In progress", sliceRes.date)
+				}
+				sections = append(sections, line)
 			}
-			sections = append(sections, line)
 		}
 
 		sections = append(sections, "")

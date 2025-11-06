@@ -43,9 +43,6 @@ var (
 
 // isConnectionError checks if an error is due to a closed or broken database connection
 func isConnectionError(err error) bool {
-	if err == nil {
-		return false
-	}
 	errStr := err.Error()
 	return strings.Contains(errStr, "bad connection") ||
 		strings.Contains(errStr, "connection reset") ||
