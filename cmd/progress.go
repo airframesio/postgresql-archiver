@@ -1011,10 +1011,10 @@ func (m progressModel) renderProcessingPhase() []string {
 		// Show slice progress if partition is being split
 		if m.totalSlices > 0 {
 			sections = append(sections, "")
-			sliceInfo := fmt.Sprintf("   Partition Slices: %d/%d (%s)", m.currentSliceIndex+1, m.totalSlices, m.currentSliceDate)
+			sliceInfo := fmt.Sprintf("     Partition Slices: %d/%d (%s)", m.currentSliceIndex+1, m.totalSlices, m.currentSliceDate)
 			sections = append(sections, progressInfoStyle.Render(sliceInfo))
 			viewSliceProgress := m.sliceProgress.ViewAs(float64(m.currentSliceIndex+1) / float64(m.totalSlices))
-			sections = append(sections, "   "+viewSliceProgress)
+			sections = append(sections, "     "+viewSliceProgress)
 		}
 
 		if m.currentStage != "" {
