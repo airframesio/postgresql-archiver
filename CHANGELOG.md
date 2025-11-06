@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+### Changed
+
+### Fixed
+
+### Security
+
+## [1.0.3] - 2025-11-05
+
+### Added
 - **Homebrew Tap Distribution:**
   - Official Homebrew tap at `airframesio/tap`
   - One-command installation: `brew install airframesio/tap/postgresql-archiver`
@@ -21,10 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automated Homebrew formula generation and publishing
   - Enhanced release notes with installation instructions
   - Improved changelog generation with categorized changes
-
-### Fixed
-
-### Security
+  - Simplified release workflow from 100+ lines to 10 lines
 
 ## [1.0.2] - 2025-11-05
 
