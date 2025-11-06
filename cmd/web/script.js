@@ -281,6 +281,22 @@ function connectWebSocket() {
 function updateTaskPanel(status) {
     const panel = document.getElementById('task-panel');
 
+    // Update version information
+    if (status.version) {
+        const versionInfo = document.getElementById('version-info');
+        versionInfo.textContent = 'v' + status.version;
+
+        // Show update banner if available
+        if (status.updateAvailable && status.latestVersion) {
+            const updateBanner = document.getElementById('update-banner');
+            const updateMessage = document.getElementById('update-message');
+            updateMessage.innerHTML = 'Update available: v' + status.version + ' → v' + status.latestVersion +
+                ' <a href="' + (status.releaseUrl || 'https://github.com/airframesio/postgresql-archiver/releases') +
+                '" target="_blank">Download</a>';
+            updateBanner.style.display = 'flex';
+        }
+    }
+
     if (status.archiverRunning) {
         panel.classList.remove('idle');
 

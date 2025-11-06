@@ -24,7 +24,14 @@
                     <span class="pulse" aria-hidden="true"></span>
                     <span id="status-text">Connected to local cache</span>
                 </span>
+                <span id="version-info"></span>
                 <span id="last-update">Last updated: Never</span>
+            </div>
+            <div class="update-banner" id="update-banner" style="display: none;" aria-live="polite">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2v20M5 12l7-7 7 7"/>
+                </svg>
+                <span id="update-message"></span>
             </div>
             <a href="https://github.com/airframesio/postgresql-archiver" target="_blank" class="github-link">
                 <svg viewBox="0 0 16 16">

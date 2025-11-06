@@ -17,10 +17,18 @@ import (
 )
 
 var (
+	// Version information - set via ldflags during build
+	// Example: go build -ldflags "-X github.com/airframesio/postgresql-archiver/cmd.Version=1.2.3"
+	Version = "dev" // Default to "dev" if not set during build
+
 	// signalContext is set by main() before Cobra initialization
 	// This ensures signal handling is set up before any library can interfere
 	signalContext context.Context
 	stopFilePath  string
+
+	// versionCheckResult stores the result of the background version check
+	// This is shared between the startup check and TUI display
+	versionCheckResult *VersionCheckResult
 
 	cfgFile          string
 	debug            bool
@@ -152,8 +160,9 @@ func initLogger(isDebug bool, format string) {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "postgresql-archiver",
-	Short: "📦 Archive PostgreSQL partition data to object storage",
+	Use:     "postgresql-archiver",
+	Version: Version,
+	Short:   "📦 Archive PostgreSQL partition data to object storage",
 	Long: titleStyle.Render("PostgreSQL Archiver") + `
 
 A CLI tool to efficiently archive PostgreSQL partitioned table data to object storage.
@@ -308,7 +317,7 @@ func runArchive() {
 
 	// Log startup banner
 	logger.Info("")
-	logger.Info("🚀 PostgreSQL Archiver")
+	logger.Info(fmt.Sprintf("🚀 PostgreSQL Archiver v%s", Version))
 	logger.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	// Display stop instructions (for Warp terminal compatibility) - only in debug mode
@@ -324,6 +333,30 @@ func runArchive() {
 		os.Exit(1)
 	}
 	logger.Debug("Configuration validated successfully")
+
+	// Check for updates in background (non-blocking)
+	updateCheckDone := make(chan struct{})
+	go func() {
+		defer close(updateCheckDone)
+		result := checkForUpdates(context.Background(), Version)
+		versionCheckResult = &result
+
+		if result.UpdateAvailable {
+			logger.Info("")
+			logger.Info(fmt.Sprintf("💡 %s", formatUpdateMessage(result)))
+		} else if result.Error != nil && config.Debug {
+			logger.Debug(fmt.Sprintf("Version check failed: %v", result.Error))
+		}
+	}()
+
+	// Give version check a short time to complete, but don't block startup
+	select {
+	case <-updateCheckDone:
+		// Version check completed quickly
+	case <-time.After(2 * time.Second):
+		// Continue without waiting further
+		logger.Debug("Version check taking longer than expected, continuing...")
+	}
 
 	// Use the signal context created in main() before Cobra initialization
 	// This ensures signals were registered before any library interference

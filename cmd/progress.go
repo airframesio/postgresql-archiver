@@ -1014,6 +1014,20 @@ func (m progressModel) renderBanner() []string {
 	sections = append(sections, makeLine(""))
 	sections = append(sections, makeLine("        "+authorStyle.Render("Created by Airframes <hello@airframes.io>")))
 	sections = append(sections, makeLine("     "+authorStyle.Render("https://github.com/airframesio/postgresql-archiver")))
+	sections = append(sections, makeLine("                          "+authorStyle.Render(fmt.Sprintf("Version %s", Version))))
+
+	// Display update notification if available
+	if versionCheckResult != nil && versionCheckResult.UpdateAvailable {
+		updateStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFB700")).
+			Bold(true)
+		updateMsg := fmt.Sprintf("💡 Update available: v%s → v%s",
+			versionCheckResult.CurrentVersion,
+			versionCheckResult.LatestVersion)
+		sections = append(sections, makeLine(""))
+		sections = append(sections, makeLine("              "+updateStyle.Render(updateMsg)))
+	}
+
 	sections = append(sections, makeLine(""))
 	sections = append(sections, bottomBorder)
 	sections = append(sections, "")

@@ -75,6 +75,10 @@ type StatusResponse struct {
 	ArchiverRunning bool      `json:"archiverRunning"`
 	PID             int       `json:"pid,omitempty"`
 	CurrentTask     *TaskInfo `json:"currentTask,omitempty"`
+	Version         string    `json:"version"`
+	UpdateAvailable bool      `json:"updateAvailable"`
+	LatestVersion   string    `json:"latestVersion,omitempty"`
+	ReleaseURL      string    `json:"releaseUrl,omitempty"`
 }
 
 // WebSocket message types
@@ -233,6 +237,14 @@ func serveStatusData(w http.ResponseWriter, _ *http.Request) {
 
 	response := StatusResponse{
 		ArchiverRunning: false,
+		Version:         Version,
+	}
+
+	// Add version check information if available
+	if versionCheckResult != nil {
+		response.UpdateAvailable = versionCheckResult.UpdateAvailable
+		response.LatestVersion = versionCheckResult.LatestVersion
+		response.ReleaseURL = versionCheckResult.ReleaseURL
 	}
 
 	// Check if PID file exists and process is running
@@ -532,6 +544,14 @@ func getCacheDataForWS() CacheResponse {
 func getStatusDataForWS() StatusResponse {
 	response := StatusResponse{
 		ArchiverRunning: false,
+		Version:         Version,
+	}
+
+	// Add version check information if available
+	if versionCheckResult != nil {
+		response.UpdateAvailable = versionCheckResult.UpdateAvailable
+		response.LatestVersion = versionCheckResult.LatestVersion
+		response.ReleaseURL = versionCheckResult.ReleaseURL
 	}
 
 	// Check if PID file exists and process is running
