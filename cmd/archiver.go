@@ -46,6 +46,7 @@ type Archiver struct {
 	s3Uploader   *s3manager.Uploader
 	progressChan chan tea.Cmd
 	logger       *slog.Logger
+	ctx          context.Context // Context for cancellation
 }
 
 type PartitionInfo struct {
@@ -74,6 +75,9 @@ func NewArchiver(config *Config, logger *slog.Logger) *Archiver {
 }
 
 func (a *Archiver) Run(ctx context.Context) error {
+	// Store context for cancellation checks during processing
+	a.ctx = ctx
+
 	// Write PID file
 	if err := WritePIDFile(); err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
@@ -706,12 +710,30 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program
 		return skipResult
 	}
 
+	// Check for cancellation before extracting
+	select {
+	case <-a.ctx.Done():
+		result.Error = a.ctx.Err()
+		result.Stage = "Cancelled"
+		return result
+	default:
+	}
+
 	// Extract data
 	data, uncompressedSize, err := a.extractPartitionData(partition, program, cache, updateTaskStage)
 	if err != nil {
 		result.Error = err
 		result.Stage = "Extracting"
 		return result
+	}
+
+	// Check for cancellation after extraction
+	select {
+	case <-a.ctx.Done():
+		result.Error = a.ctx.Err()
+		result.Stage = "Cancelled"
+		return result
+	default:
 	}
 
 	// Compress data
@@ -727,6 +749,15 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program
 	// Check if we can skip upload
 	if shouldSkip, skipResult := a.checkExistingFile(partition, objectKey, compressed, localMD5, int64(len(compressed)), uncompressedSize, cache, updateTaskStage); shouldSkip {
 		return skipResult
+	}
+
+	// Check for cancellation before upload
+	select {
+	case <-a.ctx.Done():
+		result.Error = a.ctx.Err()
+		result.Stage = "Cancelled"
+		return result
+	default:
 	}
 
 	// Upload to S3
@@ -1098,7 +1129,7 @@ func (a *Archiver) extractRowsWithProgress(partition PartitionInfo, program *tea
 	quotedTable := pq.QuoteIdentifier(partition.TableName)
 	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable) //nolint:gosec // Table name is quoted with pq.QuoteIdentifier
 
-	rows, err := a.db.Query(query)
+	rows, err := a.db.QueryContext(a.ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -1118,6 +1149,15 @@ func (a *Archiver) extractRowsWithProgress(partition PartitionInfo, program *tea
 	}
 
 	for rows.Next() {
+		// Check for cancellation periodically (every 1000 rows)
+		if rowCount%1000 == 0 {
+			select {
+			case <-a.ctx.Done():
+				return nil, a.ctx.Err()
+			default:
+			}
+		}
+
 		var jsonData json.RawMessage
 		if err := rows.Scan(&jsonData); err != nil {
 			return nil, err
