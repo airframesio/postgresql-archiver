@@ -3,6 +3,7 @@ package formatters
 import (
 	"bytes"
 	"fmt"
+	"sort"
 
 	"github.com/parquet-go/parquet-go"
 )
@@ -23,14 +24,26 @@ func (f *ParquetFormatter) Format(rows []map[string]interface{}) ([]byte, error)
 
 	var buffer bytes.Buffer
 
-	// Create parquet writer using generic writer for maps
-	writer := parquet.NewGenericWriter[map[string]any](&buffer)
+	// Build schema from first row
+	schema, columns := buildSchemaFromRow(rows[0])
+
+	// Create parquet writer with the dynamic schema
+	writer := parquet.NewWriter(&buffer, schema)
 	defer writer.Close()
 
-	// Write all rows
-	_, err := writer.Write(rows)
-	if err != nil {
-		return nil, fmt.Errorf("failed to write parquet data: %w", err)
+	// Write each row
+	for _, row := range rows {
+		// Convert map to parquet row format
+		parquetRow := make(parquet.Row, 0, len(columns))
+		for i, col := range columns {
+			value := row[col]
+			parquetRow = append(parquetRow, parquet.ValueOf(value).Level(0, 0, i))
+		}
+
+		_, err := writer.WriteRows([]parquet.Row{parquetRow})
+		if err != nil {
+			return nil, fmt.Errorf("failed to write parquet row: %w", err)
+		}
 	}
 
 	// Close writer to flush data
@@ -39,6 +52,52 @@ func (f *ParquetFormatter) Format(rows []map[string]interface{}) ([]byte, error)
 	}
 
 	return buffer.Bytes(), nil
+}
+
+// buildSchemaFromRow creates a Parquet schema from a sample row
+func buildSchemaFromRow(row map[string]interface{}) (*parquet.Schema, []string) {
+	// Get sorted column names for consistent ordering
+	columns := make([]string, 0, len(row))
+	for col := range row {
+		columns = append(columns, col)
+	}
+	sort.Strings(columns)
+
+	// Build schema fields as a Group map
+	fields := make(parquet.Group)
+	for _, col := range columns {
+		value := row[col]
+
+		// Determine Parquet type based on Go type
+		var field parquet.Node
+		switch value.(type) {
+		case bool:
+			field = parquet.Optional(parquet.Leaf(parquet.BooleanType))
+		case int, int8, int16, int32:
+			field = parquet.Optional(parquet.Leaf(parquet.Int32Type))
+		case int64:
+			field = parquet.Optional(parquet.Leaf(parquet.Int64Type))
+		case float32:
+			field = parquet.Optional(parquet.Leaf(parquet.FloatType))
+		case float64:
+			field = parquet.Optional(parquet.Leaf(parquet.DoubleType))
+		case string:
+			field = parquet.Optional(parquet.String())
+		case []byte:
+			field = parquet.Optional(parquet.Leaf(parquet.ByteArrayType))
+		case nil:
+			// For nil values, default to string (most flexible)
+			field = parquet.Optional(parquet.String())
+		default:
+			// For unknown types, convert to string
+			field = parquet.Optional(parquet.String())
+		}
+
+		fields[col] = field
+	}
+
+	schema := parquet.NewSchema("postgresql_export", fields)
+	return schema, columns
 }
 
 // Extension returns the file extension for Parquet files
