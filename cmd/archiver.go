@@ -92,6 +92,7 @@ func NewArchiver(config *Config, logger *slog.Logger) *Archiver {
 	}
 }
 
+//nolint:gocognit // complex orchestration function
 func (a *Archiver) Run(ctx context.Context) error {
 	// Store context for cancellation checks during processing
 	a.ctx = ctx
@@ -225,7 +226,7 @@ func (a *Archiver) Run(ctx context.Context) error {
 }
 
 // runArchivalProcess runs the archival process without the TUI (for debug mode)
-func (a *Archiver) runArchivalProcess(ctx context.Context, _ *tea.Program, taskInfo *TaskInfo) error {
+func (a *Archiver) runArchivalProcess(ctx context.Context, _ *tea.Program, _ *TaskInfo) error {
 	// Ensure database is always closed on exit
 	defer func() {
 		if a.db != nil {
@@ -788,6 +789,8 @@ func (a *Archiver) shouldSplitPartition(partition PartitionInfo) bool {
 }
 
 // processPartitionWithSplit splits a partition into multiple output files based on date_column
+//
+//nolint:gocognit // complex partition splitting logic
 func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *tea.Program) ProcessResult {
 	result := ProcessResult{
 		Partition: partition,
@@ -976,7 +979,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	select {
 	case <-a.ctx.Done():
 		result.Error = a.ctx.Err()
-		result.Stage = "Cancelled"
+		result.Stage = StageCancelled
 		result.Duration = time.Since(startTime)
 		return result
 	default:
@@ -995,7 +998,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	select {
 	case <-a.ctx.Done():
 		result.Error = a.ctx.Err()
-		result.Stage = "Cancelled"
+		result.Stage = StageCancelled
 		result.Duration = time.Since(startTime)
 		return result
 	default:
@@ -1022,7 +1025,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	select {
 	case <-a.ctx.Done():
 		result.Error = a.ctx.Err()
-		result.Stage = "Cancelled"
+		result.Stage = StageCancelled
 		result.Duration = time.Since(startTime)
 		return result
 	default:
@@ -1128,7 +1131,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 	select {
 	case <-a.ctx.Done():
 		result.Error = a.ctx.Err()
-		result.Stage = "Cancelled"
+		result.Stage = StageCancelled
 		result.Duration = time.Since(sliceStartTime)
 		return result
 	default:
@@ -1169,7 +1172,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 	select {
 	case <-a.ctx.Done():
 		result.Error = a.ctx.Err()
-		result.Stage = "Cancelled"
+		result.Stage = StageCancelled
 		result.Duration = time.Since(sliceStartTime)
 		return result
 	default:
@@ -1199,7 +1202,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 	select {
 	case <-a.ctx.Done():
 		result.Error = a.ctx.Err()
-		result.Stage = "Cancelled"
+		result.Stage = StageCancelled
 		result.Duration = time.Since(sliceStartTime)
 		return result
 	default:
@@ -1570,6 +1573,8 @@ func (a *Archiver) printSummary(results []ProcessResult) {
 }
 
 // extractRowsWithProgress extracts rows from partition as maps for formatting
+//
+//nolint:gocognit // complex row extraction with progress tracking
 func (a *Archiver) extractRowsWithProgress(partition PartitionInfo, program *tea.Program) ([]map[string]interface{}, error) {
 	quotedTable := pq.QuoteIdentifier(partition.TableName)
 	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable) //nolint:gosec // Table name is quoted with pq.QuoteIdentifier

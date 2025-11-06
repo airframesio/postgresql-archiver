@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/progress"
@@ -26,6 +27,74 @@ const (
 	PhaseProcessing
 	PhaseComplete
 )
+
+// safeSliceResults is a thread-safe wrapper for slice results
+type safeSliceResults struct {
+	mu      sync.RWMutex
+	results []struct {
+		date   string
+		result ProcessResult
+	}
+}
+
+func newSafeSliceResults() *safeSliceResults {
+	return &safeSliceResults{
+		results: make([]struct {
+			date   string
+			result ProcessResult
+		}, 0),
+	}
+}
+
+func (s *safeSliceResults) append(date string, result ProcessResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.results = append(s.results, struct {
+		date   string
+		result ProcessResult
+	}{
+		date:   date,
+		result: result,
+	})
+
+	// Keep only the last 10 slice results to avoid memory growth
+	if len(s.results) > 10 {
+		s.results = s.results[len(s.results)-10:]
+	}
+}
+
+func (s *safeSliceResults) clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.results = nil
+}
+
+func (s *safeSliceResults) len() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.results)
+}
+
+func (s *safeSliceResults) getRecent(n int) []struct {
+	date   string
+	result ProcessResult
+} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	startIndex := 0
+	if len(s.results) > n {
+		startIndex = len(s.results) - n
+	}
+
+	// Make a copy to avoid holding the lock during rendering
+	resultsCopy := make([]struct {
+		date   string
+		result ProcessResult
+	}, len(s.results[startIndex:]))
+	copy(resultsCopy, s.results[startIndex:])
+	return resultsCopy
+}
 
 type progressModel struct {
 	phase           Phase
@@ -67,10 +136,7 @@ type progressModel struct {
 	totalSlices       int
 	currentSliceDate  string
 	sliceProgress     progress.Model
-	sliceResults      []struct {
-		date   string
-		result ProcessResult
-	}
+	sliceResults      *safeSliceResults
 }
 
 type progressMsg struct {
@@ -237,6 +303,7 @@ func newProgressModelWithArchiver(ctx context.Context, cancel context.CancelFunc
 		cancel:          cancel,
 		partitionCache:  cache,
 		taskInfo:        taskInfo,
+		sliceResults:    newSafeSliceResults(),
 	}
 }
 
@@ -830,7 +897,7 @@ func (m progressModel) handlePartitionCompleteMsg(msg partitionCompleteMsg) (tea
 	m.currentSliceIndex = 0
 	m.totalSlices = 0
 	m.currentSliceDate = ""
-	m.sliceResults = nil // Clear slice results for next partition
+	m.sliceResults.clear() // Clear slice results for next partition
 
 	if len(m.partitions) > 0 {
 		overallPercent := float64(m.currentIndex) / float64(len(m.partitions))
@@ -891,18 +958,7 @@ func (m progressModel) handleSliceStartMsg(msg sliceStartMsg) (tea.Model, tea.Cm
 
 func (m progressModel) handleSliceCompleteMsg(msg sliceCompleteMsg) (tea.Model, tea.Cmd) {
 	// Store slice result for display in Recent Results
-	m.sliceResults = append(m.sliceResults, struct {
-		date   string
-		result ProcessResult
-	}{
-		date:   msg.sliceDate,
-		result: msg.result,
-	})
-
-	// Keep only the last 10 slice results to avoid memory growth
-	if len(m.sliceResults) > 10 {
-		m.sliceResults = m.sliceResults[len(m.sliceResults)-10:]
-	}
+	m.sliceResults.append(msg.sliceDate, msg.result)
 
 	return m, nil
 }
@@ -1068,7 +1124,9 @@ func (m progressModel) renderProcessingSummary() []string {
 	var sections []string
 
 	// Show completed partitions first, then current partition's slices
-	if len(m.results) > 0 || len(m.sliceResults) > 0 {
+	hasResults := len(m.results) > 0 || m.sliceResults.len() > 0
+
+	if hasResults {
 		sections = append(sections, tableHeaderStyle.Render("   Recent Results"))
 		sections = append(sections, "")
 
@@ -1094,11 +1152,8 @@ func (m progressModel) renderProcessingSummary() []string {
 		}
 
 		// Show recent slice results (current partition's in-progress work)
-		sliceStartIndex := 0
-		if len(m.sliceResults) > 5 {
-			sliceStartIndex = len(m.sliceResults) - 5
-		}
-		for _, sliceRes := range m.sliceResults[sliceStartIndex:] {
+		recentSlices := m.sliceResults.getRecent(5)
+		for _, sliceRes := range recentSlices {
 			var line string
 			if sliceRes.result.Skipped {
 				line = fmt.Sprintf("   ⏭  %s - %s", sliceRes.date, sliceRes.result.SkipReason)
