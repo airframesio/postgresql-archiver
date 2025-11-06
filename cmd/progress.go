@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/lib/pq"
 )
 
 type Phase int
@@ -47,6 +50,7 @@ type progressModel struct {
 	errChan         chan<- error
 	resultsChan     chan<- []ProcessResult
 	initialized     bool
+	ctx             context.Context
 	pendingTables   []struct {
 		name string
 		date time.Time
@@ -122,6 +126,15 @@ var (
 	stageStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#04B575")).
 			Margin(0, 2)
+
+	tableHeaderStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FFAA00")).
+				Bold(true).
+				Margin(0, 2)
+
+	progressInfoStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#888888")).
+				Margin(0, 2)
 )
 
 // updateTaskInfo updates the task info file with current progress
@@ -147,7 +160,7 @@ func (m *progressModel) updateTaskInfo() {
 	}
 }
 
-func newProgressModelWithArchiver(config *Config, archiver *Archiver, errChan chan<- error, resultsChan chan<- []ProcessResult, taskInfo *TaskInfo) progressModel {
+func newProgressModelWithArchiver(ctx context.Context, config *Config, archiver *Archiver, errChan chan<- error, resultsChan chan<- []ProcessResult, taskInfo *TaskInfo) progressModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -184,6 +197,7 @@ func newProgressModelWithArchiver(config *Config, archiver *Archiver, errChan ch
 		errChan:         errChan,
 		resultsChan:     resultsChan,
 		initialized:     false,
+		ctx:             ctx,
 		partitionCache:  cache,
 		taskInfo:        taskInfo,
 	}
@@ -224,7 +238,7 @@ func (m *progressModel) doConnect() tea.Cmd {
 		}
 
 		// Connect to database
-		if err := m.archiver.connect(); err != nil {
+		if err := m.archiver.connect(m.ctx); err != nil {
 			if m.errChan != nil {
 				m.errChan <- err
 			}
@@ -245,7 +259,7 @@ func (m *progressModel) doCheckPermissions() tea.Cmd {
 		}
 
 		// Check table permissions
-		if err := m.archiver.checkTablePermissions(); err != nil {
+		if err := m.archiver.checkTablePermissions(m.ctx); err != nil {
 			if m.errChan != nil {
 				m.errChan <- fmt.Errorf("permission check failed: %w", err)
 			}
@@ -326,6 +340,11 @@ func (m *progressModel) doDiscover() tea.Cmd {
 			}{name: tableName, date: date})
 		}
 
+		// Check for errors from iterating over rows
+		if err := rows.Err(); err != nil {
+			return messageMsg(fmt.Sprintf("❌ Failed to scan partitions: %v", err))
+		}
+
 		// Return the discovered tables
 		if len(matchingTables) == 0 {
 			return messageMsg("⚠️ No matching partitions found")
@@ -389,7 +408,7 @@ func (m *progressModel) countNextTable() tea.Cmd {
 
 		// If not in cache or expired, count from database
 		if !fromCache {
-			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", table.name)
+			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", pq.QuoteIdentifier(table.name))
 			if err := m.archiver.db.QueryRow(countQuery).Scan(&count); err == nil {
 				// Save to cache (preserving existing metadata)
 				if m.partitionCache != nil {
@@ -435,7 +454,7 @@ func (m *progressModel) processNext() tea.Cmd {
 	return func() tea.Msg {
 		// Actually process the partition using the archiver
 		if m.archiver != nil && m.archiver.db != nil {
-			result := m.archiver.ProcessPartitionWithProgress(partition, index, nil)
+			result := m.archiver.ProcessPartitionWithProgress(partition, nil)
 
 			// Debug: log any errors
 			if result.Error != nil && m.config.Debug {
@@ -463,340 +482,354 @@ func (m *progressModel) processNext() tea.Cmd {
 func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" || msg.String() == "q" {
-			m.done = true
-			return m, tea.Quit
-		}
-
+		return m.handleKeyMsg(msg)
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.currentProgress.Width = msg.Width - 10
-		m.overallProgress.Width = msg.Width - 10
-		return m, nil
-
+		return m.handleWindowSizeMsg(msg)
 	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.currentSpinner, cmd = m.currentSpinner.Update(msg)
-		return m, cmd
-
+		return m.handleSpinnerTickMsg(msg)
 	case progress.FrameMsg:
-		progressModel, cmd := m.currentProgress.Update(msg)
-		m.currentProgress = progressModel.(progress.Model)
-
-		overallModel, cmd2 := m.overallProgress.Update(msg)
-		m.overallProgress = overallModel.(progress.Model)
-
-		return m, tea.Batch(cmd, cmd2)
-
+		return m.handleProgressFrameMsg(msg)
 	case phaseMsg:
-		m.phase = msg.phase
-		m.currentStage = msg.message
-
-		// Handle phase transitions
-		switch msg.phase {
-		case PhaseConnecting:
-			// Start the connection process
-			return m, m.doConnect()
-		case PhaseCheckingPermissions:
-			// Check table permissions
-			return m, m.doCheckPermissions()
-		case PhaseDiscovering:
-			// Start discovery
-			return m, m.doDiscover()
-		case PhaseCounting:
-			// Start counting
-			if len(m.pendingTables) > 0 {
-				// Set initial stage to show first table
-				if m.currentCountIndex == 0 && len(m.pendingTables) > 0 {
-					m.currentStage = fmt.Sprintf("Counting rows: 0/%d - %s", len(m.pendingTables), m.pendingTables[0].name)
-				}
-				return m, m.countNextTable()
-			}
-		case PhaseProcessing:
-			// Start processing with a ticker for stage updates
-			if len(m.partitions) > 0 {
-				return m, tea.Batch(
-					m.processNext(),
-					tea.Tick(time.Millisecond*500, func(t time.Time) tea.Msg {
-						return stageTickMsg(t)
-					}),
-				)
-			}
-		}
-		return m, nil
-
+		return m.handlePhaseMsg(msg)
 	case messageMsg:
-		m.messages = append(m.messages, string(msg))
-		// Keep only last 10 messages
-		if len(m.messages) > 10 {
-			m.messages = m.messages[len(m.messages)-10:]
-		}
-
-		msgStr := string(msg)
-
-		// Check if we need to start the archiving process
-		if strings.Contains(msgStr, "Starting archive process") {
-			// Start the connection phase
-			m.phase = PhaseConnecting
-			m.currentStage = "Connecting to database..."
-			m.updateTaskInfo()
-			return m, m.doConnect()
-		}
-
-		// Check if we need to transition phases based on the message
-		if strings.Contains(msgStr, "✅ Table permissions verified") && m.phase == PhaseCheckingPermissions {
-			// Add S3 connection message
-			m.messages = append(m.messages, fmt.Sprintf("✅ Connected to S3 at s3://%s", m.config.S3.Bucket))
-			if len(m.messages) > 10 {
-				m.messages = m.messages[len(m.messages)-10:]
-			}
-
-			// Move to discovery phase after permissions are verified
-			m.phase = PhaseDiscovering
-			m.currentStage = "Discovering partitions..."
-			m.updateTaskInfo()
-			return m, m.doDiscover()
-		}
-
-		// Check for permission failure
-		if strings.Contains(msgStr, "❌ Permission check failed") {
-			return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
-		}
-
-		return m, nil
-
+		return m.handleMessageMsg(msg)
 	case connectedMsg:
-		// Add connection success message
-		m.messages = append(m.messages, fmt.Sprintf("✅ Connected to PostgreSQL at %s", msg.host))
-
-		// Start cache viewer server if enabled
-		if m.config.CacheViewer {
-			// Start background goroutines (only starts once even if called multiple times)
-			startBackgroundServices()
-
-			go func() {
-				// Create a new mux to avoid conflicts
-				mux := http.NewServeMux()
-				mux.HandleFunc("/", serveCacheViewer)
-				mux.HandleFunc("/api/cache", serveCacheData)
-				mux.HandleFunc("/api/status", serveStatusData)
-				mux.HandleFunc("/ws", handleWebSocket)
-
-				addr := fmt.Sprintf(":%d", m.config.ViewerPort)
-				server := &http.Server{
-					Addr:    addr,
-					Handler: mux,
-				}
-
-				// Start the server
-				if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					// Log error but don't crash the archiver
-					fmt.Printf("Cache viewer server error: %v\n", err)
-				}
-			}()
-			m.messages = append(m.messages, fmt.Sprintf("🌐 Cache viewer started at http://localhost:%d", m.config.ViewerPort))
-		}
-
-		if len(m.messages) > 10 {
-			m.messages = m.messages[len(m.messages)-10:]
-		}
-		// Move to permission checking phase
-		m.phase = PhaseCheckingPermissions
-		m.currentStage = "Checking table permissions..."
-		m.updateTaskInfo()
-		return m, m.doCheckPermissions()
-
+		return m.handleConnectedMsg(msg)
 	case discoveredTablesMsg:
-		// We've discovered tables, now we need to count them or skip counting
-		m.messages = append(m.messages, fmt.Sprintf("📊 Found %d partitions to process", len(msg.tables)))
-		if len(m.messages) > 10 {
-			m.messages = m.messages[len(m.messages)-10:]
-		}
-
-		if m.config.SkipCount {
-			// Skip counting, create partitions with unknown counts
-			partitions := make([]PartitionInfo, len(msg.tables))
-			for i, table := range msg.tables {
-				partitions[i] = PartitionInfo{
-					TableName: table.name,
-					Date:      table.date,
-					RowCount:  -1,
-				}
-			}
-			return m, func() tea.Msg {
-				return partitionsFoundMsg{partitions: partitions}
-			}
-		} else {
-			// Start counting phase
-			m.countTotal = len(msg.tables)
-			m.countProgress = 0
-			m.pendingTables = msg.tables
-			m.countedPartitions = make([]PartitionInfo, 0, len(msg.tables))
-			m.currentCountIndex = 0
-
-			return m, func() tea.Msg {
-				return phaseMsg{
-					phase:   PhaseCounting,
-					message: fmt.Sprintf("Counting rows in %d partitions...", len(msg.tables)),
-				}
-			}
-		}
-
+		return m.handleDiscoveredTablesMsg(msg)
 	case partitionsFoundMsg:
-		// Mark counting as complete first
-		if m.phase == PhaseCounting {
-			m.countProgress = m.countTotal
-			m.messages = append(m.messages, fmt.Sprintf("✅ Finished counting rows in %d partitions", len(msg.partitions)))
-			if len(m.messages) > 10 {
-				m.messages = m.messages[len(m.messages)-10:]
-			}
-		}
-
-		m.partitions = msg.partitions
-		m.phase = PhaseProcessing
-		m.results = make([]ProcessResult, 0, len(msg.partitions))
-		m.currentIndex = 0
-		m.currentStage = "" // Clear the stage from counting
-
-		// Add a message about starting processing
-		m.messages = append(m.messages, fmt.Sprintf("🚀 Starting to process %d partitions", len(msg.partitions)))
-		if len(m.messages) > 10 {
-			m.messages = m.messages[len(m.messages)-10:]
-		}
-
-		// Start processing the first partition with a small delay to show completion
-		if len(msg.partitions) > 0 {
-			return m, tea.Sequence(
-				tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
-					return nil
-				}),
-				m.processNext(),
-			)
-		}
-		return m, nil
-
+		return m.handlePartitionsFoundMsg(msg)
 	case tableCountedMsg:
-		// Store the result
-		if msg.count >= 0 {
-			m.countedPartitions = append(m.countedPartitions, PartitionInfo{
-				TableName: msg.table.name,
-				Date:      msg.table.date,
-				RowCount:  msg.count,
-			})
-		}
-
-		// Update progress
-		m.currentCountIndex++
-		m.countProgress = m.currentCountIndex
-		m.currentStage = fmt.Sprintf("Counting rows: %d/%d - %s", m.currentCountIndex, m.countTotal, msg.table.name)
-
-		// Continue counting the next table or finish
-		return m, m.countNextTable()
-
+		return m.handleTableCountedMsg(msg)
 	case countProgressMsg:
-		m.countProgress = msg.current
-		m.countTotal = msg.total
-		m.currentStage = fmt.Sprintf("Counting rows: %d/%d - %s", msg.current, msg.total, msg.tableName)
-		return m, nil
-
+		return m.handleCountProgressMsg(msg)
 	case progressMsg:
-		m.currentStage = msg.stage
-		m.currentRows = msg.current
-		m.totalRows = msg.total
-		m.updateTaskInfo() // Update task info when progress changes
-
-		if msg.total > 0 {
-			percent := float64(msg.current) / float64(msg.total)
-			cmd := m.currentProgress.SetPercent(percent)
-			return m, cmd
-		}
-		return m, nil
-
+		return m.handleProgressMsg(msg)
 	case partitionCompleteMsg:
-		m.results = append(m.results, msg.result)
-		m.currentIndex = msg.index + 1
-		m.updateTaskInfo() // Update task info when partition completes
+		return m.handlePartitionCompleteMsg(msg)
+	case allCompleteMsg:
+		return m.handleAllCompleteMsg(msg)
+	case stageUpdateMsg:
+		return m.handleStageUpdateMsg(msg)
+	case stageTickMsg:
+		return m.handleStageTickMsg(msg)
+	}
+	return m, nil
+}
 
-		// Clear the current stage and reset processing start time for next partition
-		m.currentStage = ""
-		m.processingStartTime = time.Time{} // Reset to zero value
+func (m progressModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" || msg.String() == "q" {
+		m.done = true
+		return m, tea.Quit
+	}
+	return m, nil
+}
 
-		// Update overall progress
+func (m progressModel) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	m.width = msg.Width
+	m.height = msg.Height
+	m.currentProgress.Width = msg.Width - 10
+	m.overallProgress.Width = msg.Width - 10
+	return m, nil
+}
+
+func (m progressModel) handleSpinnerTickMsg(msg spinner.TickMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.currentSpinner, cmd = m.currentSpinner.Update(msg)
+	return m, cmd
+}
+
+func (m progressModel) handleProgressFrameMsg(msg progress.FrameMsg) (tea.Model, tea.Cmd) {
+	progressModel, cmd := m.currentProgress.Update(msg)
+	if pm, ok := progressModel.(progress.Model); ok {
+		m.currentProgress = pm
+	}
+
+	overallModel, cmd2 := m.overallProgress.Update(msg)
+	if om, ok := overallModel.(progress.Model); ok {
+		m.overallProgress = om
+	}
+
+	return m, tea.Batch(cmd, cmd2)
+}
+
+func (m progressModel) handlePhaseMsg(msg phaseMsg) (tea.Model, tea.Cmd) {
+	m.phase = msg.phase
+	m.currentStage = msg.message
+
+	// Handle phase transitions
+	switch msg.phase { //nolint:exhaustive // PhaseComplete is terminal
+	case PhaseConnecting:
+		return m, m.doConnect()
+	case PhaseCheckingPermissions:
+		return m, m.doCheckPermissions()
+	case PhaseDiscovering:
+		return m, m.doDiscover()
+	case PhaseCounting:
+		if len(m.pendingTables) > 0 {
+			if m.currentCountIndex == 0 && len(m.pendingTables) > 0 {
+				m.currentStage = fmt.Sprintf("Counting rows: 0/%d - %s", len(m.pendingTables), m.pendingTables[0].name)
+			}
+			return m, m.countNextTable()
+		}
+	case PhaseProcessing:
 		if len(m.partitions) > 0 {
-			overallPercent := float64(m.currentIndex) / float64(len(m.partitions))
-			// Continue processing next partition with a new ticker
 			return m, tea.Batch(
-				m.overallProgress.SetPercent(overallPercent),
-				m.processNext(), // Process the next partition
+				m.processNext(),
 				tea.Tick(time.Millisecond*500, func(t time.Time) tea.Msg {
 					return stageTickMsg(t)
 				}),
 			)
 		}
-		return m, nil
+	}
+	return m, nil
+}
 
-	case allCompleteMsg:
-		m.phase = PhaseComplete
-		m.done = true
-		return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
+func (m progressModel) handleMessageMsg(msg messageMsg) (tea.Model, tea.Cmd) {
+	m.messages = append(m.messages, string(msg))
+	if len(m.messages) > 10 {
+		m.messages = m.messages[len(m.messages)-10:]
+	}
 
-	case stageUpdateMsg:
-		m.currentStage = msg.stage
+	msgStr := string(msg)
+
+	if strings.Contains(msgStr, "Starting archive process") {
+		m.phase = PhaseConnecting
+		m.currentStage = "Connecting to database..."
 		m.updateTaskInfo()
-		return m, nil
+		return m, m.doConnect()
+	}
 
-	case stageTickMsg:
-		// Update stage based on elapsed time if we're processing
-		if m.phase == PhaseProcessing && m.currentIndex < len(m.partitions) && !m.processingStartTime.IsZero() {
-			elapsed := time.Since(m.processingStartTime)
-
-			// Simulate stages based on elapsed time
-			if elapsed < 1*time.Second {
-				m.currentStage = "Checking if file exists in S3"
-			} else if elapsed < 3*time.Second {
-				m.currentStage = "Extracting data"
-			} else if elapsed < 5*time.Second {
-				m.currentStage = "Compressing data"
-			} else if elapsed < 7*time.Second {
-				m.currentStage = "Uploading to S3"
-			} else {
-				m.currentStage = "Finalizing"
-			}
-			m.updateTaskInfo()
-
-			// Continue ticking if still processing
-			return m, tea.Tick(time.Millisecond*500, func(t time.Time) tea.Msg {
-				return stageTickMsg(t)
-			})
+	if strings.Contains(msgStr, "✅ Table permissions verified") && m.phase == PhaseCheckingPermissions {
+		m.messages = append(m.messages, fmt.Sprintf("✅ Connected to S3 at s3://%s", m.config.S3.Bucket))
+		if len(m.messages) > 10 {
+			m.messages = m.messages[len(m.messages)-10:]
 		}
-		return m, nil
+		m.phase = PhaseDiscovering
+		m.currentStage = "Discovering partitions..."
+		m.updateTaskInfo()
+		return m, m.doDiscover()
+	}
+
+	if strings.Contains(msgStr, "❌ Permission check failed") {
+		return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
 	}
 
 	return m, nil
 }
 
-func (m progressModel) View() string {
-	if m.done && m.phase == PhaseComplete {
-		return ""
+func (m progressModel) handleConnectedMsg(msg connectedMsg) (tea.Model, tea.Cmd) {
+	m.messages = append(m.messages, fmt.Sprintf("✅ Connected to PostgreSQL at %s", msg.host))
+
+	if m.config.CacheViewer {
+		startBackgroundServices()
+		go m.startCacheViewerServer()
+		m.messages = append(m.messages, fmt.Sprintf("🌐 Cache viewer started at http://localhost:%d", m.config.ViewerPort))
 	}
 
+	if len(m.messages) > 10 {
+		m.messages = m.messages[len(m.messages)-10:]
+	}
+
+	m.phase = PhaseCheckingPermissions
+	m.currentStage = "Checking table permissions..."
+	m.updateTaskInfo()
+	return m, m.doCheckPermissions()
+}
+
+func (m progressModel) startCacheViewerServer() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", serveCacheViewer)
+	mux.HandleFunc("/api/cache", serveCacheData)
+	mux.HandleFunc("/api/status", serveStatusData)
+	mux.HandleFunc("/ws", handleWebSocket)
+
+	addr := fmt.Sprintf(":%d", m.config.ViewerPort)
+	server := &http.Server{
+		Addr:              addr,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		Handler:           mux,
+	}
+
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		m.archiver.logger.Error(fmt.Sprintf("Cache viewer server error: %v", err))
+	}
+}
+
+func (m progressModel) handleDiscoveredTablesMsg(msg discoveredTablesMsg) (tea.Model, tea.Cmd) {
+	m.messages = append(m.messages, fmt.Sprintf("📊 Found %d partitions to process", len(msg.tables)))
+	if len(m.messages) > 10 {
+		m.messages = m.messages[len(m.messages)-10:]
+	}
+
+	if m.config.SkipCount {
+		partitions := make([]PartitionInfo, len(msg.tables))
+		for i, table := range msg.tables {
+			partitions[i] = PartitionInfo{
+				TableName: table.name,
+				Date:      table.date,
+				RowCount:  -1,
+			}
+		}
+		return m, func() tea.Msg {
+			return partitionsFoundMsg{partitions: partitions}
+		}
+	}
+
+	m.countTotal = len(msg.tables)
+	m.countProgress = 0
+	m.pendingTables = msg.tables
+	m.countedPartitions = make([]PartitionInfo, 0, len(msg.tables))
+	m.currentCountIndex = 0
+
+	return m, func() tea.Msg {
+		return phaseMsg{
+			phase:   PhaseCounting,
+			message: fmt.Sprintf("Counting rows in %d partitions...", len(msg.tables)),
+		}
+	}
+}
+
+func (m progressModel) handlePartitionsFoundMsg(msg partitionsFoundMsg) (tea.Model, tea.Cmd) {
+	if m.phase == PhaseCounting {
+		m.countProgress = m.countTotal
+		m.messages = append(m.messages, fmt.Sprintf("✅ Finished counting rows in %d partitions", len(msg.partitions)))
+		if len(m.messages) > 10 {
+			m.messages = m.messages[len(m.messages)-10:]
+		}
+	}
+
+	m.partitions = msg.partitions
+	m.phase = PhaseProcessing
+	m.results = make([]ProcessResult, 0, len(msg.partitions))
+	m.currentIndex = 0
+	m.currentStage = ""
+
+	m.messages = append(m.messages, fmt.Sprintf("🚀 Starting to process %d partitions", len(msg.partitions)))
+	if len(m.messages) > 10 {
+		m.messages = m.messages[len(m.messages)-10:]
+	}
+
+	if len(msg.partitions) > 0 {
+		return m, tea.Sequence(
+			tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
+				return nil
+			}),
+			m.processNext(),
+		)
+	}
+	return m, nil
+}
+
+func (m progressModel) handleTableCountedMsg(msg tableCountedMsg) (tea.Model, tea.Cmd) {
+	if msg.count >= 0 {
+		m.countedPartitions = append(m.countedPartitions, PartitionInfo{
+			TableName: msg.table.name,
+			Date:      msg.table.date,
+			RowCount:  msg.count,
+		})
+	}
+
+	m.currentCountIndex++
+	m.countProgress = m.currentCountIndex
+	m.currentStage = fmt.Sprintf("Counting rows: %d/%d - %s", m.currentCountIndex, m.countTotal, msg.table.name)
+
+	return m, m.countNextTable()
+}
+
+func (m progressModel) handleCountProgressMsg(msg countProgressMsg) (tea.Model, tea.Cmd) {
+	m.countProgress = msg.current
+	m.countTotal = msg.total
+	m.currentStage = fmt.Sprintf("Counting rows: %d/%d - %s", msg.current, msg.total, msg.tableName)
+	return m, nil
+}
+
+func (m progressModel) handleProgressMsg(msg progressMsg) (tea.Model, tea.Cmd) {
+	m.currentStage = msg.stage
+	m.currentRows = msg.current
+	m.totalRows = msg.total
+	m.updateTaskInfo()
+
+	if msg.total > 0 {
+		percent := float64(msg.current) / float64(msg.total)
+		cmd := m.currentProgress.SetPercent(percent)
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m progressModel) handlePartitionCompleteMsg(msg partitionCompleteMsg) (tea.Model, tea.Cmd) {
+	m.results = append(m.results, msg.result)
+	m.currentIndex = msg.index + 1
+	m.updateTaskInfo()
+
+	m.currentStage = ""
+	m.processingStartTime = time.Time{}
+
+	if len(m.partitions) > 0 {
+		overallPercent := float64(m.currentIndex) / float64(len(m.partitions))
+		return m, tea.Batch(
+			m.overallProgress.SetPercent(overallPercent),
+			m.processNext(),
+			tea.Tick(time.Millisecond*500, func(t time.Time) tea.Msg {
+				return stageTickMsg(t)
+			}),
+		)
+	}
+	return m, nil
+}
+
+func (m progressModel) handleAllCompleteMsg(_ allCompleteMsg) (tea.Model, tea.Cmd) {
+	m.phase = PhaseComplete
+	m.done = true
+	return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
+}
+
+func (m progressModel) handleStageUpdateMsg(msg stageUpdateMsg) (tea.Model, tea.Cmd) {
+	m.currentStage = msg.stage
+	m.updateTaskInfo()
+	return m, nil
+}
+
+func (m progressModel) handleStageTickMsg(_ stageTickMsg) (tea.Model, tea.Cmd) {
+	if m.phase == PhaseProcessing && m.currentIndex < len(m.partitions) && !m.processingStartTime.IsZero() {
+		elapsed := time.Since(m.processingStartTime)
+
+		if elapsed < 1*time.Second {
+			m.currentStage = "Checking if file exists in S3"
+		} else if elapsed < 3*time.Second {
+			m.currentStage = "Extracting data"
+		} else if elapsed < 5*time.Second {
+			m.currentStage = "Compressing data"
+		} else if elapsed < 7*time.Second {
+			m.currentStage = "Uploading to S3"
+		} else {
+			m.currentStage = "Finalizing"
+		}
+		m.updateTaskInfo()
+
+		return m, tea.Tick(time.Millisecond*500, func(t time.Time) tea.Msg {
+			return stageTickMsg(t)
+		})
+	}
+	return m, nil
+}
+
+// renderBanner renders the ASCII banner with logo
+func (m progressModel) renderBanner() []string {
 	var sections []string
 
-	// ASCII Banner with gradient colors
 	titleStyle1 := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF7CCB")).Bold(true)
 	titleStyle2 := lipgloss.NewStyle().Foreground(lipgloss.Color("#FDFF8C")).Bold(true)
 	authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#999999"))
 
-	// Banner with proper box drawing
-	const boxWidth = 66  // Total width including the borders (reduced by 1 more)
-	const indent = "   " // 3 spaces indentation
+	const boxWidth = 66
+	const indent = "   "
 
-	// Helper function to create a properly padded box line using lipgloss to measure width
 	makeLine := func(content string) string {
-		// Measure the actual visible width using lipgloss
 		visibleWidth := lipgloss.Width(content)
-		// Calculate padding needed (boxWidth - 4 for "║  " prefix and "  ║" suffix)
 		targetWidth := boxWidth - 4
 		padding := targetWidth - visibleWidth
 		if padding < 0 {
@@ -805,7 +838,6 @@ func (m progressModel) View() string {
 		return fmt.Sprintf("%s║  %s%s║", indent, content, strings.Repeat(" ", padding))
 	}
 
-	// Create the top and bottom borders (these are boxWidth characters wide)
 	topBorder := indent + "╔" + strings.Repeat("═", boxWidth-2) + "╗"
 	bottomBorder := indent + "╚" + strings.Repeat("═", boxWidth-2) + "╝"
 
@@ -827,7 +859,12 @@ func (m progressModel) View() string {
 	sections = append(sections, bottomBorder)
 	sections = append(sections, "")
 
-	// Always show messages section (even if empty)
+	return sections
+}
+
+// renderMessages renders the message log section
+func (m progressModel) renderMessages() []string {
+	var sections []string
 	sections = append(sections, helpStyle.Render("   Log:"))
 	if len(m.messages) == 0 {
 		sections = append(sections, "     (waiting for operations...)")
@@ -836,204 +873,152 @@ func (m progressModel) View() string {
 			sections = append(sections, "     "+msg)
 		}
 	}
+	return sections
+}
 
-	// Add horizontal separator
+// renderSeparator renders a horizontal separator
+func (m progressModel) renderSeparator() []string {
 	separatorWidth := 80
 	if m.width > 0 && m.width < 200 {
-		separatorWidth = m.width - 6 // Leave some margin with extra padding
+		separatorWidth = m.width - 6
 	}
 	separator := "   " + strings.Repeat("─", separatorWidth)
-	sections = append(sections, "")
-	sections = append(sections, lipgloss.NewStyle().Foreground(lipgloss.Color("#444")).Render(separator))
-	sections = append(sections, "")
+	return []string{"", lipgloss.NewStyle().Foreground(lipgloss.Color("#444")).Render(separator), ""}
+}
 
-	// Phase-specific content
-	switch m.phase {
-	case PhaseConnecting, PhaseCheckingPermissions, PhaseDiscovering:
-		// Show current operation with spinner
+// renderInitialPhase renders connecting/checking/discovering phases
+func (m progressModel) renderInitialPhase() []string {
+	var sections []string
+	if m.currentStage != "" {
+		stageInfo := fmt.Sprintf("   %s %s", m.currentSpinner.View(), m.currentStage)
+		sections = append(sections, stageStyle.Render(stageInfo))
+	} else {
+		sections = append(sections, stageStyle.Render("   "+m.currentSpinner.View()+" Initializing..."))
+	}
+	return sections
+}
+
+// renderCountingPhase renders the counting phase
+func (m progressModel) renderCountingPhase() []string {
+	var sections []string
+	if m.countTotal > 0 {
+		barWidth := 30
+		progress := float64(m.countProgress) / float64(m.countTotal)
+		filled := int(progress * float64(barWidth))
+		if filled > barWidth {
+			filled = barWidth
+		}
+		bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+		percentage := int(progress * 100)
+
+		countInfo := fmt.Sprintf("   %s Counting: %d/%d [%s] %d%%",
+			m.currentSpinner.View(),
+			m.countProgress,
+			m.countTotal,
+			bar,
+			percentage)
+		sections = append(sections, stageStyle.Render(countInfo))
+
+		if m.currentStage != "" {
+			sections = append(sections, "     "+m.currentStage)
+		}
+	}
+	return sections
+}
+
+// renderProcessingPhase renders the processing phase
+func (m progressModel) renderProcessingPhase() []string {
+	var sections []string
+	if len(m.partitions) > 0 {
+		sections = append(sections, tableHeaderStyle.Render("   Processing Partitions"))
+		sections = append(sections, "")
+
+		overallInfo := fmt.Sprintf("   Overall: %d/%d partitions", m.currentIndex, len(m.partitions))
+		sections = append(sections, progressInfoStyle.Render(overallInfo))
+
+		viewProgress := m.overallProgress.ViewAs(float64(m.currentIndex) / float64(len(m.partitions)))
+		sections = append(sections, "   "+viewProgress)
+
 		if m.currentStage != "" {
 			stageInfo := fmt.Sprintf("   %s %s", m.currentSpinner.View(), m.currentStage)
-			sections = append(sections, stageStyle.Render(stageInfo))
-		} else {
-			sections = append(sections, stageStyle.Render("   "+m.currentSpinner.View()+" Initializing..."))
-		}
-
-	case PhaseCounting:
-		// Show counting progress with spinner, bar, and current table all on one line
-		if m.countTotal > 0 {
-			// Create a progress bar for counting
-			barWidth := 30
-			progress := float64(m.countProgress) / float64(m.countTotal)
-			filled := int(progress * float64(barWidth))
-
-			bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
-
-			// Check if counting is complete
-			isComplete := m.countProgress >= m.countTotal
-
-			// Extract just the table name from the current stage
-			tableName := ""
-			if strings.Contains(m.currentStage, " - ") {
-				parts := strings.Split(m.currentStage, " - ")
-				if len(parts) > 1 {
-					tableName = parts[1]
-				}
-			}
-
-			// Show checkmark if complete, spinner if still counting
-			icon := m.currentSpinner.View()
-			currentTable := tableName
-			if isComplete {
-				icon = "✅"
-				currentTable = "Complete!"
-			}
-
-			// Combine icon, label, progress bar, percentage, and current table
-			stageInfo := fmt.Sprintf("   %s Counting rows:    %s %d%% (%d/%d) - %s",
-				icon,
-				bar,
-				int(progress*100),
-				m.countProgress,
-				m.countTotal,
-				currentTable)
-
+			sections = append(sections, "")
 			sections = append(sections, stageStyle.Render(stageInfo))
 		}
 
-	case PhaseProcessing:
-		// 1. COUNTING ROWS (completed) - Always show this first
-		if m.countTotal > 0 && m.countProgress >= m.countTotal {
-			// Show completed counting progress - same format as in progress but with checkmark and 100%
-			barWidth := 30
-			bar := strings.Repeat("█", barWidth)
-
-			stageInfo := fmt.Sprintf("   ✅ Counting rows:    %s 100%% (%d/%d) - Complete!",
-				bar,
-				m.countTotal,
-				m.countTotal)
-
-			sections = append(sections, stageStyle.Render(stageInfo))
-			sections = append(sections, "") // Add newline after counting
+		if m.currentRows > 0 && m.totalRows > 0 {
+			rowInfo := fmt.Sprintf("   Rows: %d/%d", m.currentRows, m.totalRows)
+			sections = append(sections, progressInfoStyle.Render(rowInfo))
+			viewCurrentProgress := m.currentProgress.ViewAs(float64(m.currentRows) / float64(m.totalRows))
+			sections = append(sections, "   "+viewCurrentProgress)
 		}
 
-		// 2. CURRENT STEP STATUS
-		if m.currentIndex < len(m.partitions) && len(m.partitions) > 0 {
-			partition := m.partitions[m.currentIndex]
-
-			// Current operation stage with spinner - show detailed operation
-			objectPath := fmt.Sprintf("export/%s/%s/%s.jsonl.zst",
-				m.config.Table,
-				partition.Date.Format("2006/01"),
-				partition.Date.Format("2006-01-02"))
-
-			// Full S3 path with bucket
-			s3Path := fmt.Sprintf("s3://%s/%s", m.config.S3.Bucket, objectPath)
-
-			var operationInfo string
-			// Check if we're still showing counting-related stages
-			if strings.Contains(m.currentStage, "Counting rows") {
-				// If still in counting phase, show initial processing message with spinner
-				// Add space before spinner to align better
-				operationInfo = fmt.Sprintf("   %s Current step: Preparing to process %s...", m.currentSpinner.View(), partition.TableName)
-				sections = append(sections, helpStyle.Render(operationInfo))
-			} else {
-				// Show actual processing status with spinner
-				if m.currentStage == "" || strings.Contains(m.currentStage, "Checking") {
-					operationInfo = fmt.Sprintf("   %s Checking if %s exists...", m.currentSpinner.View(), s3Path)
-				} else if strings.Contains(m.currentStage, "Extracting") {
-					operationInfo = fmt.Sprintf("   %s Extracting data from %s...", m.currentSpinner.View(), partition.TableName)
-				} else if strings.Contains(m.currentStage, "Compressing") {
-					operationInfo = fmt.Sprintf("   %s Compressing %s.jsonl...", m.currentSpinner.View(), partition.TableName)
-				} else if strings.Contains(m.currentStage, "Uploading") {
-					operationInfo = fmt.Sprintf("   %s Uploading to %s...", m.currentSpinner.View(), s3Path)
-				} else {
-					operationInfo = fmt.Sprintf("   %s Processing %s...", m.currentSpinner.View(), partition.TableName)
-				}
-				sections = append(sections, stageStyle.Render(operationInfo))
-
-				// Row progress if applicable (only show for extraction which has row counts)
-				if m.totalRows > 0 && strings.Contains(m.currentStage, "Extracting") {
-					rowInfo := fmt.Sprintf("   Rows: %d / %d", m.currentRows, m.totalRows)
-					sections = append(sections, helpStyle.Render(rowInfo))
-					// Show progress bar only for extraction with row counts
-					sections = append(sections, m.currentProgress.View())
-				}
-			}
-			sections = append(sections, "") // Add newline after current step
-		}
-
-		// 3. OVERALL PROGRESS
-		if len(m.partitions) > 0 {
-			// Create inline progress bar with gradient effect
-			barWidth := 30
-			progress := float64(m.currentIndex) / float64(len(m.partitions))
-			filled := int(progress * float64(barWidth))
-
-			// Create a simple gradient effect using different block characters
-			var bar string
-			for i := 0; i < barWidth; i++ {
-				if i < filled {
-					bar += "█"
-				} else {
-					bar += "░"
-				}
-			}
-
-			overallInfo := fmt.Sprintf("   📊 Overall Progress: %s %d%% (%d/%d partitions)",
-				bar,
-				int(progress*100),
-				m.currentIndex,
-				len(m.partitions))
-			sections = append(sections, helpStyle.Render(overallInfo))
-		}
+		sections = append(sections, "")
+		sections = append(sections, m.renderProcessingSummary()...)
 	}
+	return sections
+}
 
-	// Stats
-	sections = append(sections, "") // Empty line
-	elapsed := time.Since(m.startTime)
-	stats := fmt.Sprintf("   ⏱️  Elapsed: %s", elapsed.Round(time.Second))
-
-	if m.currentIndex > 0 {
-		avgTime := elapsed / time.Duration(m.currentIndex)
-		remaining := avgTime * time.Duration(len(m.partitions)-m.currentIndex)
-		stats += fmt.Sprintf(" | Remaining: ~%s", remaining.Round(time.Second))
-	}
-	sections = append(sections, helpStyle.Render(stats))
-
-	// Recent results
+// renderProcessingSummary renders summary of processing results
+func (m progressModel) renderProcessingSummary() []string {
+	var sections []string
 	if len(m.results) > 0 {
-		sections = append(sections, "") // Empty line
-		sections = append(sections, helpStyle.Render("   Recent completions:"))
+		sections = append(sections, tableHeaderStyle.Render("   Recent Results"))
+		sections = append(sections, "")
 
-		start := len(m.results) - 3
-		if start < 0 {
-			start = 0
+		startIndex := 0
+		if len(m.results) > 5 {
+			startIndex = len(m.results) - 5
 		}
 
-		for i := start; i < len(m.results); i++ {
-			result := m.results[i]
-			status := "✅"
-			if result.Error != nil {
-				status = "❌"
-			} else if result.Skipped {
-				status = "⏭️"
+		for _, result := range m.results[startIndex:] {
+			var line string
+			if result.Skipped {
+				line = fmt.Sprintf("   ⏭  %s - %s", result.Partition.TableName, result.SkipReason)
+			} else if result.Error != nil {
+				line = fmt.Sprintf("   ❌ %s - Error: %v", result.Partition.TableName, result.Error)
+			} else if result.Uploaded {
+				line = fmt.Sprintf("   ✅ %s - Uploaded %d bytes", result.Partition.TableName, result.BytesWritten)
+			} else {
+				line = fmt.Sprintf("   ⏸  %s - In progress", result.Partition.TableName)
 			}
-
-			line := fmt.Sprintf("      %s %s", status, result.Partition.TableName)
-			if result.Skipped && strings.Contains(result.SkipReason, "exists") {
-				line += " (already exists)"
-			} else if result.BytesWritten > 0 {
-				line += fmt.Sprintf(" (%.2f MB)", float64(result.BytesWritten)/(1024*1024))
-			}
-			sections = append(sections, helpStyle.Render(line))
+			sections = append(sections, line)
 		}
+		sections = append(sections, "")
+	}
+	return sections
+}
+
+func (m progressModel) View() string {
+	if m.done && m.phase == PhaseComplete {
+		return ""
 	}
 
-	// Help
-	sections = append(sections, "") // Empty line
-	sections = append(sections, helpStyle.Render("Press 'q' or 'ctrl+c' to quit"))
+	var sections []string
 
-	return strings.Join(sections, "\n")
+	// Render banner
+	sections = append(sections, m.renderBanner()...)
+
+	// Render messages
+	sections = append(sections, m.renderMessages()...)
+
+	// Render separator
+	sections = append(sections, m.renderSeparator()...)
+
+	// Phase-specific content
+	switch m.phase { //nolint:exhaustive // PhaseComplete is terminal
+	case PhaseConnecting, PhaseCheckingPermissions, PhaseDiscovering:
+		sections = append(sections, m.renderInitialPhase()...)
+	case PhaseCounting:
+		sections = append(sections, m.renderCountingPhase()...)
+	case PhaseProcessing:
+		sections = append(sections, m.renderProcessingPhase()...)
+	}
+
+	// Help text
+	sections = append(sections, "")
+	sections = append(sections, helpStyle.Render("   Press Ctrl+C or 'q' to quit"))
+
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
 func updateProgress(stage string, current, total int64) tea.Cmd {

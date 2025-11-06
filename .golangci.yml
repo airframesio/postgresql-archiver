@@ -1,0 +1,127 @@
+# golangci-lint configuration
+# Run with: golangci-lint run
+
+run:
+  # Timeout for running golangci-lint
+  timeout: 5m
+
+  # Include test files
+  tests: true
+
+linters:
+  # Enable recommended linters
+  enable:
+    - asasalint        # Check for pass []any as any in variadic func(...)
+    - asciicheck       # Check for non-ASCII identifiers
+    - bidichk          # Check for dangerous Unicode character sequences
+    - bodyclose        # Check whether HTTP response body is closed
+    - contextcheck     # Check for missing context in function call
+    - dogsled          # Checks assignments with too many blank identifiers
+    - dupl             # Tool for code clone detection
+    - durationcheck    # Check for two durations multiplied together
+    - errcheck         # Errcheck is a program for checking for unchecked errors
+    - errname          # Checks that sentinel errors are prefixed with the Err and error types are suffixed with Error
+    - errorlint        # Errorlint is a linter for that can be used to find code that will cause problems with the error wrapping scheme introduced in Go 1.13
+    - exhaustive       # Check exhaustiveness of enum switch statements
+    - copyloopvar      # Checks for pointers to enclosing loop variables
+    - forbidigo        # Forbid identifiers
+    - forcetypeassert  # Finds forced type assertions
+    - gochecksumtype   # Run exhaustiveness checks on types which have the `//sumtype:decl` annotation
+    - gocognit         # Computes and checks the cognitive complexity of functions
+    - goconst          # Finds repeated strings that could be replaced by a constant
+    - gocyclo          # Computes and checks the cyclomatic complexity of functions
+    - godox            # Checks for TODO, BUG, FIXME comments
+    - err113           # Checks the handling of errors in go code
+    - gofmt            # Gofmt checks whether code was gofmt-ed. By default this tool runs with -s option to check for code simplification
+    - gofumpt          # Gofumpt is a stricter gofmt
+    - goheader         # Checks is file header matches to pattern
+    - goimports        # Goimports does everything that gofmt does
+    - gomoddirectives  # Manage the use of 'replace', 'retract', and 'exclude' directives in go.mod
+    - gomodguard       # Allow and disallow lists for direct go module dependencies. This is different from depguard where this is only for direct modules
+    - goprintffuncname # Checks that printf-like functions are named with f at the end
+    - gosec            # Inspects source code for security problems
+    - gosimple         # Linter for Go source code that specializes in simplifying code
+    - govet            # Vet examines Go source code and reports suspicious constructs
+    - ineffassign      # Detects when assignments to existing variables are not effectively used
+    - misspell         # Finds commonly misspelled English words in comments
+    - nakedret         # Finds naked returns in functions greater than a specified function length
+    - noctx            # Finds sending http request without context.Context
+    - nolintlint       # Reports ill-formed or insufficient nolint directives
+    - nosprintfhostport # Checks for mismatched host and port separators in URL passed to net.SplitHostPort
+    - prealloc         # Finds slice declarations that could potentially be preallocated
+    - predeclared      # Finds code that shadows one of Go's predeclared identifiers
+    - revive           # Fast, configurable, extensible, flexible, and pretty linter for Go
+    - rowserrcheck     # Checks whether Rows.Err of rows is checked successfully
+    - staticcheck      # It's a set of rules from staticcheck
+    - stylecheck       # Stylecheck is a replacement for golint
+    - unconvert        # Remove unnecessary type conversions
+    - unused           # Checks Go code for unused constants, variables, functions and types
+    - usestdlibvars    # A linter that detect the possibility to use variables/constants from the Go standard library
+    - wastedassign     # Finds wasted assignment statements
+    - whitespace       # Tool for detection of leading and trailing whitespace
+
+  # Disable some noisy linters
+  disable:
+    # Too strict for this project
+    - lll              # Line too long (handled by gofmt)
+    - funlen           # Function too long (OK for archiver)
+    - cyclop           # Cyclomatic complexity alias (use gocyclo)
+    - wsl              # Whitespace is not consistent
+    - nestif           # Nested if statements (OK in some cases)
+    - nlreturn         # Named return statements not followed by newline
+    - interfacebloat   # A linter that checks the number of methods inside an interface
+
+issues:
+  # Maximum issues to show
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  # Use default exclude directories
+  exclude-dirs-use-default: true
+
+  # Exclude patterns
+  exclude-rules:
+    # Exclude tests from some rules
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - gosec
+        - dupl
+        - funlen
+        - contextcheck
+        - wrapcheck
+
+    # Exclude generated code
+    - path: \.pb\.go$
+      linters:
+        - all
+
+    # Allow long strings in HTML
+    - path: cache_viewer_html\.go
+      linters:
+        - lll
+        - dogsled
+        - funlen
+        - gocyclo
+        - gocognit
+        - dupl
+
+output:
+  # Format output
+  formats:
+    - format: colored-line-number
+      path: stdout
+
+severity:
+  # Set the default severity for unset linters
+  default-severity: error
+
+  # Set the severity per-linter
+  rules:
+    - linters:
+        - godox
+      severity: warning
+    - linters:
+        - misspell
+      severity: error

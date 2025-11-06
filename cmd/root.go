@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -51,7 +55,21 @@ var (
 	debugStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#666666")).
 			Italic(true)
+
+	logger *slog.Logger
 )
+
+// initLogger initializes the slog logger based on debug flag
+func initLogger(isDebug bool) {
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}
+	if isDebug {
+		opts.Level = slog.LevelDebug
+	}
+	handler := slog.NewTextHandler(os.Stdout, opts)
+	logger = slog.New(handler)
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "postgresql-archiver",
@@ -60,7 +78,7 @@ var rootCmd = &cobra.Command{
 
 A CLI tool to efficiently archive PostgreSQL partitioned table data to object storage.
 Extracts data by day, converts to JSONL, compresses with zstd, and uploads to S3-compatible storage.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		runArchive()
 	},
 }
@@ -137,14 +155,15 @@ func initConfig() {
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err == nil && debug {
-		fmt.Println(debugStyle.Render("📄 Using config file: " + viper.ConfigFileUsed()))
+		// Initialize logger early if reading config in debug mode
+		if logger == nil {
+			initLogger(debug)
+		}
+		logger.Debug(debugStyle.Render("📄 Using config file: " + viper.ConfigFileUsed()))
 	}
 }
 
 func runArchive() {
-	fmt.Println(titleStyle.Render("\n🚀 PostgreSQL Archiver"))
-	fmt.Println(infoStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
-
 	config := &Config{
 		Debug:       viper.GetBool("debug"),
 		DryRun:      viper.GetBool("dry_run"),
@@ -172,16 +191,36 @@ func runArchive() {
 		EndDate:   viper.GetString("end_date"),
 	}
 
+	// Initialize logger
+	initLogger(config.Debug)
+
+	// Log startup banner
+	logger.Info(titleStyle.Render("\n🚀 PostgreSQL Archiver"))
+	logger.Info(infoStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
+
 	if err := config.Validate(); err != nil {
-		fmt.Fprintln(os.Stderr, warningStyle.Render("❌ Configuration error: "+err.Error()))
+		logger.Error(warningStyle.Render("❌ Configuration error: " + err.Error()))
 		os.Exit(1)
 	}
 
-	archiver := NewArchiver(config)
-	if err := archiver.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, warningStyle.Render("❌ Archive failed: "+err.Error()))
+	// Create a context that can be cancelled by signals (SIGTERM, SIGINT)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Set up signal handling
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigChan
+		logger.Debug(debugStyle.Render(fmt.Sprintf("📌 Received signal: %v", sig)))
+		cancel()
+	}()
+
+	archiver := NewArchiver(config, logger)
+	if err := archiver.Run(ctx); err != nil {
+		logger.Error(warningStyle.Render("❌ Archive failed: " + err.Error()))
 		os.Exit(1)
 	}
 
-	fmt.Println(successStyle.Render("\n✅ Archive completed successfully!"))
+	logger.Info(successStyle.Render("\n✅ Archive completed successfully!"))
 }

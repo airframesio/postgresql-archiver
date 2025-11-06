@@ -19,7 +19,7 @@ import (
 var (
 	serverPort int
 	upgrader   = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
+		CheckOrigin: func(_ *http.Request) bool {
 			return true // Allow all origins for local development
 		},
 	}
@@ -91,7 +91,7 @@ func startBackgroundServices() {
 	})
 }
 
-func runCacheServer(cmd *cobra.Command, args []string) error {
+func runCacheServer(_ *cobra.Command, _ []string) error {
 	// Set up HTTP routes
 	http.HandleFunc("/", serveCacheViewer)
 	http.HandleFunc("/api/cache", serveCacheData)
@@ -102,21 +102,31 @@ func runCacheServer(cmd *cobra.Command, args []string) error {
 	startBackgroundServices()
 
 	addr := fmt.Sprintf(":%d", serverPort)
-	fmt.Printf("\n🚀 PostgreSQL Archiver Cache Viewer\n")
-	fmt.Printf("📊 Starting web server on http://localhost%s\n", addr)
-	fmt.Printf("🌐 Open your browser to view cache data\n")
-	fmt.Printf("⌨️  Press Ctrl+C to stop the server\n\n")
+	// Initialize logger if not already initialized
+	if logger == nil {
+		initLogger(false)
+	}
+	logger.Info("\n🚀 PostgreSQL Archiver Cache Viewer")
+	logger.Info(fmt.Sprintf("📊 Starting web server on http://localhost%s", addr))
+	logger.Info("🌐 Open your browser to view cache data")
+	logger.Info("⌨️  Press Ctrl+C to stop the server\n")
 
-	return http.ListenAndServe(addr, nil)
+	server := &http.Server{
+		Addr:              addr,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+	}
+	return server.ListenAndServe()
 }
 
-func serveCacheViewer(w http.ResponseWriter, r *http.Request) {
+func serveCacheViewer(w http.ResponseWriter, _ *http.Request) {
 	html := getCacheViewerHTML()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(html))
 }
 
-func serveCacheData(w http.ResponseWriter, r *http.Request) {
+func serveCacheData(w http.ResponseWriter, _ *http.Request) {
 	// Enable CORS for local development
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
@@ -215,7 +225,7 @@ func serveCacheData(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(response)
 }
 
-func serveStatusData(w http.ResponseWriter, r *http.Request) {
+func serveStatusData(w http.ResponseWriter, _ *http.Request) {
 	// Enable CORS for local development
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
@@ -305,24 +315,15 @@ func broadcastManager() {
 	}
 }
 
-// Data monitor watches for changes and broadcasts updates using fsnotify
-func dataMonitor() {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Printf("Failed to create file watcher, falling back to polling: %v", err)
-		dataMonitorFallback()
-		return
-	}
-	defer watcher.Close()
-
-	// Watch directories
+// setupWatchDirs creates and watches required directories
+func setupWatchDirs(watcher *fsnotify.Watcher) {
 	homeDir, _ := os.UserHomeDir()
 	cacheDir := filepath.Join(homeDir, ".postgresql-archiver", "cache")
 	taskDir := filepath.Join(homeDir, ".postgresql-archiver")
 
 	// Create directories if they don't exist
-	_ = os.MkdirAll(cacheDir, 0755)
-	_ = os.MkdirAll(taskDir, 0755)
+	_ = os.MkdirAll(cacheDir, 0o755)
+	_ = os.MkdirAll(taskDir, 0o755)
 
 	// Watch cache directory
 	if err := watcher.Add(cacheDir); err != nil {
@@ -333,6 +334,43 @@ func dataMonitor() {
 	if err := watcher.Add(taskDir); err != nil {
 		log.Printf("Failed to watch task directory: %v", err)
 	}
+}
+
+// handleFileEvent processes file system events
+func handleFileEvent(event fsnotify.Event, debounceTimer **time.Timer, debounceDuration time.Duration) {
+	// Check if it's a cache or task file
+	isCacheFile := strings.HasSuffix(event.Name, ".json") && strings.Contains(event.Name, "cache")
+	isTaskFile := strings.HasSuffix(event.Name, "current_task.json")
+
+	if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) != 0 {
+		if isCacheFile || isTaskFile {
+			// Debounce updates to avoid flooding
+			if *debounceTimer != nil {
+				(*debounceTimer).Stop()
+			}
+			*debounceTimer = time.AfterFunc(debounceDuration, func() {
+				if isCacheFile {
+					broadcastCacheUpdate()
+				}
+				if isTaskFile {
+					broadcastStatusUpdate()
+				}
+			})
+		}
+	}
+}
+
+// Data monitor watches for changes and broadcasts updates using fsnotify
+func dataMonitor() {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("Failed to create file watcher, falling back to polling: %v", err)
+		dataMonitorFallback()
+		return
+	}
+	defer watcher.Close()
+
+	setupWatchDirs(watcher)
 
 	// Debounce timer to avoid too many updates
 	var debounceTimer *time.Timer
@@ -344,27 +382,7 @@ func dataMonitor() {
 			if !ok {
 				return
 			}
-
-			// Check if it's a cache or task file
-			isCacheFile := strings.HasSuffix(event.Name, ".json") && strings.Contains(event.Name, "cache")
-			isTaskFile := strings.HasSuffix(event.Name, "current_task.json")
-
-			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) != 0 {
-				if isCacheFile || isTaskFile {
-					// Debounce updates to avoid flooding
-					if debounceTimer != nil {
-						debounceTimer.Stop()
-					}
-					debounceTimer = time.AfterFunc(debounceDuration, func() {
-						if isCacheFile {
-							broadcastCacheUpdate()
-						}
-						if isTaskFile {
-							broadcastStatusUpdate()
-						}
-					})
-				}
-			}
+			handleFileEvent(event, &debounceTimer, debounceDuration)
 
 		case err, ok := <-watcher.Errors:
 			if !ok {

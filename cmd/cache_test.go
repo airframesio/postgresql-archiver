@@ -8,7 +8,9 @@ import (
 	"time"
 )
 
-func TestPartitionCache(t *testing.T) {
+const testTablePartition = "test_table_20240101"
+
+func TestPartitionCache_NewCache(t *testing.T) {
 	// Create a temporary directory for test cache
 	tempDir, err := os.MkdirTemp("", "cache_test")
 	if err != nil {
@@ -35,13 +37,15 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatal("new cache should have no entries")
 		}
 	})
+}
 
+func TestPartitionCache_SetAndGetRowCount(t *testing.T) {
 	t.Run("SetAndGetRowCount", func(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
 		}
 
-		partition := "test_table_20240101"
+		partition := testTablePartition
 		count := int64(1000)
 		cache.setRowCount(partition, count)
 
@@ -62,13 +66,15 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatal("today's partition should not be cached")
 		}
 	})
+}
 
+func TestPartitionCache_SetAndGetFileMetadata(t *testing.T) {
 	t.Run("SetAndGetFileMetadata", func(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
 		}
 
-		partition := "test_table_20240101"
+		partition := testTablePartition
 		s3Key := "export/test_table/2024/01/2024-01-01.jsonl.zst"
 		compressedSize := int64(1024)
 		uncompressedSize := int64(5120)
@@ -97,13 +103,15 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatalf("expected uncompressed size %d, got %d", uncompressedSize, entry.UncompressedSize)
 		}
 	})
+}
 
+func TestPartitionCache_PreserveMetadata(t *testing.T) {
 	t.Run("PreserveMetadataWhenUpdatingRowCount", func(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
 		}
 
-		partition := "test_table_20240101"
+		partition := testTablePartition
 		s3Key := "export/test_table/2024/01/2024-01-01.jsonl.zst"
 
 		// Set file metadata first
@@ -127,13 +135,15 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatal("row count should be updated")
 		}
 	})
+}
 
+func TestPartitionCache_SetAndGetError(t *testing.T) {
 	t.Run("SetAndGetError", func(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
 		}
 
-		partition := "test_table_20240101"
+		partition := testTablePartition
 		errMsg := "connection failed"
 
 		cache.setError(partition, errMsg)
@@ -146,7 +156,9 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatal("error time should be set")
 		}
 	})
+}
 
+func TestPartitionCache_CleanExpired(t *testing.T) {
 	t.Run("CleanExpired", func(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
@@ -186,6 +198,22 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatal("recent row count should be preserved")
 		}
 	})
+}
+
+func TestPartitionCache_SaveAndLoad(t *testing.T) {
+	// Create a temporary directory for test cache
+	tempDir, err := os.MkdirTemp("", "cache_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Override home directory for testing
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", originalHome)
+
+	tableName := "test_table"
 
 	t.Run("SaveAndLoad", func(t *testing.T) {
 		cache := &PartitionCache{
@@ -229,6 +257,20 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatal("S3 upload status mismatch")
 		}
 	})
+}
+
+func TestPartitionCache_LegacyMigration(t *testing.T) {
+	// Create a temporary directory for test cache
+	tempDir, err := os.MkdirTemp("", "cache_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Override home directory for testing
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", originalHome)
 
 	t.Run("LegacyCacheMigration", func(t *testing.T) {
 		// Create legacy cache file
@@ -243,11 +285,11 @@ func TestPartitionCache(t *testing.T) {
 
 		// Save legacy cache
 		cacheDir := filepath.Join(tempDir, ".postgresql-archiver", "cache")
-		_ = os.MkdirAll(cacheDir, 0755)
+		_ = os.MkdirAll(cacheDir, 0o755)
 		legacyPath := filepath.Join(cacheDir, "legacy_table_counts.json")
 
 		data, _ := json.MarshalIndent(legacyCache, "", "  ")
-		_ = os.WriteFile(legacyPath, data, 0644)
+		_ = os.WriteFile(legacyPath, data, 0o644)
 
 		// Load should migrate
 		cache, err := loadPartitionCache("legacy_table")

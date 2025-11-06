@@ -45,8 +45,17 @@ jobs:
       run: staticcheck ./...
     
     - name: Run tests
-      run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
-    
+      run: CGO_ENABLED=0 go test -v -coverprofile=coverage.out -covermode=atomic ./...
+
+    - name: Check coverage gates
+      run: |
+        coverage=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | sed 's/%//')
+        echo "Code coverage: ${coverage}%"
+        if (( $(echo "$coverage < 18" | bc -l) )); then
+          echo "::error::Coverage ${coverage}% is below 18% threshold"
+          exit 1
+        fi
+
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
@@ -69,7 +78,18 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21'
+        go-version: '1.23'
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    
+    - name: Install minification dependencies
+      run: npm install
+    
+    - name: Minify web assets
+      run: ./scripts/minify.sh
     
     - name: Build for multiple platforms
       run: |
@@ -104,7 +124,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21'
+        go-version: '1.23'
     
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v6

@@ -8,11 +8,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var (
-	errorStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FF0000")).
-		Bold(true)
-)
+var errorStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("#FF0000")).
+	Bold(true)
 
 func main() {
 	if err := cmd.Execute(); err != nil {
