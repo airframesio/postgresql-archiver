@@ -32,8 +32,10 @@ const (
 
 // Error definitions
 var (
-	ErrInsufficientPermissions = errors.New("insufficient permissions to read table")
-	ErrPartitionNoPermissions  = errors.New("partition tables exist but you don't have SELECT permissions")
+	ErrInsufficientPermissions  = errors.New("insufficient permissions to read table")
+	ErrPartitionNoPermissions   = errors.New("partition tables exist but you don't have SELECT permissions")
+	ErrS3ClientNotInitialized   = errors.New("S3 client not initialized")
+	ErrS3UploaderNotInitialized = errors.New("S3 uploader not initialized")
 )
 
 type Archiver struct {
@@ -866,6 +868,12 @@ func (a *Archiver) compressData(data []byte) ([]byte, error) {
 }
 
 func (a *Archiver) checkObjectExists(key string) (bool, int64, string) {
+	// Check if S3 client is initialized
+	if a.s3Client == nil {
+		a.logger.Error("S3 client not initialized")
+		return false, 0, ""
+	}
+
 	headInput := &s3.HeadObjectInput{
 		Bucket: aws.String(a.config.S3.Bucket),
 		Key:    aws.String(key),
@@ -935,6 +943,11 @@ func (a *Archiver) uploadToS3(key string, data []byte) error {
 
 	// Use multipart upload for files larger than 100MB
 	if len(data) > 100*1024*1024 {
+		// Check if S3 uploader is initialized
+		if a.s3Uploader == nil {
+			return ErrS3UploaderNotInitialized
+		}
+
 		// Use S3 manager for automatic multipart upload handling
 		uploadInput := &s3manager.UploadInput{
 			Bucket:      aws.String(a.config.S3.Bucket),
@@ -945,6 +958,11 @@ func (a *Archiver) uploadToS3(key string, data []byte) error {
 
 		_, err := a.s3Uploader.Upload(uploadInput)
 		return err
+	}
+
+	// Check if S3 client is initialized
+	if a.s3Client == nil {
+		return ErrS3ClientNotInitialized
 	}
 
 	// Use simple PutObject for smaller files

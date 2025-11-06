@@ -3,6 +3,8 @@ let currentData = {};  // Track current data by partition key
 let currentSort = { column: 'partition', direction: 'asc' };  // Default sort by partition name
 let ws = null;
 let wsReconnectInterval = null;
+let wsReconnectAttempts = 0;  // Track reconnection attempts globally
+let wsReconnectDelay = 1000;  // Current reconnection delay
 let lastTaskState = null;  // Store last known task state to avoid flashing
 
 // HTML escape function to prevent XSS attacks
@@ -175,8 +177,51 @@ function getRowKey(entry) {
     return entry.table + '|' + entry.partition;
 }
 
+// Schedule WebSocket reconnection with exponential backoff
+function scheduleReconnection() {
+    // Clear any existing reconnection timer
+    if (wsReconnectInterval) {
+        clearTimeout(wsReconnectInterval);
+        wsReconnectInterval = null;
+    }
+
+    wsReconnectAttempts++;
+    const maxAttempts = 30;
+
+    if (wsReconnectAttempts > maxAttempts) {
+        document.getElementById('status-text').textContent = 'Connection failed - please refresh the page';
+        return;
+    }
+
+    console.log('Reconnect attempt ' + wsReconnectAttempts + '/' + maxAttempts + ' (delay: ' + wsReconnectDelay + 'ms)');
+    document.getElementById('status-text').textContent = 'Reconnecting (' + wsReconnectAttempts + '/' + maxAttempts + ')...';
+
+    wsReconnectInterval = setTimeout(function() {
+        wsReconnectInterval = null;
+        connectWebSocket();
+        // Double the delay for next attempt, cap at 30 seconds
+        wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000);
+    }, wsReconnectDelay);
+}
+
 // WebSocket connection management
 function connectWebSocket() {
+    // Clear any pending reconnection attempts
+    if (wsReconnectInterval) {
+        clearTimeout(wsReconnectInterval);
+        wsReconnectInterval = null;
+    }
+
+    // Close existing WebSocket if it exists
+    if (ws) {
+        // Remove all handlers to prevent triggering reconnection
+        ws.onopen = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        ws.close();
+        ws = null;
+    }
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = protocol + '//' + window.location.host + '/ws';
 
@@ -188,7 +233,9 @@ function connectWebSocket() {
         document.getElementById('status').classList.remove('disconnected');
         document.getElementById('status-text').textContent = 'Connected to live updates';
 
-        // Clear reconnect timeout if exists
+        // Reset reconnection state on successful connection
+        wsReconnectAttempts = 0;
+        wsReconnectDelay = 1000;
         if (wsReconnectInterval) {
             clearTimeout(wsReconnectInterval);
             wsReconnectInterval = null;
@@ -225,43 +272,8 @@ function connectWebSocket() {
             document.getElementById('status-text').textContent = 'Connection lost - attempting to reconnect...';
         }
 
-        // Clear any existing reconnection timer to prevent memory leaks
-        if (wsReconnectInterval) {
-            clearTimeout(wsReconnectInterval);
-            wsReconnectInterval = null;
-        }
-
-        // Set up reconnection with exponential backoff
-        let reconnectAttempts = 0;
-        let delay = 1000; // Start with 1 second
-        
-        const attemptReconnect = () => {
-            reconnectAttempts++;
-            const maxAttempts = 30;
-
-            if (reconnectAttempts > maxAttempts) {
-                wsReconnectInterval = null;
-                document.getElementById('status-text').textContent = 'Connection failed - please refresh the page';
-                return;
-            }
-
-            console.log('Reconnect attempt ' + reconnectAttempts + '/' + maxAttempts + ' (delay: ' + delay + 'ms)');
-            document.getElementById('status-text').textContent = 'Reconnecting (' + reconnectAttempts + '/' + maxAttempts + ')...';
-            
-            // Close existing WebSocket if it exists to avoid resource leaks
-            if (ws) {
-                ws.onclose = null; // Remove handler to prevent triggering another reconnection
-                ws.close();
-            }
-            
-            connectWebSocket();
-            
-            // Double the delay for next attempt, cap at 30 seconds
-            delay = Math.min(delay * 2, 30000);
-            wsReconnectInterval = setTimeout(attemptReconnect, delay);
-        };
-        
-        wsReconnectInterval = setTimeout(attemptReconnect, delay);
+        // Schedule reconnection using global state machine
+        scheduleReconnection();
     };
 }
 
@@ -658,7 +670,7 @@ function updateRow(row, entry) {
             '<div class="partition-name">' + escapeHTML(entry.partition) + '</div>' +
             '<div class="table-name">' + escapeHTML(entry.table) + '</div>' +
             '</td>' +
-            '<td class="size">' + (entry.rowCount ? entry.rowCount.toLocaleString() : '—') + '</td>' +
+            '<td class="size">' + (entry.rowCount != null ? entry.rowCount.toLocaleString() : '—') + '</td>' +
             '<td class="size">' + formatBytes(entry.uncompressedSize) + '</td>' +
             '<td class="size">' + formatBytes(entry.fileSize) + '</td>' +
             '<td class="ratio">' + ratio + '</td>' +
@@ -669,7 +681,7 @@ function updateRow(row, entry) {
     } else {
         // For existing rows, selectively update only changed cells
         // Calculate new values
-        const newRowCount = entry.rowCount ? entry.rowCount.toLocaleString() : '—';
+        const newRowCount = entry.rowCount != null ? entry.rowCount.toLocaleString() : '—';
         const newUncompressed = formatBytes(entry.uncompressedSize);
         const newCompressed = formatBytes(entry.fileSize);
 
