@@ -8,8 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Homebrew Tap Distribution:**
+  - Official Homebrew tap at `airframesio/tap`
+  - One-command installation: `brew install airframesio/tap/postgresql-archiver`
+  - Automated formula updates via GoReleaser
+  - Formula includes optional PostgreSQL dependency
+  - Supports macOS (Intel and Apple Silicon) and Linux
 
 ### Changed
+- **Release Automation:**
+  - Migrated to GoReleaser for streamlined release process
+  - Automated Homebrew formula generation and publishing
+  - Enhanced release notes with installation instructions
+  - Improved changelog generation with categorized changes
 
 ### Fixed
 

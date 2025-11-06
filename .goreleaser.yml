@@ -1,0 +1,125 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod download
+    # Install Node dependencies for minification
+    - npm install
+    # Minify web assets before building
+    - ./scripts/minify.sh
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.CommitHash={{.ShortCommit}}
+      - -X main.BuildDate={{.Date}}
+    binary: postgresql-archiver
+
+archives:
+  - format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}-
+      {{- .Version }}-
+      {{- .Os }}-
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Performance Improvements
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Others
+      order: 999
+
+brews:
+  - name: postgresql-archiver
+    repository:
+      owner: airframesio
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/airframesio/postgresql-archiver"
+    description: "Archive PostgreSQL partition data to object storage with parallel processing"
+    license: "MIT"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    dependencies:
+      - name: postgresql
+        type: optional
+    test: |
+      system "#{bin}/postgresql-archiver", "--version"
+      assert_match version.to_s, shell_output("#{bin}/postgresql-archiver --version 2>&1")
+    install: |
+      bin.install "postgresql-archiver"
+
+release:
+  github:
+    owner: airframesio
+    name: postgresql-archiver
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## Release {{.Tag}}
+
+    See [CHANGELOG.md](https://github.com/airframesio/postgresql-archiver/blob/main/CHANGELOG.md) for detailed changes.
+  footer: |
+    **Full Changelog**: https://github.com/airframesio/postgresql-archiver/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    ## Installation
+
+    ### Homebrew (macOS/Linux)
+    ```bash
+    brew install airframesio/tap/postgresql-archiver
+    ```
+
+    ### Direct Download
+    Download the appropriate binary for your platform from the assets below.
+
+    ### Verify Checksums
+    ```bash
+    sha256sum -c checksums.txt
+    ```
+
+announce:
+  skip: true

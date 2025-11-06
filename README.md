@@ -57,16 +57,30 @@ A high-performance CLI tool for archiving PostgreSQL partitioned table data to S
 
 ## 🔧 Installation
 
+### Homebrew (macOS/Linux)
+
+The easiest way to install on macOS or Linux:
+
+```bash
+brew install airframesio/tap/postgresql-archiver
+```
+
+### Pre-built Binaries
+
+Download the latest release for your platform from the [releases page](https://github.com/airframesio/postgresql-archiver/releases).
+
+### Go Install
+
+```bash
+go install github.com/airframesio/postgresql-archiver@latest
+```
+
+### Build from Source
+
 ```bash
 git clone https://github.com/airframesio/postgresql-archiver.git
 cd postgresql-archiver
 go build -o postgresql-archiver
-```
-
-Or install directly:
-
-```bash
-go install github.com/airframesio/postgresql-archiver@latest
 ```
 
 ## 🚀 Quick Start
