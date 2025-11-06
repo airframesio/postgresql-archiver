@@ -845,6 +845,8 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 				partitionIndex: 0,
 				sliceIndex:     i,
 				success:        sliceResult.Error == nil && !sliceResult.Skipped,
+				result:         sliceResult,
+				sliceDate:      timeRange.Start.Format("2006-01-02"),
 			})
 		}
 

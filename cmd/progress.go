@@ -67,6 +67,10 @@ type progressModel struct {
 	totalSlices       int
 	currentSliceDate  string
 	sliceProgress     progress.Model
+	sliceResults      []struct {
+		date   string
+		result ProcessResult
+	}
 }
 
 type progressMsg struct {
@@ -140,6 +144,8 @@ type sliceCompleteMsg struct {
 	partitionIndex int
 	sliceIndex     int
 	success        bool
+	result         ProcessResult
+	sliceDate      string
 }
 
 var (
@@ -824,6 +830,7 @@ func (m progressModel) handlePartitionCompleteMsg(msg partitionCompleteMsg) (tea
 	m.currentSliceIndex = 0
 	m.totalSlices = 0
 	m.currentSliceDate = ""
+	m.sliceResults = nil // Clear slice results for next partition
 
 	if len(m.partitions) > 0 {
 		overallPercent := float64(m.currentIndex) / float64(len(m.partitions))
@@ -882,7 +889,20 @@ func (m progressModel) handleSliceStartMsg(msg sliceStartMsg) (tea.Model, tea.Cm
 }
 
 func (m progressModel) handleSliceCompleteMsg(msg sliceCompleteMsg) (tea.Model, tea.Cmd) {
-	// Slice complete - update will be reflected in the view
+	// Store slice result for display in Recent Results
+	m.sliceResults = append(m.sliceResults, struct {
+		date   string
+		result ProcessResult
+	}{
+		date:   msg.sliceDate,
+		result: msg.result,
+	})
+
+	// Keep only the last 10 slice results to avoid memory growth
+	if len(m.sliceResults) > 10 {
+		m.sliceResults = m.sliceResults[len(m.sliceResults)-10:]
+	}
+
 	return m, nil
 }
 
@@ -1039,16 +1059,37 @@ func (m progressModel) renderProcessingPhase() []string {
 // renderProcessingSummary renders summary of processing results
 func (m progressModel) renderProcessingSummary() []string {
 	var sections []string
-	if len(m.results) > 0 {
+
+	// Combine partition results and slice results, limiting total display
+	if len(m.results) > 0 || len(m.sliceResults) > 0 {
 		sections = append(sections, tableHeaderStyle.Render("   Recent Results"))
 		sections = append(sections, "")
 
-		startIndex := 0
-		if len(m.results) > 5 {
-			startIndex = len(m.results) - 5
+		// Show recent slice results (indented to show they're nested)
+		sliceStartIndex := 0
+		if len(m.sliceResults) > 5 {
+			sliceStartIndex = len(m.sliceResults) - 5
+		}
+		for _, sliceRes := range m.sliceResults[sliceStartIndex:] {
+			var line string
+			if sliceRes.result.Skipped {
+				line = fmt.Sprintf("     ⏭  %s - %s", sliceRes.date, sliceRes.result.SkipReason)
+			} else if sliceRes.result.Error != nil {
+				line = fmt.Sprintf("     ❌ %s - Error: %v", sliceRes.date, sliceRes.result.Error)
+			} else if sliceRes.result.Uploaded {
+				line = fmt.Sprintf("     ✅ %s - Uploaded %d bytes", sliceRes.date, sliceRes.result.BytesWritten)
+			} else {
+				line = fmt.Sprintf("     ⏸  %s - In progress", sliceRes.date)
+			}
+			sections = append(sections, line)
 		}
 
-		for _, result := range m.results[startIndex:] {
+		// Show recent partition results
+		partStartIndex := 0
+		if len(m.results) > 3 {
+			partStartIndex = len(m.results) - 3
+		}
+		for _, result := range m.results[partStartIndex:] {
 			var line string
 			if result.Skipped {
 				line = fmt.Sprintf("   ⏭  %s - %s", result.Partition.TableName, result.SkipReason)
@@ -1061,6 +1102,7 @@ func (m progressModel) renderProcessingSummary() []string {
 			}
 			sections = append(sections, line)
 		}
+
 		sections = append(sections, "")
 	}
 	return sections
