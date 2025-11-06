@@ -35,8 +35,8 @@ func (f *ParquetFormatter) Format(rows []map[string]interface{}) ([]byte, error)
 
 	var buffer bytes.Buffer
 
-	// Build schema from first row
-	schema, _ := buildSchemaFromRow(rows[0])
+	// Build schema by scanning all rows to find actual types
+	schema, _ := buildSchemaFromRows(rows)
 
 	// Map compression type to parquet compression codec and create writer
 	var writer *parquet.GenericWriter[map[string]any]
@@ -71,19 +71,39 @@ func (f *ParquetFormatter) Format(rows []map[string]interface{}) ([]byte, error)
 	return buffer.Bytes(), nil
 }
 
-// buildSchemaFromRow creates a Parquet schema from a sample row
-func buildSchemaFromRow(row map[string]interface{}) (*parquet.Schema, []string) {
-	// Get sorted column names for consistent ordering
-	columns := make([]string, 0, len(row))
-	for col := range row {
+// buildSchemaFromRows creates a Parquet schema by scanning all rows to find actual types
+func buildSchemaFromRows(rows []map[string]interface{}) (*parquet.Schema, []string) {
+	if len(rows) == 0 {
+		return parquet.NewSchema("postgresql_export", parquet.Group{}), []string{}
+	}
+
+	// Get all column names from first row
+	columns := make([]string, 0, len(rows[0]))
+	for col := range rows[0] {
 		columns = append(columns, col)
 	}
 	sort.Strings(columns)
 
-	// Build schema fields as a Group map
+	// Find the first non-nil value for each column to determine its type
+	columnTypes := make(map[string]interface{})
+	for _, col := range columns {
+		// Scan all rows to find first non-nil value
+		for _, row := range rows {
+			if value := row[col]; value != nil {
+				columnTypes[col] = value
+				break
+			}
+		}
+		// If all values are nil, we'll default to string
+		if _, found := columnTypes[col]; !found {
+			columnTypes[col] = "" // Use string as default
+		}
+	}
+
+	// Build schema fields based on discovered types
 	fields := make(parquet.Group)
 	for _, col := range columns {
-		value := row[col]
+		value := columnTypes[col]
 
 		// Determine Parquet type based on Go type
 		var field parquet.Node
@@ -102,11 +122,8 @@ func buildSchemaFromRow(row map[string]interface{}) (*parquet.Schema, []string) 
 			field = parquet.Optional(parquet.String())
 		case []byte:
 			field = parquet.Optional(parquet.Leaf(parquet.ByteArrayType))
-		case nil:
-			// For nil values, default to string (most flexible)
-			field = parquet.Optional(parquet.String())
 		default:
-			// For unknown types, convert to string
+			// For unknown types, use string
 			field = parquet.Optional(parquet.String())
 		}
 
