@@ -44,7 +44,8 @@ func main() {
 			case <-ticker.C:
 				// Check if stop file exists
 				if _, err := os.Stat(stopFile); err == nil {
-					fmt.Fprintln(os.Stderr, infoStyle.Render("\n🛑 Stop file detected - cancelling operations..."))
+					// Stop file detected - cancel context silently
+					// The archiver will handle displaying cancellation messages
 					cancel()
 					return
 				}

@@ -246,8 +246,9 @@ func runArchive() {
 	logger.Info(titleStyle.Render("\n🚀 PostgreSQL Archiver"))
 	logger.Info(infoStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
 
-	// Display stop instructions (for Warp terminal compatibility)
-	if stopFilePath != "" {
+	// Display stop instructions (for Warp terminal compatibility) - only in debug mode
+	// In TUI mode, printing to stderr corrupts the display
+	if config.Debug && stopFilePath != "" {
 		fmt.Fprintln(os.Stderr, "\n"+infoStyle.Render("💡 To stop archiver: Press CTRL-C, or run:"))
 		fmt.Fprintf(os.Stderr, "   "+infoStyle.Render("touch %s")+"\n\n", stopFilePath)
 	}
