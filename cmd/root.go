@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -244,19 +245,46 @@ func runArchive() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Set up signal handling with graceful and force shutdown
+	// Set up signal handling with immediate exit
+	// After multiple attempts at graceful shutdown that didn't work reliably,
+	// we now use the nuclear option: immediate process termination
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		// First signal: graceful cancellation
-		sig := <-sigChan
-		logger.Info(fmt.Sprintf("⚠️  Received signal: %v - initiating graceful shutdown (press CTRL-C again to force exit)", sig))
-		cancel()
 
-		// Second signal: force exit
-		sig = <-sigChan
-		logger.Error(fmt.Sprintf("❌ Received second signal: %v - forcing immediate exit!", sig))
-		os.Exit(130) // Standard exit code for SIGINT
+	// Track if we've already received first signal
+	var firstSignalReceived bool
+	var signalMutex sync.Mutex
+
+	go func() {
+		for {
+			sig := <-sigChan
+
+			signalMutex.Lock()
+			isFirst := !firstSignalReceived
+			if isFirst {
+				firstSignalReceived = true
+			}
+			signalMutex.Unlock()
+
+			if isFirst {
+				// First signal: brief wait then force exit
+				logger.Info(fmt.Sprintf("⚠️  Received signal: %v - exiting in 100ms (press CTRL-C again for immediate exit)", sig))
+
+				// Cancel context (might help with cleanup)
+				cancel()
+
+				// Wait very briefly in a goroutine, so we can still catch second signal
+				go func() {
+					time.Sleep(100 * time.Millisecond)
+					logger.Info("Forcing process exit...")
+					os.Exit(130) // Standard exit code for SIGINT
+				}()
+			} else {
+				// Second signal: immediate exit (no wait)
+				logger.Error(fmt.Sprintf("❌ Received second signal: %v - forcing immediate exit NOW!", sig))
+				os.Exit(130)
+			}
+		}
 	}()
 
 	logger.Debug("Creating archiver...")
