@@ -848,7 +848,8 @@ func (m progressModel) handlePartitionCompleteMsg(msg partitionCompleteMsg) (tea
 func (m progressModel) handleAllCompleteMsg(_ allCompleteMsg) (tea.Model, tea.Cmd) {
 	m.phase = PhaseComplete
 	m.done = true
-	return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
+	// Don't use ExitAltScreen so the completion summary stays visible
+	return m, tea.Quit
 }
 
 func (m progressModel) handleStageUpdateMsg(msg stageUpdateMsg) (tea.Model, tea.Cmd) {
@@ -1118,11 +1119,49 @@ func (m progressModel) renderProcessingSummary() []string {
 	return sections
 }
 
-func (m progressModel) View() string {
-	if m.done && m.phase == PhaseComplete {
-		return ""
+// renderCompletionSummary renders the final completion summary
+func (m progressModel) renderCompletionSummary() []string {
+	var sections []string
+
+	sections = append(sections, "")
+	sections = append(sections, tableHeaderStyle.Render("   Completion Summary"))
+	sections = append(sections, "")
+
+	// Count results by status
+	var uploaded, skipped, failed int
+	var totalBytes int64
+	for _, result := range m.results {
+		if result.Error != nil {
+			failed++
+		} else if result.Skipped {
+			skipped++
+		} else if result.Uploaded {
+			uploaded++
+			totalBytes += result.BytesWritten
+		}
 	}
 
+	// Show statistics
+	sections = append(sections, fmt.Sprintf("   Total Partitions: %d", len(m.partitions)))
+	sections = append(sections, fmt.Sprintf("   ✅ Uploaded: %d", uploaded))
+	if skipped > 0 {
+		sections = append(sections, fmt.Sprintf("   ⏭  Skipped: %d", skipped))
+	}
+	if failed > 0 {
+		sections = append(sections, fmt.Sprintf("   ❌ Failed: %d", failed))
+	}
+
+	// Show total bytes if any uploads occurred
+	if totalBytes > 0 {
+		sections = append(sections, "")
+		sections = append(sections, fmt.Sprintf("   Total Data Uploaded: %s", formatBytes(totalBytes)))
+	}
+
+	sections = append(sections, "")
+	return sections
+}
+
+func (m progressModel) View() string {
 	var sections []string
 
 	// Render banner
@@ -1134,21 +1173,39 @@ func (m progressModel) View() string {
 	// Render separator
 	sections = append(sections, m.renderSeparator()...)
 
-	// Phase-specific content
-	switch m.phase { //nolint:exhaustive // PhaseComplete is terminal
-	case PhaseConnecting, PhaseCheckingPermissions, PhaseDiscovering:
-		sections = append(sections, m.renderInitialPhase()...)
-	case PhaseCounting:
-		sections = append(sections, m.renderCountingPhase()...)
-	case PhaseProcessing:
-		sections = append(sections, m.renderProcessingPhase()...)
+	// Phase-specific content or completion summary
+	if m.done && m.phase == PhaseComplete {
+		sections = append(sections, m.renderCompletionSummary()...)
+	} else {
+		switch m.phase { //nolint:exhaustive // PhaseComplete is terminal
+		case PhaseConnecting, PhaseCheckingPermissions, PhaseDiscovering:
+			sections = append(sections, m.renderInitialPhase()...)
+		case PhaseCounting:
+			sections = append(sections, m.renderCountingPhase()...)
+		case PhaseProcessing:
+			sections = append(sections, m.renderProcessingPhase()...)
+		}
+
+		// Help text (only show during processing, not on completion)
+		sections = append(sections, "")
+		sections = append(sections, helpStyle.Render("   Press Ctrl+C or 'q' to quit"))
 	}
 
-	// Help text
-	sections = append(sections, "")
-	sections = append(sections, helpStyle.Render("   Press Ctrl+C or 'q' to quit"))
-
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+// formatBytes formats byte count into human-readable string
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
 func updateProgress(stage string, current, total int64) tea.Cmd {

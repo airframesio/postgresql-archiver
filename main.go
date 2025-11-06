@@ -17,9 +17,6 @@ var errorStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("#FF0000")).
 	Bold(true)
 
-var infoStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("#00D9FF"))
-
 func main() {
 	pid := os.Getpid()
 	stopFile := filepath.Join(os.TempDir(), fmt.Sprintf("postgresql-archiver-%d.stop", pid))

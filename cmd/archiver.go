@@ -77,8 +77,8 @@ type ProcessResult struct {
 	Error        error
 	BytesWritten int64
 	Stage        string
-	S3Key        string       // S3 object key for uploaded file
-	StartTime    time.Time    // When partition processing started
+	S3Key        string        // S3 object key for uploaded file
+	StartTime    time.Time     // When partition processing started
 	Duration     time.Duration // How long partition processing took
 }
 
@@ -917,23 +917,20 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	formatter := formatters.GetFormatterWithCompression(a.config.OutputFormat, a.config.Compression)
 
 	// For formats with internal compression (like Parquet), skip external compression
-	var compressor compressors.Compressor
 	var compressionExt string
-	var err error
 	if formatters.UsesInternalCompression(a.config.OutputFormat) {
-		// Use "none" compressor for formats that handle compression internally
-		compressor, err = compressors.GetCompressor("none")
-		compressionExt = "" // No compression extension for internally compressed formats
+		// No compression extension for internally compressed formats
+		compressionExt = ""
 	} else {
-		// Use configured compressor for other formats
-		compressor, err = compressors.GetCompressor(a.config.Compression)
+		// Use configured compressor for other formats to get extension
+		compressor, err := compressors.GetCompressor(a.config.Compression)
+		if err != nil {
+			result.Error = fmt.Errorf("failed to get compressor: %w", err)
+			result.Stage = "Setup"
+			result.Duration = time.Since(startTime)
+			return result
+		}
 		compressionExt = compressor.Extension()
-	}
-	if err != nil {
-		result.Error = fmt.Errorf("failed to get compressor: %w", err)
-		result.Stage = "Setup"
-		result.Duration = time.Since(startTime)
-		return result
 	}
 
 	// Generate filename (use outputDate for filename)
@@ -1063,19 +1060,27 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 	// For formats with internal compression (like Parquet), skip external compression
 	var compressor compressors.Compressor
 	var compressionExt string
-	var err error
 	if formatters.UsesInternalCompression(a.config.OutputFormat) {
+		// No compression extension for internally compressed formats
+		var err error
 		compressor, err = compressors.GetCompressor("none")
+		if err != nil {
+			result.Error = fmt.Errorf("failed to get compressor: %w", err)
+			result.Stage = "Setup"
+			result.Duration = time.Since(sliceStartTime)
+			return result
+		}
 		compressionExt = ""
 	} else {
+		var err error
 		compressor, err = compressors.GetCompressor(a.config.Compression)
+		if err != nil {
+			result.Error = fmt.Errorf("failed to get compressor: %w", err)
+			result.Stage = "Setup"
+			result.Duration = time.Since(sliceStartTime)
+			return result
+		}
 		compressionExt = compressor.Extension()
-	}
-	if err != nil {
-		result.Error = fmt.Errorf("failed to get compressor: %w", err)
-		result.Stage = "Setup"
-		result.Duration = time.Since(sliceStartTime)
-		return result
 	}
 
 	// Generate filename (use slice start time)
