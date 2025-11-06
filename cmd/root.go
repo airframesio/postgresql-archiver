@@ -244,13 +244,19 @@ func runArchive() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Set up signal handling
+	// Set up signal handling with graceful and force shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
+		// First signal: graceful cancellation
 		sig := <-sigChan
-		logger.Debug(debugStyle.Render(fmt.Sprintf("📌 Received signal: %v", sig)))
+		logger.Info(fmt.Sprintf("⚠️  Received signal: %v - initiating graceful shutdown (press CTRL-C again to force exit)", sig))
 		cancel()
+
+		// Second signal: force exit
+		sig = <-sigChan
+		logger.Error(fmt.Sprintf("❌ Received second signal: %v - forcing immediate exit!", sig))
+		os.Exit(130) // Standard exit code for SIGINT
 	}()
 
 	logger.Debug("Creating archiver...")

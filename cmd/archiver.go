@@ -115,23 +115,30 @@ func (a *Archiver) Run(ctx context.Context) error {
 		}()
 
 		// Wait for completion or cancellation
-		select {
-		case err := <-errChan:
-			if err != nil && !errors.Is(err, context.Canceled) {
+		for {
+			select {
+			case err := <-errChan:
+				if err != nil && !errors.Is(err, context.Canceled) {
+					return err
+				}
+				if errors.Is(err, context.Canceled) {
+					a.logger.Info("⚠️  Archival process cancelled by user")
+				} else {
+					a.logger.Info("✅ Archival process completed")
+				}
 				return err
+			case <-ctx.Done():
+				a.logger.Info("⚠️  Cancellation requested, waiting up to 3 seconds for cleanup...")
+				// Wait for the goroutine to finish cleanup, but with timeout
+				select {
+				case err := <-errChan:
+					a.logger.Info("✅ Cleanup completed")
+					return err
+				case <-time.After(3 * time.Second):
+					a.logger.Error("⚠️  Cleanup timeout - forcing exit")
+					return fmt.Errorf("cleanup timeout after cancellation")
+				}
 			}
-			if errors.Is(err, context.Canceled) {
-				a.logger.Info("⚠️  Archival process cancelled by user")
-			} else {
-				a.logger.Info("✅ Archival process completed")
-			}
-			return err
-		case <-ctx.Done():
-			a.logger.Info("⚠️  Cancellation requested, waiting for cleanup...")
-			// Wait for the goroutine to finish cleanup
-			err := <-errChan
-			a.logger.Info("✅ Cleanup completed")
-			return err
 		}
 	}
 
@@ -207,12 +214,33 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, program *tea.Program,
 	pattern := a.config.Table + "_%"
 	rows, err := a.db.QueryContext(ctx, query, pattern)
 	if err != nil {
+		// Check if error is due to cancellation
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			a.logger.Info("⚠️  Query cancelled before execution")
+			return err
+		}
 		return fmt.Errorf("failed to query partitions: %w", err)
 	}
 	defer rows.Close()
 
+	// Check for cancellation immediately after query starts
+	select {
+	case <-ctx.Done():
+		a.logger.Info("⚠️  Cancellation detected after query started")
+		return ctx.Err()
+	default:
+	}
+
 	var partitions []PartitionInfo
 	for rows.Next() {
+		// Check for cancellation in the loop
+		select {
+		case <-ctx.Done():
+			a.logger.Info("⚠️  Cancellation detected during partition discovery")
+			return ctx.Err()
+		default:
+		}
+
 		var tableName string
 		if err := rows.Scan(&tableName); err != nil {
 			return fmt.Errorf("failed to scan partition name: %w", err)
@@ -652,8 +680,14 @@ func (a *Archiver) processPartitionsWithProgress(partitions []PartitionInfo, pro
 
 func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program *tea.Program) ProcessResult {
 	// Check if we need to split this partition based on output_duration and date_column
-	if a.config.DateColumn != "" && a.shouldSplitPartition(partition) {
-		return a.processPartitionWithSplit(partition, program)
+	if a.shouldSplitPartition(partition) {
+		if a.config.DateColumn == "" {
+			// Need date column for splitting
+			a.logger.Warn(fmt.Sprintf("⚠️  Partition %s should be split into %s files but --date-column not specified. Processing as single file.",
+				partition.TableName, a.config.OutputDuration))
+		} else {
+			return a.processPartitionWithSplit(partition, program)
+		}
 	}
 
 	// Process as a single file (original behavior)
@@ -1388,9 +1422,22 @@ func (a *Archiver) extractRowsWithProgress(partition PartitionInfo, program *tea
 
 	rows, err := a.db.QueryContext(a.ctx, query)
 	if err != nil {
+		// Check if error is due to cancellation
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			a.logger.Debug("  ⚠️  Query cancelled before execution")
+			return nil, err
+		}
 		return nil, err
 	}
 	defer rows.Close()
+
+	// Check for cancellation immediately after query starts
+	select {
+	case <-a.ctx.Done():
+		a.logger.Debug("  ⚠️  Cancellation detected after query started")
+		return nil, a.ctx.Err()
+	default:
+	}
 
 	var result []map[string]interface{}
 	rowCount := int64(0)
@@ -1406,10 +1453,11 @@ func (a *Archiver) extractRowsWithProgress(partition PartitionInfo, program *tea
 	}
 
 	for rows.Next() {
-		// Check for cancellation periodically (every 1000 rows)
-		if rowCount%1000 == 0 {
+		// Check for cancellation more frequently for better responsiveness
+		if rowCount%100 == 0 {
 			select {
 			case <-a.ctx.Done():
+				a.logger.Debug("  ⚠️  Cancellation detected during row extraction")
 				return nil, a.ctx.Err()
 			default:
 			}
@@ -1483,17 +1531,31 @@ func (a *Archiver) extractRowsWithDateFilter(partition PartitionInfo, startTime,
 
 	rows, err := a.db.QueryContext(a.ctx, query, startTime, endTime)
 	if err != nil {
+		// Check if error is due to cancellation
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			a.logger.Debug("  ⚠️  Filtered query cancelled before execution")
+			return nil, err
+		}
 		return nil, err
 	}
 	defer rows.Close()
 
+	// Check for cancellation immediately after query starts
+	select {
+	case <-a.ctx.Done():
+		a.logger.Debug("  ⚠️  Cancellation detected after filtered query started")
+		return nil, a.ctx.Err()
+	default:
+	}
+
 	var result []map[string]interface{}
 
 	for rows.Next() {
-		// Check for cancellation periodically (every 1000 rows)
-		if len(result)%1000 == 0 {
+		// Check for cancellation more frequently for better responsiveness
+		if len(result)%100 == 0 {
 			select {
 			case <-a.ctx.Done():
+				a.logger.Debug("  ⚠️  Cancellation detected during filtered row extraction")
 				return nil, a.ctx.Err()
 			default:
 			}
