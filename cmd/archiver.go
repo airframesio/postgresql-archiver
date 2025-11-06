@@ -644,6 +644,99 @@ func (a *Archiver) processPartitionsWithProgress(partitions []PartitionInfo, pro
 */
 
 func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program *tea.Program) ProcessResult {
+	// Check if we need to split this partition based on output_duration and date_column
+	if a.config.DateColumn != "" && a.shouldSplitPartition(partition) {
+		return a.processPartitionWithSplit(partition, program)
+	}
+
+	// Process as a single file (original behavior)
+	return a.processSinglePartition(partition, program, partition.Date)
+}
+
+// shouldSplitPartition determines if a partition needs to be split based on output_duration
+func (a *Archiver) shouldSplitPartition(partition PartitionInfo) bool {
+	// Determine partition period from table name
+	// For now, we'll check if it's a monthly partition and output is smaller
+	// Monthly partitions end with _YYYY_MM or _YYYYMM
+	tableName := partition.TableName
+	baseTable := a.config.Table + "_"
+
+	if !strings.HasPrefix(tableName, baseTable) {
+		return false
+	}
+
+	suffix := strings.TrimPrefix(tableName, baseTable)
+
+	// Check for monthly partition patterns
+	isMonthly := len(suffix) == 7 && suffix[4] == '_' // YYYY_MM
+	if !isMonthly {
+		isMonthly = len(suffix) == 6 // YYYYMM
+	}
+
+	// If it's monthly and output duration is smaller, split
+	if isMonthly {
+		switch a.config.OutputDuration {
+		case DurationDaily, DurationWeekly, DurationHourly:
+			return true
+		}
+	}
+
+	// Add more cases as needed (daily -> hourly, etc.)
+
+	return false
+}
+
+// processPartitionWithSplit splits a partition into multiple output files based on date_column
+func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *tea.Program) ProcessResult {
+	result := ProcessResult{
+		Partition: partition,
+	}
+
+	a.logger.Debug(fmt.Sprintf("Splitting partition %s by %s", partition.TableName, a.config.OutputDuration))
+
+	// Determine partition time range (start of month, end of month)
+	partitionStart := time.Date(partition.Date.Year(), partition.Date.Month(), 1, 0, 0, 0, 0, partition.Date.Location())
+	partitionEnd := partitionStart.AddDate(0, 1, 0) // Start of next month
+
+	// Split into time ranges based on output duration
+	ranges := SplitPartitionByDuration(partitionStart, partitionEnd, a.config.OutputDuration)
+
+	a.logger.Info(fmt.Sprintf("  Splitting into %d %s files", len(ranges), a.config.OutputDuration))
+
+	// Process each time range separately
+	totalBytes := int64(0)
+	for _, timeRange := range ranges {
+		// Check for cancellation
+		select {
+		case <-a.ctx.Done():
+			result.Error = a.ctx.Err()
+			result.Stage = "Cancelled"
+			return result
+		default:
+		}
+
+		// Process this time slice
+		sliceResult := a.processSinglePartitionSlice(partition, program, timeRange.Start, timeRange.End)
+
+		if sliceResult.Error != nil {
+			// If any slice fails, return the error
+			return sliceResult
+		}
+
+		if !sliceResult.Skipped {
+			totalBytes += sliceResult.BytesWritten
+		}
+	}
+
+	result.BytesWritten = totalBytes
+	result.Compressed = true
+	result.Uploaded = true
+
+	return result
+}
+
+// processSinglePartition processes a partition as a single output file
+func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.Program, outputDate time.Time) ProcessResult {
 	result := ProcessResult{
 		Partition: partition,
 	}
@@ -662,9 +755,9 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program
 		}
 	}
 
-	// Generate object key using path template
+	// Generate object key using path template (use outputDate for path)
 	pathTemplate := NewPathTemplate(a.config.S3.PathTemplate)
-	basePath := pathTemplate.Generate(a.config.Table, partition.Date)
+	basePath := pathTemplate.Generate(a.config.Table, outputDate)
 
 	// Get formatter with compression support
 	formatter := formatters.GetFormatterWithCompression(a.config.OutputFormat, a.config.Compression)
@@ -688,10 +781,10 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program
 		return result
 	}
 
-	// Generate filename
+	// Generate filename (use outputDate for filename)
 	filename := GenerateFilename(
 		a.config.Table,
-		partition.Date,
+		outputDate,
 		a.config.OutputDuration,
 		formatter.Extension(),
 		compressionExt,
@@ -781,6 +874,140 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program
 		_ = cache.save(a.config.Table)
 		a.logger.Debug(fmt.Sprintf("  💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s", len(compressed), uncompressedSize, localMD5))
 	}
+
+	result.Stage = "Complete"
+	return result
+}
+
+// processSinglePartitionSlice processes a time slice of a partition with date filtering
+func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program *tea.Program, startTime, endTime time.Time) ProcessResult {
+	a.logger.Info(fmt.Sprintf("    Processing slice: %s", startTime.Format("2006-01-02")))
+
+	result := ProcessResult{
+		Partition: partition,
+	}
+
+	// Generate object key using path template (use slice start time)
+	pathTemplate := NewPathTemplate(a.config.S3.PathTemplate)
+	basePath := pathTemplate.Generate(a.config.Table, startTime)
+
+	// Get formatter with compression support
+	formatter := formatters.GetFormatterWithCompression(a.config.OutputFormat, a.config.Compression)
+
+	// For formats with internal compression (like Parquet), skip external compression
+	var compressor compressors.Compressor
+	var compressionExt string
+	var err error
+	if formatters.UsesInternalCompression(a.config.OutputFormat) {
+		compressor, err = compressors.GetCompressor("none")
+		compressionExt = ""
+	} else {
+		compressor, err = compressors.GetCompressor(a.config.Compression)
+		compressionExt = compressor.Extension()
+	}
+	if err != nil {
+		result.Error = fmt.Errorf("failed to get compressor: %w", err)
+		result.Stage = "Setup"
+		return result
+	}
+
+	// Generate filename (use slice start time)
+	filename := GenerateFilename(
+		a.config.Table,
+		startTime,
+		a.config.OutputDuration,
+		formatter.Extension(),
+		compressionExt,
+	)
+
+	objectKey := basePath + "/" + filename
+
+	// Load cache
+	cache, _ := loadPartitionCache(a.config.Table)
+
+	// Check for cancellation
+	select {
+	case <-a.ctx.Done():
+		result.Error = a.ctx.Err()
+		result.Stage = "Cancelled"
+		return result
+	default:
+	}
+
+	// Extract data for this time range
+	rows, err := a.extractRowsWithDateFilter(partition, startTime, endTime)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to extract rows: %w", err)
+		result.Stage = "Extracting"
+		return result
+	}
+
+	// If no rows in this slice, skip it
+	if len(rows) == 0 {
+		a.logger.Debug(fmt.Sprintf("      No data for %s, skipping", startTime.Format("2006-01-02")))
+		result.Skipped = true
+		result.SkipReason = "No data in time range"
+		return result
+	}
+
+	a.logger.Debug(fmt.Sprintf("      Extracted %d rows", len(rows)))
+
+	// Format the data
+	data, err := formatter.Format(rows)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to format data: %w", err)
+		result.Stage = "Formatting"
+		return result
+	}
+
+	uncompressedSize := int64(len(data))
+
+	// Check for cancellation
+	select {
+	case <-a.ctx.Done():
+		result.Error = a.ctx.Err()
+		result.Stage = "Cancelled"
+		return result
+	default:
+	}
+
+	// Compress data
+	compressed, err := compressor.Compress(data, a.config.CompressionLevel)
+	if err != nil {
+		result.Error = fmt.Errorf("compression failed: %w", err)
+		result.Stage = "Compressing"
+		return result
+	}
+	result.Compressed = true
+	result.BytesWritten = int64(len(compressed))
+
+	// Calculate MD5
+	localMD5 := fmt.Sprintf("%x", md5.Sum(compressed))
+
+	// Check for cancellation
+	select {
+	case <-a.ctx.Done():
+		result.Error = a.ctx.Err()
+		result.Stage = "Cancelled"
+		return result
+	default:
+	}
+
+	// Upload to S3
+	if !a.config.DryRun {
+		result.Stage = "Uploading"
+		if err := a.uploadToS3(objectKey, compressed); err != nil {
+			result.Error = fmt.Errorf("upload failed: %w", err)
+			return result
+		}
+		result.Uploaded = true
+
+		// Save metadata to cache
+		cache.setFileMetadata(partition.TableName, objectKey, int64(len(compressed)), uncompressedSize, localMD5, true)
+		_ = cache.save(a.config.Table)
+	}
+
+	a.logger.Info(fmt.Sprintf("      ✅ Uploaded %s (%d bytes)", filename, len(compressed)))
 
 	result.Stage = "Complete"
 	return result
@@ -1206,6 +1433,58 @@ func (a *Archiver) extractRowsWithProgress(partition PartitionInfo, program *tea
 			cache.setRowCount(partition.TableName, rowCount)
 			_ = cache.save(a.config.Table)
 		}
+	}
+
+	return result, nil
+}
+
+// extractRowsWithDateFilter extracts rows from partition with date range filtering
+func (a *Archiver) extractRowsWithDateFilter(partition PartitionInfo, startTime, endTime time.Time) ([]map[string]interface{}, error) {
+	quotedTable := pq.QuoteIdentifier(partition.TableName)
+	quotedDateColumn := pq.QuoteIdentifier(a.config.DateColumn)
+
+	// Build query with date range filter
+	query := fmt.Sprintf(
+		"SELECT row_to_json(t) FROM %s t WHERE %s >= $1 AND %s < $2",
+		quotedTable,
+		quotedDateColumn,
+		quotedDateColumn,
+	) //nolint:gosec // Table and column names are quoted with pq.QuoteIdentifier
+
+	rows, err := a.db.QueryContext(a.ctx, query, startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []map[string]interface{}
+
+	for rows.Next() {
+		// Check for cancellation periodically (every 1000 rows)
+		if len(result)%1000 == 0 {
+			select {
+			case <-a.ctx.Done():
+				return nil, a.ctx.Err()
+			default:
+			}
+		}
+
+		var jsonData json.RawMessage
+		if err := rows.Scan(&jsonData); err != nil {
+			return nil, err
+		}
+
+		// Unmarshal JSON into a map
+		var rowData map[string]interface{}
+		if err := json.Unmarshal(jsonData, &rowData); err != nil {
+			return nil, err
+		}
+
+		result = append(result, rowData)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	return result, nil
