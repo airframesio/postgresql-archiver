@@ -454,7 +454,7 @@ func (m *progressModel) processNext() tea.Cmd {
 	return func() tea.Msg {
 		// Actually process the partition using the archiver
 		if m.archiver != nil && m.archiver.db != nil {
-			result := m.archiver.ProcessPartitionWithProgress(partition, index, nil)
+			result := m.archiver.ProcessPartitionWithProgress(partition, nil)
 
 			// Debug: log any errors
 			if result.Error != nil && m.config.Debug {

@@ -502,7 +502,7 @@ func (a *Archiver) processPartitionsWithProgress(partitions []PartitionInfo, pro
 
 	// Process partitions sequentially for better progress tracking
 	for i, partition := range partitions {
-		result := a.ProcessPartitionWithProgress(partition, i, program)
+		result := a.ProcessPartitionWithProgress(partition, program)
 		results[i] = result
 
 		// Send completion update
@@ -516,7 +516,7 @@ func (a *Archiver) processPartitionsWithProgress(partitions []PartitionInfo, pro
 }
 */
 
-func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, _ int, program *tea.Program) ProcessResult {
+func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program *tea.Program) ProcessResult {
 	result := ProcessResult{
 		Partition: partition,
 	}
