@@ -28,7 +28,9 @@ import (
 
 // Stage constants
 const (
-	StageSkipped = "Skipped"
+	StageSkipped   = "Skipped"
+	StageCancelled = "Cancelled"
+	StageSetup     = "Setup"
 )
 
 // Error definitions
@@ -223,7 +225,7 @@ func (a *Archiver) Run(ctx context.Context) error {
 }
 
 // runArchivalProcess runs the archival process without the TUI (for debug mode)
-func (a *Archiver) runArchivalProcess(ctx context.Context, program *tea.Program, taskInfo *TaskInfo) error {
+func (a *Archiver) runArchivalProcess(ctx context.Context, _ *tea.Program, taskInfo *TaskInfo) error {
 	// Ensure database is always closed on exit
 	defer func() {
 		if a.db != nil {
@@ -311,6 +313,11 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, program *tea.Program,
 		})
 	}
 
+	// Check for errors from iterating over rows
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating over partition rows: %w", err)
+	}
+
 	a.logger.Info(fmt.Sprintf("✅ Found %d partitions", len(partitions)))
 
 	if len(partitions) == 0 {
@@ -319,7 +326,7 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, program *tea.Program,
 	}
 
 	a.logger.Debug("Processing partitions...")
-	var results []ProcessResult
+	results := make([]ProcessResult, 0, len(partitions))
 	for _, partition := range partitions {
 		// Check if context was cancelled
 		select {
@@ -821,7 +828,7 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 		select {
 		case <-a.ctx.Done():
 			result.Error = a.ctx.Err()
-			result.Stage = "Cancelled"
+			result.Stage = StageCancelled
 			return result
 		default:
 		}
@@ -880,9 +887,18 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 		a.logger.Info(fmt.Sprintf("  Split partition complete: %d files created, %d skipped", successCount, skipCount))
 	}
 
-	result.BytesWritten = totalBytes
-	result.Compressed = true
-	result.Uploaded = true
+	// Handle case where all slices were skipped
+	if successCount > 0 {
+		result.BytesWritten = totalBytes
+		result.Compressed = true
+		result.Uploaded = true
+	} else {
+		result.BytesWritten = 0
+		result.Compressed = false
+		result.Uploaded = false
+		result.Skipped = true
+		result.SkipReason = "All slices skipped (no data in time ranges)"
+	}
 
 	return result
 }
@@ -926,7 +942,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 		compressor, err := compressors.GetCompressor(a.config.Compression)
 		if err != nil {
 			result.Error = fmt.Errorf("failed to get compressor: %w", err)
-			result.Stage = "Setup"
+			result.Stage = StageSetup
 			result.Duration = time.Since(startTime)
 			return result
 		}
@@ -1042,7 +1058,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 }
 
 // processSinglePartitionSlice processes a time slice of a partition with date filtering
-func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program *tea.Program, startTime, endTime time.Time) ProcessResult {
+func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.Program, startTime, endTime time.Time) ProcessResult {
 	// Slice progress is now handled by TUI messages or debug logging in parent function
 	sliceStartTime := time.Now()
 	result := ProcessResult{
@@ -1066,7 +1082,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 		compressor, err = compressors.GetCompressor("none")
 		if err != nil {
 			result.Error = fmt.Errorf("failed to get compressor: %w", err)
-			result.Stage = "Setup"
+			result.Stage = StageSetup
 			result.Duration = time.Since(sliceStartTime)
 			return result
 		}
@@ -1076,7 +1092,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 		compressor, err = compressors.GetCompressor(a.config.Compression)
 		if err != nil {
 			result.Error = fmt.Errorf("failed to get compressor: %w", err)
-			result.Stage = "Setup"
+			result.Stage = StageSetup
 			result.Duration = time.Since(sliceStartTime)
 			return result
 		}
@@ -1171,7 +1187,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 	result.BytesWritten = int64(len(compressed))
 
 	// Calculate MD5
-	localMD5 := fmt.Sprintf("%x", md5.Sum(compressed))
+	localMD5 := fmt.Sprintf("%x", md5.Sum(compressed)) //nolint:gosec // MD5 used for checksums, not cryptography
 
 	// Check if we can skip upload
 	if shouldSkip, skipResult := a.checkExistingFile(partition, objectKey, compressed, localMD5, int64(len(compressed)), uncompressedSize, cache, updateTaskStage); shouldSkip {
@@ -1660,12 +1676,13 @@ func (a *Archiver) extractRowsWithDateFilter(partition PartitionInfo, startTime,
 	quotedDateColumn := pq.QuoteIdentifier(a.config.DateColumn)
 
 	// Build query with date range filter
+	//nolint:gosec // Table and column names are quoted with pq.QuoteIdentifier
 	query := fmt.Sprintf(
 		"SELECT row_to_json(t) FROM %s t WHERE %s >= $1 AND %s < $2",
 		quotedTable,
 		quotedDateColumn,
 		quotedDateColumn,
-	) //nolint:gosec // Table and column names are quoted with pq.QuoteIdentifier
+	)
 
 	rows, err := a.db.QueryContext(a.ctx, query, startTime, endTime)
 	if err != nil {

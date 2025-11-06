@@ -1,5 +1,10 @@
 package formatters
 
+// Format type constants
+const (
+	FormatParquet = "parquet"
+)
+
 // Formatter defines the interface for output format handlers
 type Formatter interface {
 	// Format converts database rows to the target format
@@ -19,7 +24,7 @@ func GetFormatter(format string) Formatter {
 		return NewJSONLFormatter()
 	case "csv":
 		return NewCSVFormatter()
-	case "parquet":
+	case FormatParquet:
 		return NewParquetFormatter()
 	default:
 		return NewJSONLFormatter() // Default to JSONL
@@ -34,7 +39,7 @@ func GetFormatterWithCompression(format string, compression string) Formatter {
 		return NewJSONLFormatter()
 	case "csv":
 		return NewCSVFormatter()
-	case "parquet":
+	case FormatParquet:
 		return NewParquetFormatterWithCompression(compression)
 	default:
 		return NewJSONLFormatter() // Default to JSONL
@@ -43,5 +48,5 @@ func GetFormatterWithCompression(format string, compression string) Formatter {
 
 // UsesInternalCompression returns true if the format handles compression internally
 func UsesInternalCompression(format string) bool {
-	return format == "parquet"
+	return format == FormatParquet
 }
