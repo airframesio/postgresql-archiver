@@ -77,7 +77,9 @@ type ProcessResult struct {
 	Error        error
 	BytesWritten int64
 	Stage        string
-	S3Key        string // S3 object key for uploaded file
+	S3Key        string       // S3 object key for uploaded file
+	StartTime    time.Time    // When partition processing started
+	Duration     time.Duration // How long partition processing took
 }
 
 func NewArchiver(config *Config, logger *slog.Logger) *Archiver {
@@ -887,8 +889,10 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 
 // processSinglePartition processes a partition as a single output file
 func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.Program, outputDate time.Time) ProcessResult {
+	startTime := time.Now()
 	result := ProcessResult{
 		Partition: partition,
+		StartTime: startTime,
 	}
 
 	// Helper function to update task info directly when stages change
@@ -928,6 +932,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	if err != nil {
 		result.Error = fmt.Errorf("failed to get compressor: %w", err)
 		result.Stage = "Setup"
+		result.Duration = time.Since(startTime)
 		return result
 	}
 
@@ -950,6 +955,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 
 	// Check if we can skip based on cached metadata
 	if shouldSkip, skipResult := a.checkCachedMetadata(partition, objectKey, cache, updateTaskStage); shouldSkip {
+		skipResult.Duration = time.Since(startTime)
 		return skipResult
 	}
 
@@ -958,6 +964,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	case <-a.ctx.Done():
 		result.Error = a.ctx.Err()
 		result.Stage = "Cancelled"
+		result.Duration = time.Since(startTime)
 		return result
 	default:
 	}
@@ -967,6 +974,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	if err != nil {
 		result.Error = err
 		result.Stage = "Extracting"
+		result.Duration = time.Since(startTime)
 		return result
 	}
 
@@ -975,6 +983,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	case <-a.ctx.Done():
 		result.Error = a.ctx.Err()
 		result.Stage = "Cancelled"
+		result.Duration = time.Since(startTime)
 		return result
 	default:
 	}
@@ -984,6 +993,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	if err != nil {
 		result.Error = err
 		result.Stage = "Compressing"
+		result.Duration = time.Since(startTime)
 		return result
 	}
 	result.Compressed = true
@@ -991,6 +1001,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 
 	// Check if we can skip upload
 	if shouldSkip, skipResult := a.checkExistingFile(partition, objectKey, compressed, localMD5, int64(len(compressed)), uncompressedSize, cache, updateTaskStage); shouldSkip {
+		skipResult.Duration = time.Since(startTime)
 		return skipResult
 	}
 
@@ -999,6 +1010,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	case <-a.ctx.Done():
 		result.Error = a.ctx.Err()
 		result.Stage = "Cancelled"
+		result.Duration = time.Since(startTime)
 		return result
 	default:
 	}
@@ -1012,6 +1024,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 		result.Stage = "Uploading"
 		if err := a.uploadToS3(objectKey, compressed); err != nil {
 			result.Error = fmt.Errorf("upload failed: %w", err)
+			result.Duration = time.Since(startTime)
 			return result
 		}
 		result.Uploaded = true
@@ -1027,14 +1040,17 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 
 	result.Stage = "Complete"
 	result.S3Key = objectKey
+	result.Duration = time.Since(startTime)
 	return result
 }
 
 // processSinglePartitionSlice processes a time slice of a partition with date filtering
 func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program *tea.Program, startTime, endTime time.Time) ProcessResult {
 	// Slice progress is now handled by TUI messages or debug logging in parent function
+	sliceStartTime := time.Now()
 	result := ProcessResult{
 		Partition: partition,
+		StartTime: sliceStartTime,
 	}
 
 	// Generate object key using path template (use slice start time)
@@ -1058,6 +1074,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 	if err != nil {
 		result.Error = fmt.Errorf("failed to get compressor: %w", err)
 		result.Stage = "Setup"
+		result.Duration = time.Since(sliceStartTime)
 		return result
 	}
 
@@ -1075,11 +1092,23 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 	// Load cache
 	cache, _ := loadPartitionCache(a.config.Table)
 
+	// Helper function for stage updates (slices use debug logging only)
+	updateTaskStage := func(stage string) {
+		a.logger.Debug(fmt.Sprintf("      %s", stage))
+	}
+
+	// Check if we can skip based on cached metadata
+	if shouldSkip, skipResult := a.checkCachedMetadata(partition, objectKey, cache, updateTaskStage); shouldSkip {
+		skipResult.Duration = time.Since(sliceStartTime)
+		return skipResult
+	}
+
 	// Check for cancellation
 	select {
 	case <-a.ctx.Done():
 		result.Error = a.ctx.Err()
 		result.Stage = "Cancelled"
+		result.Duration = time.Since(sliceStartTime)
 		return result
 	default:
 	}
@@ -1089,6 +1118,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 	if err != nil {
 		result.Error = fmt.Errorf("failed to extract rows: %w", err)
 		result.Stage = "Extracting"
+		result.Duration = time.Since(sliceStartTime)
 		return result
 	}
 
@@ -1097,6 +1127,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 		a.logger.Debug(fmt.Sprintf("      No data for %s, skipping", startTime.Format("2006-01-02")))
 		result.Skipped = true
 		result.SkipReason = "No data in time range"
+		result.Duration = time.Since(sliceStartTime)
 		return result
 	}
 
@@ -1107,6 +1138,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 	if err != nil {
 		result.Error = fmt.Errorf("failed to format data: %w", err)
 		result.Stage = "Formatting"
+		result.Duration = time.Since(sliceStartTime)
 		return result
 	}
 
@@ -1117,6 +1149,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 	case <-a.ctx.Done():
 		result.Error = a.ctx.Err()
 		result.Stage = "Cancelled"
+		result.Duration = time.Since(sliceStartTime)
 		return result
 	default:
 	}
@@ -1126,6 +1159,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 	if err != nil {
 		result.Error = fmt.Errorf("compression failed: %w", err)
 		result.Stage = "Compressing"
+		result.Duration = time.Since(sliceStartTime)
 		return result
 	}
 	result.Compressed = true
@@ -1134,11 +1168,18 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 	// Calculate MD5
 	localMD5 := fmt.Sprintf("%x", md5.Sum(compressed))
 
+	// Check if we can skip upload
+	if shouldSkip, skipResult := a.checkExistingFile(partition, objectKey, compressed, localMD5, int64(len(compressed)), uncompressedSize, cache, updateTaskStage); shouldSkip {
+		skipResult.Duration = time.Since(sliceStartTime)
+		return skipResult
+	}
+
 	// Check for cancellation
 	select {
 	case <-a.ctx.Done():
 		result.Error = a.ctx.Err()
 		result.Stage = "Cancelled"
+		result.Duration = time.Since(sliceStartTime)
 		return result
 	default:
 	}
@@ -1148,6 +1189,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 		result.Stage = "Uploading"
 		if err := a.uploadToS3(objectKey, compressed); err != nil {
 			result.Error = fmt.Errorf("upload failed: %w", err)
+			result.Duration = time.Since(sliceStartTime)
 			return result
 		}
 		result.Uploaded = true
@@ -1164,6 +1206,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 
 	result.Stage = "Complete"
 	result.S3Key = objectKey
+	result.Duration = time.Since(sliceStartTime)
 	return result
 }
 
