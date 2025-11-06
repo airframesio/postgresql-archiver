@@ -182,7 +182,11 @@ func (a *Archiver) Run(ctx context.Context) error {
 	program := tea.NewProgram(progressModel, tea.WithoutSignalHandler())
 
 	// Store the program reference in the model so goroutines can send messages
-	program.Send(setProgramMsg{program: program})
+	// Use a goroutine to avoid blocking before Run() starts
+	go func() {
+		time.Sleep(10 * time.Millisecond) // Give program.Run() time to start
+		program.Send(setProgramMsg{program: program})
+	}()
 
 	// Run the TUI (this will handle everything internally)
 	if _, err := program.Run(); err != nil {
