@@ -1025,35 +1025,35 @@ func (m progressModel) renderProcessingPhase() []string {
 		// Show current partition name if we're actively processing
 		var overallInfo string
 		if m.currentIndex < len(m.partitions) {
-			overallInfo = fmt.Sprintf("  Overall: %d/%d partitions (%s)", m.currentIndex, len(m.partitions), m.partitions[m.currentIndex].TableName)
+			overallInfo = fmt.Sprintf("    Overall: %d/%d partitions (%s)", m.currentIndex, len(m.partitions), m.partitions[m.currentIndex].TableName)
 		} else {
-			overallInfo = fmt.Sprintf("  Overall: %d/%d partitions", m.currentIndex, len(m.partitions))
+			overallInfo = fmt.Sprintf("    Overall: %d/%d partitions", m.currentIndex, len(m.partitions))
 		}
 		sections = append(sections, progressInfoStyle.Render(overallInfo))
 
 		viewProgress := m.overallProgress.ViewAs(float64(m.currentIndex) / float64(len(m.partitions)))
-		sections = append(sections, "  "+viewProgress)
+		sections = append(sections, "    "+viewProgress)
 
 		// Show slice progress if partition is being split
 		if m.totalSlices > 0 {
 			sections = append(sections, "")
-			sliceInfo := fmt.Sprintf("    Partition Slices: %d/%d (%s)", m.currentSliceIndex+1, m.totalSlices, m.currentSliceDate)
+			sliceInfo := fmt.Sprintf("      Partition Slices: %d/%d (%s)", m.currentSliceIndex+1, m.totalSlices, m.currentSliceDate)
 			sections = append(sections, progressInfoStyle.Render(sliceInfo))
 			viewSliceProgress := m.sliceProgress.ViewAs(float64(m.currentSliceIndex+1) / float64(m.totalSlices))
-			sections = append(sections, "    "+viewSliceProgress)
+			sections = append(sections, "      "+viewSliceProgress)
 		}
 
 		if m.currentStage != "" {
-			stageInfo := fmt.Sprintf("    %s %s", m.currentSpinner.View(), m.currentStage)
+			stageInfo := fmt.Sprintf("      %s %s", m.currentSpinner.View(), m.currentStage)
 			sections = append(sections, "")
 			sections = append(sections, stageStyle.Render(stageInfo))
 		}
 
 		if m.currentRows > 0 && m.totalRows > 0 {
-			rowInfo := fmt.Sprintf("  Rows: %d/%d", m.currentRows, m.totalRows)
+			rowInfo := fmt.Sprintf("    Rows: %d/%d", m.currentRows, m.totalRows)
 			sections = append(sections, progressInfoStyle.Render(rowInfo))
 			viewCurrentProgress := m.currentProgress.ViewAs(float64(m.currentRows) / float64(m.totalRows))
-			sections = append(sections, "  "+viewCurrentProgress)
+			sections = append(sections, "    "+viewCurrentProgress)
 		}
 
 		sections = append(sections, "")
@@ -1079,21 +1079,20 @@ func (m progressModel) renderProcessingSummary() []string {
 		for _, result := range m.results[partStartIndex:] {
 			var line string
 			if result.Skipped {
-				line = fmt.Sprintf("  ⏭  %s - %s", result.Partition.TableName, result.SkipReason)
+				line = fmt.Sprintf("    ⏭  %s - %s", result.Partition.TableName, result.SkipReason)
 			} else if result.Error != nil {
-				line = fmt.Sprintf("  ❌ %s - Error: %v", result.Partition.TableName, result.Error)
+				line = fmt.Sprintf("    ❌ %s - Error: %v", result.Partition.TableName, result.Error)
 			} else if result.Uploaded && result.S3Key != "" {
-				line = fmt.Sprintf("  ✅ %s → s3://%s/%s (%d bytes)", result.Partition.TableName, m.config.S3.Bucket, result.S3Key, result.BytesWritten)
+				line = fmt.Sprintf("    ✅ %s → s3://%s/%s (%d bytes)", result.Partition.TableName, m.config.S3.Bucket, result.S3Key, result.BytesWritten)
 			} else if result.Uploaded {
-				line = fmt.Sprintf("  ✅ %s - Uploaded %d bytes", result.Partition.TableName, result.BytesWritten)
+				line = fmt.Sprintf("    ✅ %s - Uploaded %d bytes", result.Partition.TableName, result.BytesWritten)
 			} else {
-				line = fmt.Sprintf("  ⏸  %s - In progress", result.Partition.TableName)
+				line = fmt.Sprintf("    ⏸  %s - In progress", result.Partition.TableName)
 			}
 			sections = append(sections, line)
 		}
 
 		// Show recent slice results (current partition's in-progress work)
-		// Indented more to show they're nested under the current partition
 		sliceStartIndex := 0
 		if len(m.sliceResults) > 5 {
 			sliceStartIndex = len(m.sliceResults) - 5
@@ -1101,15 +1100,15 @@ func (m progressModel) renderProcessingSummary() []string {
 		for _, sliceRes := range m.sliceResults[sliceStartIndex:] {
 			var line string
 			if sliceRes.result.Skipped {
-				line = fmt.Sprintf("      ⏭  %s - %s", sliceRes.date, sliceRes.result.SkipReason)
+				line = fmt.Sprintf("    ⏭  %s - %s", sliceRes.date, sliceRes.result.SkipReason)
 			} else if sliceRes.result.Error != nil {
-				line = fmt.Sprintf("      ❌ %s - Error: %v", sliceRes.date, sliceRes.result.Error)
+				line = fmt.Sprintf("    ❌ %s - Error: %v", sliceRes.date, sliceRes.result.Error)
 			} else if sliceRes.result.Uploaded && sliceRes.result.S3Key != "" {
-				line = fmt.Sprintf("      ✅ %s → s3://%s/%s (%d bytes)", sliceRes.date, m.config.S3.Bucket, sliceRes.result.S3Key, sliceRes.result.BytesWritten)
+				line = fmt.Sprintf("    ✅ %s → s3://%s/%s (%d bytes)", sliceRes.date, m.config.S3.Bucket, sliceRes.result.S3Key, sliceRes.result.BytesWritten)
 			} else if sliceRes.result.Uploaded {
-				line = fmt.Sprintf("      ✅ %s - Uploaded %d bytes", sliceRes.date, sliceRes.result.BytesWritten)
+				line = fmt.Sprintf("    ✅ %s - Uploaded %d bytes", sliceRes.date, sliceRes.result.BytesWritten)
 			} else {
-				line = fmt.Sprintf("      ⏸  %s - In progress", sliceRes.date)
+				line = fmt.Sprintf("    ⏸  %s - In progress", sliceRes.date)
 			}
 			sections = append(sections, line)
 		}
