@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"testing"
 )
 
@@ -122,7 +123,7 @@ func TestFormatUpdateMessage(t *testing.T) {
 
 func TestVersionCheckSkipsDev(t *testing.T) {
 	// Test that version check is skipped for development builds
-	result := checkForUpdates(nil, "dev")
+	result := checkForUpdates(context.Background(), "dev")
 
 	if result.UpdateAvailable {
 		t.Error("checkForUpdates() should skip dev builds, but reported update available")
@@ -135,7 +136,7 @@ func TestVersionCheckSkipsDev(t *testing.T) {
 
 func TestVersionCheckSkipsEmpty(t *testing.T) {
 	// Test that version check is skipped for empty version
-	result := checkForUpdates(nil, "")
+	result := checkForUpdates(context.Background(), "")
 
 	if result.UpdateAvailable {
 		t.Error("checkForUpdates() should skip empty version, but reported update available")

@@ -22,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/lib/pq"
 )
 
@@ -38,6 +39,21 @@ var (
 	ErrPartitionNoPermissions   = errors.New("partition tables exist but you don't have SELECT permissions")
 	ErrS3ClientNotInitialized   = errors.New("S3 client not initialized")
 	ErrS3UploaderNotInitialized = errors.New("S3 uploader not initialized")
+)
+
+// Terminal styling for fmt.Println messages (not logger output)
+// These are used in fmt.Println calls within this file for direct terminal output
+var (
+	successStyle = lipgloss.NewStyle(). //nolint:unused // used in fmt.Println calls
+			Foreground(lipgloss.Color("#04B575")).
+			Bold(true)
+
+	warningStyle = lipgloss.NewStyle(). //nolint:unused // used in fmt.Println calls
+			Foreground(lipgloss.Color("#FFB700"))
+
+	debugStyle = lipgloss.NewStyle(). //nolint:unused // used in fmt.Println calls
+			Foreground(lipgloss.Color("#666666")).
+			Italic(true)
 )
 
 // isConnectionError checks if an error is due to a closed or broken database connection

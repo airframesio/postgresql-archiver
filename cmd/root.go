@@ -64,21 +64,8 @@ var (
 			Bold(true).
 			Underline(true)
 
-	// Terminal styling for fmt.Println messages (not logger output)
-	// These are used in archiver.go for direct terminal output
-	successStyle = lipgloss.NewStyle(). //nolint:unused // used in archiver.go
-			Foreground(lipgloss.Color("#04B575")).
-			Bold(true)
-
 	infoStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#00D9FF"))
-
-	warningStyle = lipgloss.NewStyle(). //nolint:unused // used in archiver.go
-			Foreground(lipgloss.Color("#FFB700"))
-
-	debugStyle = lipgloss.NewStyle(). //nolint:unused // used in archiver.go
-			Foreground(lipgloss.Color("#666666")).
-			Italic(true)
 
 	logger *slog.Logger
 )
