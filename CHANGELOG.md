@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Automated Release Pipeline:**
+  - GitHub Actions workflow for automated releases on version tags
+  - Multi-platform binary builds (Linux AMD64/ARM64, macOS Intel/ARM64, Windows AMD64)
+  - Automatic GitHub release creation with CHANGELOG excerpts
+  - SHA256 checksums for all release artifacts
+  - Build artifacts include minified web assets
+  - Version information embedded in binaries via ldflags
 
 ### Changed
 
