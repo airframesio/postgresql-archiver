@@ -44,14 +44,17 @@ var (
 // Terminal styling for fmt.Println messages (not logger output)
 // These are used in fmt.Println calls within this file for direct terminal output
 var (
-	successStyle = lipgloss.NewStyle(). //nolint:unused // used in fmt.Println calls
+	//lint:ignore U1000 used in fmt.Println calls for terminal output
+	successStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#04B575")).
 			Bold(true)
 
-	warningStyle = lipgloss.NewStyle(). //nolint:unused // used in fmt.Println calls
+	//lint:ignore U1000 used in fmt.Println calls for terminal output
+	warningStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFB700"))
 
-	debugStyle = lipgloss.NewStyle(). //nolint:unused // used in fmt.Println calls
+	//lint:ignore U1000 used in fmt.Println calls for terminal output
+	debugStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#666666")).
 			Italic(true)
 )
