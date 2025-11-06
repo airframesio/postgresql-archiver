@@ -9,6 +9,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/airframesio/postgresql-archiver/cmd/compressors"
 )
 
 // newTestLogger creates a logger for testing
@@ -157,7 +159,13 @@ func TestCompressData(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			compressed, err := archiver.compressData(tt.data)
+			// Use zstd compressor with default level
+			compressor := archiver.config.Compression
+			archiver.config.Compression = "zstd"
+			archiver.config.CompressionLevel = 3
+
+			cache := &PartitionCache{Entries: make(map[string]PartitionCacheEntry)}
+			compressed, _, err := archiver.compressPartitionData(tt.data, PartitionInfo{TableName: "test"}, nil, cache, func(string) {})
 
 			if err != nil && tt.expectSuccess {
 				t.Fatalf("unexpected error: %v", err)
@@ -180,6 +188,9 @@ func TestCompressData(t *testing.T) {
 					t.Logf("warning: compression ratio %.2f is below expected %.2f", ratio, tt.minRatio)
 				}
 			}
+
+			// Restore original
+			archiver.config.Compression = compressor
 		})
 	}
 }
@@ -315,12 +326,17 @@ func generateJSONData(count int) []byte {
 
 // Benchmark tests
 func BenchmarkCompressData(b *testing.B) {
-	archiver := NewArchiver(&Config{}, newTestLogger())
+	archiver := NewArchiver(&Config{Compression: "zstd", CompressionLevel: 3}, newTestLogger())
 	data := bytes.Repeat([]byte("benchmark data"), 10000)
+
+	compressor, err := compressors.GetCompressor(archiver.config.Compression)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = archiver.compressData(data)
+		_, _ = compressor.Compress(data, archiver.config.CompressionLevel)
 	}
 }
 
@@ -349,4 +365,279 @@ func CalculateMD5(data []byte) string {
 	io.WriteString(hash, "")
 	hash.Write(data)
 	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+func TestShouldSplitPartition(t *testing.T) {
+	tests := []struct {
+		name           string
+		baseTable      string
+		partition      string
+		outputDuration string
+		expectSplit    bool
+	}{
+		{
+			name:           "monthly partition to daily output",
+			baseTable:      "flights",
+			partition:      "flights_2024_03",
+			outputDuration: "daily",
+			expectSplit:    true,
+		},
+		{
+			name:           "monthly partition to weekly output",
+			baseTable:      "flights",
+			partition:      "flights_2024_03",
+			outputDuration: "weekly",
+			expectSplit:    true,
+		},
+		{
+			name:           "monthly partition to monthly output",
+			baseTable:      "flights",
+			partition:      "flights_2024_03",
+			outputDuration: "monthly",
+			expectSplit:    false,
+		},
+		{
+			name:           "daily partition to daily output",
+			baseTable:      "flights",
+			partition:      "flights_20240315",
+			outputDuration: "daily",
+			expectSplit:    false,
+		},
+		{
+			name:           "compact monthly partition YYYYMM",
+			baseTable:      "flights",
+			partition:      "flights_202403",
+			outputDuration: "daily",
+			expectSplit:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &Config{
+				Table:          tt.baseTable,
+				OutputDuration: tt.outputDuration,
+			}
+			archiver := NewArchiver(config, newTestLogger())
+
+			partition := PartitionInfo{
+				TableName: tt.partition,
+				Date:      time.Now(),
+				RowCount:  1000,
+			}
+
+			result := archiver.shouldSplitPartition(partition)
+			if result != tt.expectSplit {
+				t.Errorf("expected split=%v, got split=%v", tt.expectSplit, result)
+			}
+		})
+	}
+}
+
+func TestGenerateFilename(t *testing.T) {
+	tests := []struct {
+		name        string
+		table       string
+		date        time.Time
+		duration    string
+		format      string
+		compression string
+		wantPrefix  string
+		wantSuffix  string
+	}{
+		{
+			name:        "daily parquet with no compression",
+			table:       "flights",
+			date:        time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC),
+			duration:    "daily",
+			format:      ".parquet",
+			compression: "",
+			wantPrefix:  "flights-2024-03-15",
+			wantSuffix:  ".parquet",
+		},
+		{
+			name:        "monthly jsonl with gzip",
+			table:       "flights",
+			date:        time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC),
+			duration:    "monthly",
+			format:      ".jsonl",
+			compression: ".gz",
+			wantPrefix:  "flights-2024-03",
+			wantSuffix:  ".jsonl.gz",
+		},
+		{
+			name:        "weekly csv",
+			table:       "events",
+			date:        time.Date(2024, 1, 8, 0, 0, 0, 0, time.UTC),
+			duration:    "weekly",
+			format:      ".csv",
+			compression: "",
+			wantPrefix:  "events-2024-W02",
+			wantSuffix:  ".csv",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GenerateFilename(tt.table, tt.date, tt.duration, tt.format, tt.compression)
+
+			if !bytes.Contains([]byte(result), []byte(tt.wantPrefix)) {
+				t.Errorf("filename %s doesn't contain prefix %s", result, tt.wantPrefix)
+			}
+
+			if !bytes.Contains([]byte(result), []byte(tt.wantSuffix)) {
+				t.Errorf("filename %s doesn't contain suffix %s", result, tt.wantSuffix)
+			}
+		})
+	}
+}
+
+func TestPathTemplate(t *testing.T) {
+	tests := []struct {
+		name     string
+		template string
+		table    string
+		date     time.Time
+		want     string
+	}{
+		{
+			name:     "year month day template",
+			template: "{table}/{YYYY}/{MM}/{DD}",
+			table:    "flights",
+			date:     time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC),
+			want:     "flights/2024/03/15",
+		},
+		{
+			name:     "compact template",
+			template: "{table}/{YYYY}{MM}",
+			table:    "events",
+			date:     time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC),
+			want:     "events/202412",
+		},
+		{
+			name:     "default template",
+			template: "",
+			table:    "data",
+			date:     time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			want:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pt := NewPathTemplate(tt.template)
+			result := pt.Generate(tt.table, tt.date)
+
+			if result != tt.want {
+				t.Errorf("expected %s, got %s", tt.want, result)
+			}
+		})
+	}
+}
+
+func TestSplitPartitionByDuration(t *testing.T) {
+	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2024, 4, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name          string
+		duration      string
+		expectedCount int
+		firstStart    time.Time
+		firstEnd      time.Time
+	}{
+		{
+			name:          "split monthly to daily",
+			duration:      "daily",
+			expectedCount: 31,
+			firstStart:    time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC),
+			firstEnd:      time.Date(2024, 3, 2, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:          "split monthly to weekly",
+			duration:      "weekly",
+			expectedCount: 5,
+			firstStart:    time.Date(2024, 2, 26, 0, 0, 0, 0, time.UTC), // Monday before March 1
+			firstEnd:      time.Date(2024, 3, 4, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:          "split monthly to monthly",
+			duration:      "monthly",
+			expectedCount: 1,
+			firstStart:    time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC),
+			firstEnd:      time.Date(2024, 4, 1, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ranges := SplitPartitionByDuration(start, end, tt.duration)
+
+			if len(ranges) != tt.expectedCount {
+				t.Errorf("expected %d ranges, got %d", tt.expectedCount, len(ranges))
+			}
+
+			if len(ranges) > 0 {
+				if !ranges[0].Start.Equal(tt.firstStart) {
+					t.Errorf("first range start: expected %v, got %v", tt.firstStart, ranges[0].Start)
+				}
+				if !ranges[0].End.Equal(tt.firstEnd) {
+					t.Errorf("first range end: expected %v, got %v", tt.firstEnd, ranges[0].End)
+				}
+			}
+		})
+	}
+}
+
+func TestIsConnectionError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "connection reset error",
+			err:      fmt.Errorf("connection reset by peer"), //nolint:err113 // test error
+			expected: true,
+		},
+		{
+			name:     "broken pipe error",
+			err:      fmt.Errorf("broken pipe"), //nolint:err113 // test error
+			expected: true,
+		},
+		{
+			name:     "EOF error",
+			err:      io.EOF,
+			expected: false, // EOF is not checked by isConnectionError
+		},
+		{
+			name:     "unexpected EOF error",
+			err:      io.ErrUnexpectedEOF,
+			expected: false, // unexpected EOF is not checked by isConnectionError
+		},
+		{
+			name:     "bad connection error",
+			err:      fmt.Errorf("bad connection"), //nolint:err113 // test error
+			expected: true,
+		},
+		{
+			name:     "other error",
+			err:      fmt.Errorf("some other error"), //nolint:err113 // test error
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isConnectionError(tt.err)
+			if result != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
 }

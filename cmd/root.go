@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,27 +16,38 @@ import (
 )
 
 var (
-	cfgFile     string
-	debug       bool
-	dbHost      string
-	dbPort      int
-	dbUser      string
-	dbPassword  string
-	dbName      string
-	dbSSLMode   string
-	s3Endpoint  string
-	s3Bucket    string
-	s3AccessKey string
-	s3SecretKey string
-	s3Region    string
-	baseTable   string
-	startDate   string
-	endDate     string
-	workers     int
-	dryRun      bool
-	skipCount   bool
-	cacheViewer bool
-	viewerPort  int
+	// signalContext is set by main() before Cobra initialization
+	// This ensures signal handling is set up before any library can interfere
+	signalContext context.Context
+	stopFilePath  string
+
+	cfgFile          string
+	debug            bool
+	dbHost           string
+	dbPort           int
+	dbUser           string
+	dbPassword       string
+	dbName           string
+	dbSSLMode        string
+	s3Endpoint       string
+	s3Bucket         string
+	s3AccessKey      string
+	s3SecretKey      string
+	s3Region         string
+	baseTable        string
+	startDate        string
+	endDate          string
+	workers          int
+	dryRun           bool
+	skipCount        bool
+	cacheViewer      bool
+	viewerPort       int
+	pathTemplate     string
+	outputDuration   string
+	outputFormat     string
+	compression      string
+	compressionLevel int
+	dateColumn       string
 
 	titleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#7D56F4")).
@@ -58,6 +70,13 @@ var (
 
 	logger *slog.Logger
 )
+
+// SetSignalContext stores the signal-aware context created in main()
+// This must be called before Execute() to ensure proper signal handling
+func SetSignalContext(ctx context.Context, stopFile string) {
+	signalContext = ctx
+	stopFilePath = stopFile
+}
 
 // initLogger initializes the slog logger based on debug flag
 func initLogger(isDebug bool) {
@@ -115,7 +134,16 @@ func init() {
 	rootCmd.Flags().BoolVar(&cacheViewer, "cache-viewer", false, "start embedded cache viewer web server")
 	rootCmd.Flags().IntVar(&viewerPort, "viewer-port", 8080, "port for cache viewer web server")
 
-	_ = rootCmd.MarkFlagRequired("table")
+	// Output configuration flags
+	rootCmd.Flags().StringVar(&pathTemplate, "path-template", "", "S3 path template with placeholders: {table}, {YYYY}, {MM}, {DD}, {HH} (required)")
+	rootCmd.Flags().StringVar(&outputDuration, "output-duration", "daily", "output file duration: hourly, daily, weekly, monthly, yearly")
+	rootCmd.Flags().StringVar(&outputFormat, "output-format", "jsonl", "output format: jsonl, csv, parquet")
+	rootCmd.Flags().StringVar(&compression, "compression", "zstd", "compression type: zstd, lz4, gzip, none")
+	rootCmd.Flags().IntVar(&compressionLevel, "compression-level", 3, "compression level (zstd: 1-22, lz4/gzip: 1-9, none: 0)")
+	rootCmd.Flags().StringVar(&dateColumn, "date-column", "", "timestamp column name for duration-based splitting (optional)")
+
+	// Note: We don't use MarkFlagRequired because it checks before viper loads the config file.
+	// Instead, validation happens in config.Validate() which runs after all config sources are loaded.
 
 	_ = viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
 	_ = viper.BindPFlag("db.host", rootCmd.Flags().Lookup("db-host"))
@@ -137,6 +165,12 @@ func init() {
 	_ = viper.BindPFlag("workers", rootCmd.Flags().Lookup("workers"))
 	_ = viper.BindPFlag("dry_run", rootCmd.Flags().Lookup("dry-run"))
 	_ = viper.BindPFlag("skip_count", rootCmd.Flags().Lookup("skip-count"))
+	_ = viper.BindPFlag("s3.path_template", rootCmd.Flags().Lookup("path-template"))
+	_ = viper.BindPFlag("output_duration", rootCmd.Flags().Lookup("output-duration"))
+	_ = viper.BindPFlag("output_format", rootCmd.Flags().Lookup("output-format"))
+	_ = viper.BindPFlag("compression", rootCmd.Flags().Lookup("compression"))
+	_ = viper.BindPFlag("compression_level", rootCmd.Flags().Lookup("compression-level"))
+	_ = viper.BindPFlag("date_column", rootCmd.Flags().Lookup("date-column"))
 }
 
 func initConfig() {
@@ -164,6 +198,14 @@ func initConfig() {
 }
 
 func runArchive() {
+	// Add panic recovery to catch any unexpected crashes
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "\n❌ PANIC: %v\n", r)
+			os.Exit(1)
+		}
+	}()
+
 	config := &Config{
 		Debug:       viper.GetBool("debug"),
 		DryRun:      viper.GetBool("dry_run"),
@@ -180,15 +222,21 @@ func runArchive() {
 			SSLMode:  viper.GetString("db.sslmode"),
 		},
 		S3: S3Config{
-			Endpoint:  viper.GetString("s3.endpoint"),
-			Bucket:    viper.GetString("s3.bucket"),
-			AccessKey: viper.GetString("s3.access_key"),
-			SecretKey: viper.GetString("s3.secret_key"),
-			Region:    viper.GetString("s3.region"),
+			Endpoint:     viper.GetString("s3.endpoint"),
+			Bucket:       viper.GetString("s3.bucket"),
+			AccessKey:    viper.GetString("s3.access_key"),
+			SecretKey:    viper.GetString("s3.secret_key"),
+			Region:       viper.GetString("s3.region"),
+			PathTemplate: viper.GetString("s3.path_template"),
 		},
-		Table:     viper.GetString("table"),
-		StartDate: viper.GetString("start_date"),
-		EndDate:   viper.GetString("end_date"),
+		Table:            viper.GetString("table"),
+		StartDate:        viper.GetString("start_date"),
+		EndDate:          viper.GetString("end_date"),
+		OutputDuration:   viper.GetString("output_duration"),
+		OutputFormat:     viper.GetString("output_format"),
+		Compression:      viper.GetString("compression"),
+		CompressionLevel: viper.GetInt("compression_level"),
+		DateColumn:       viper.GetString("date_column"),
 	}
 
 	// Initialize logger
@@ -198,26 +246,60 @@ func runArchive() {
 	logger.Info(titleStyle.Render("\n🚀 PostgreSQL Archiver"))
 	logger.Info(infoStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
 
+	// Display stop instructions (for Warp terminal compatibility) - only in debug mode
+	// In TUI mode, printing to stderr corrupts the display
+	if config.Debug && stopFilePath != "" {
+		fmt.Fprintln(os.Stderr, "\n"+infoStyle.Render("💡 To stop archiver: Press CTRL-C, or run:"))
+		fmt.Fprintf(os.Stderr, "   "+infoStyle.Render("touch %s")+"\n\n", stopFilePath)
+	}
+
+	logger.Debug("Validating configuration...")
 	if err := config.Validate(); err != nil {
 		logger.Error(warningStyle.Render("❌ Configuration error: " + err.Error()))
 		os.Exit(1)
 	}
+	logger.Debug("Configuration validated successfully")
 
-	// Create a context that can be cancelled by signals (SIGTERM, SIGINT)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Use the signal context created in main() before Cobra initialization
+	// This ensures signals were registered before any library interference
+	ctx := signalContext
+	if ctx == nil {
+		// Fallback if SetSignalContext wasn't called (shouldn't happen)
+		logger.Warn("Signal context not set, creating fallback...")
+		var stop context.CancelFunc
+		ctx, stop = signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+	}
 
-	// Set up signal handling
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	// Set up a goroutine to force-exit if graceful shutdown takes too long
+	exited := make(chan struct{})
 	go func() {
-		sig := <-sigChan
-		logger.Debug(debugStyle.Render(fmt.Sprintf("📌 Received signal: %v", sig)))
-		cancel()
+		<-ctx.Done()
+		logger.Info("\n⚠️  Interrupt signal received, shutting down...")
+
+		// Wait for graceful shutdown, but force exit after 2 seconds
+		select {
+		case <-exited:
+			// Graceful shutdown completed
+			return
+		case <-time.After(2 * time.Second):
+			logger.Error("⚠️  Graceful shutdown timed out, forcing exit...")
+			os.Exit(130)
+		}
 	}()
 
+	logger.Debug("Creating archiver...")
 	archiver := NewArchiver(config, logger)
-	if err := archiver.Run(ctx); err != nil {
+	logger.Debug("Starting archival process...")
+
+	err := archiver.Run(ctx)
+	close(exited) // Signal that the archival process has exited
+
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			logger.Info("\n⚠️  Archival cancelled by user")
+			os.Exit(130)
+		}
 		logger.Error(warningStyle.Render("❌ Archive failed: " + err.Error()))
 		os.Exit(1)
 	}

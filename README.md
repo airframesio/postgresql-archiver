@@ -95,6 +95,27 @@ postgresql-archiver \
   --s3-bucket my-archive-bucket \
   --s3-access-key YOUR_ACCESS_KEY \
   --s3-secret-key YOUR_SECRET_KEY \
+  --path-template "archives/{table}/{YYYY}/{MM}" \
+  --start-date 2024-01-01 \
+  --end-date 2024-01-31
+```
+
+**Advanced Example with Custom Output:**
+```bash
+postgresql-archiver \
+  --db-user myuser \
+  --db-password mypass \
+  --db-name mydb \
+  --table flights \
+  --s3-endpoint https://fsn1.your-objectstorage.com \
+  --s3-bucket my-archive-bucket \
+  --s3-access-key YOUR_ACCESS_KEY \
+  --s3-secret-key YOUR_SECRET_KEY \
+  --path-template "data/{table}/year={YYYY}/month={MM}" \
+  --output-format parquet \
+  --compression lz4 \
+  --compression-level 5 \
+  --output-duration daily \
   --start-date 2024-01-01 \
   --end-date 2024-01-31
 ```
@@ -113,45 +134,63 @@ postgresql-archiver [flags]
 PostgreSQL Archiver
 
 A CLI tool to efficiently archive PostgreSQL partitioned table data to object storage.
-Extracts data by day, converts to JSONL, compresses with zstd, and uploads to S3-compatible storage.
+Supports multiple output formats (JSONL/CSV/Parquet), compression types (Zstandard/LZ4/Gzip),
+and flexible path templates for S3-compatible storage.
 
 Usage:
   postgresql-archiver [flags]
 
 Flags:
-      --cache-viewer           start embedded cache viewer web server
-      --config string          config file (default is $HOME/.postgresql-archiver.yaml)
-      --db-host string         PostgreSQL host (default "localhost")
-      --db-name string         PostgreSQL database name
-      --db-password string     PostgreSQL password
-      --db-port int            PostgreSQL port (default 5432)
-      --db-sslmode string      PostgreSQL SSL mode (disable, require, verify-ca, verify-full) (default "disable")
-      --db-user string         PostgreSQL user
-  -d, --debug                  enable debug output
-      --dry-run                perform a dry run without uploading
-      --end-date string        end date (YYYY-MM-DD) (default "2025-08-27")
-  -h, --help                   help for postgresql-archiver
-      --s3-access-key string   S3 access key
-      --s3-bucket string       S3 bucket name
-      --s3-endpoint string     S3-compatible endpoint URL
-      --s3-region string       S3 region (default "auto")
-      --s3-secret-key string   S3 secret key
-      --skip-count             skip counting rows (faster startup, no progress bars)
-      --start-date string      start date (YYYY-MM-DD)
-      --table string           base table name (required)
-      --viewer-port int        port for cache viewer web server (default 8080)
-      --workers int            number of parallel workers (default 4)
+      --cache-viewer                 start embedded cache viewer web server
+      --compression string           compression type: zstd, lz4, gzip, none (default "zstd")
+      --compression-level int        compression level (zstd: 1-22, lz4/gzip: 1-9, none: 0) (default 3)
+      --config string                config file (default is $HOME/.postgresql-archiver.yaml)
+      --date-column string           timestamp column name for duration-based splitting (optional)
+      --db-host string               PostgreSQL host (default "localhost")
+      --db-name string               PostgreSQL database name
+      --db-password string           PostgreSQL password
+      --db-port int                  PostgreSQL port (default 5432)
+      --db-sslmode string            PostgreSQL SSL mode (disable, require, verify-ca, verify-full) (default "disable")
+      --db-user string               PostgreSQL user
+  -d, --debug                        enable debug output
+      --dry-run                      perform a dry run without uploading
+      --end-date string              end date (YYYY-MM-DD) (default "2025-08-27")
+  -h, --help                         help for postgresql-archiver
+      --output-duration string       output file duration: hourly, daily, weekly, monthly, yearly (default "daily")
+      --output-format string         output format: jsonl, csv, parquet (default "jsonl")
+      --path-template string         S3 path template with placeholders: {table}, {YYYY}, {MM}, {DD}, {HH} (required)
+      --s3-access-key string         S3 access key
+      --s3-bucket string             S3 bucket name
+      --s3-endpoint string           S3-compatible endpoint URL
+      --s3-region string             S3 region (default "auto")
+      --s3-secret-key string         S3 secret key
+      --skip-count                   skip counting rows (faster startup, no progress bars)
+      --start-date string            start date (YYYY-MM-DD)
+      --table string                 base table name (required)
+      --viewer-port int              port for cache viewer web server (default 8080)
+      --workers int                  number of parallel workers (default 4)
 ```
 
 ### Required Flags
 
 - `--table` - Base table name (without date suffix)
+- `--path-template` - S3 path template with placeholders (e.g., `"archives/{table}/{YYYY}/{MM}"`)
 - `--db-user` - PostgreSQL username
 - `--db-name` - PostgreSQL database name
 - `--s3-endpoint` - S3-compatible endpoint URL
 - `--s3-bucket` - S3 bucket name
 - `--s3-access-key` - S3 access key
 - `--s3-secret-key` - S3 secret key
+
+### Output Configuration Flags
+
+- `--output-format` - Output file format: `jsonl` (default), `csv`, or `parquet`
+- `--compression` - Compression type: `zstd` (default), `lz4`, `gzip`, or `none`
+- `--compression-level` - Compression level (default: 3)
+  - Zstandard: 1-22 (higher = better compression, slower)
+  - LZ4/Gzip: 1-9 (higher = better compression, slower)
+- `--output-duration` - File duration: `hourly`, `daily` (default), `weekly`, `monthly`, or `yearly`
+- `--date-column` - Optional timestamp column for duration-based splitting
 
 ## ⚙️ Configuration
 
@@ -174,7 +213,12 @@ export ARCHIVE_S3_ENDPOINT=https://fsn1.your-objectstorage.com
 export ARCHIVE_S3_BUCKET=my-bucket
 export ARCHIVE_S3_ACCESS_KEY=your_key
 export ARCHIVE_S3_SECRET_KEY=your_secret
+export ARCHIVE_S3_PATH_TEMPLATE="archives/{table}/{YYYY}/{MM}"
 export ARCHIVE_TABLE=flights
+export ARCHIVE_OUTPUT_FORMAT=jsonl           # Options: jsonl, csv, parquet
+export ARCHIVE_COMPRESSION=zstd              # Options: zstd, lz4, gzip, none
+export ARCHIVE_COMPRESSION_LEVEL=3           # zstd: 1-22, lz4/gzip: 1-9
+export ARCHIVE_OUTPUT_DURATION=daily         # Options: hourly, daily, weekly, monthly, yearly
 export ARCHIVE_WORKERS=8
 export ARCHIVE_CACHE_VIEWER=true
 export ARCHIVE_VIEWER_PORT=8080
@@ -199,38 +243,65 @@ s3:
   access_key: your_access_key
   secret_key: your_secret_key
   region: auto
+  path_template: "archives/{table}/{YYYY}/{MM}"  # S3 path template with placeholders
 
 table: flights
+output_format: jsonl          # Options: jsonl, csv, parquet
+compression: zstd             # Options: zstd, lz4, gzip, none
+compression_level: 3          # zstd: 1-22, lz4/gzip: 1-9
+output_duration: daily        # Options: hourly, daily, weekly, monthly, yearly
 workers: 8
 start_date: "2024-01-01"
 end_date: "2024-12-31"
-cache_viewer: false  # Enable embedded cache viewer
-viewer_port: 8080    # Port for cache viewer web server
+cache_viewer: false           # Enable embedded cache viewer
+viewer_port: 8080             # Port for cache viewer web server
 ```
 
 ## 📁 Output Structure
 
-Files are organized in S3 with the following structure:
+Files are organized in S3 based on your configured `--path-template`. The tool supports flexible path templates with the following placeholders:
+
+- `{table}` - Table name
+- `{YYYY}` - 4-digit year
+- `{MM}` - 2-digit month
+- `{DD}` - 2-digit day
+- `{HH}` - 2-digit hour (for hourly duration)
+
+**Example with default settings** (`--path-template "archives/{table}/{YYYY}/{MM}" --output-format jsonl --compression zstd --output-duration daily`):
 
 ```
 bucket/
-└── export/
-    └── table_name/
-        └── YYYY/
-            └── MM/
-                └── YYYY-MM-DD.jsonl.zst
-```
-
-Example:
-```
-my-bucket/
-└── export/
+└── archives/
     └── flights/
         └── 2024/
             └── 01/
-                ├── 2024-01-01.jsonl.zst
-                ├── 2024-01-02.jsonl.zst
-                └── 2024-01-03.jsonl.zst
+                ├── flights-2024-01-01.jsonl.zst
+                ├── flights-2024-01-02.jsonl.zst
+                └── flights-2024-01-03.jsonl.zst
+```
+
+**Example with Parquet and LZ4** (`--path-template "data/{table}/year={YYYY}/month={MM}" --output-format parquet --compression lz4`):
+
+```
+bucket/
+└── data/
+    └── flights/
+        └── year=2024/
+            └── month=01/
+                ├── flights-2024-01-01.parquet.lz4
+                ├── flights-2024-01-02.parquet.lz4
+                └── flights-2024-01-03.parquet.lz4
+```
+
+**Example with uncompressed CSV** (`--path-template "{table}/{YYYY}" --output-format csv --compression none --output-duration monthly`):
+
+```
+bucket/
+└── flights/
+    └── 2024/
+        ├── flights-2024-01.csv
+        ├── flights-2024-02.csv
+        └── flights-2024-03.csv
 ```
 
 ## 🎨 Features in Detail

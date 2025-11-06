@@ -5,28 +5,38 @@ import (
 	"testing"
 )
 
+// newTestConfig creates a valid base configuration for testing
+func newTestConfig() *Config {
+	return &Config{
+		Database: DatabaseConfig{
+			Host:     "localhost",
+			Port:     5432,
+			User:     "testuser",
+			Password: "testpass",
+			Name:     "testdb",
+		},
+		S3: S3Config{
+			Endpoint:     "https://s3.example.com",
+			Bucket:       "test-bucket",
+			AccessKey:    "access123",
+			SecretKey:    "secret456",
+			Region:       "us-east-1",
+			PathTemplate: "{table}/{YYYY}/{MM}/{DD}",
+		},
+		Table:            "test_table",
+		StartDate:        "2024-01-01",
+		EndDate:          "2024-01-31",
+		Workers:          4,
+		OutputDuration:   "daily",
+		OutputFormat:     "jsonl",
+		Compression:      "zstd",
+		CompressionLevel: 3,
+	}
+}
+
 func TestConfigValidation_ValidConfig(t *testing.T) {
 	t.Run("ValidConfig", func(t *testing.T) {
-		config := &Config{
-			Database: DatabaseConfig{
-				Host:     "localhost",
-				Port:     5432,
-				User:     "testuser",
-				Password: "testpass",
-				Name:     "testdb",
-			},
-			S3: S3Config{
-				Endpoint:  "https://s3.example.com",
-				Bucket:    "test-bucket",
-				AccessKey: "access123",
-				SecretKey: "secret456",
-				Region:    "us-east-1",
-			},
-			Table:     "test_table",
-			StartDate: "2024-01-01",
-			EndDate:   "2024-01-31",
-			Workers:   4,
-		}
+		config := newTestConfig()
 
 		err := config.Validate()
 		if err != nil {
@@ -37,23 +47,8 @@ func TestConfigValidation_ValidConfig(t *testing.T) {
 
 func TestConfigValidation_MissingDatabaseFields(t *testing.T) {
 	t.Run("MissingDatabaseUser", func(t *testing.T) {
-		config := &Config{
-			Database: DatabaseConfig{
-				Host:     "localhost",
-				Port:     5432,
-				Password: "testpass",
-				Name:     "testdb",
-				// User is missing
-			},
-			S3: S3Config{
-				Endpoint:  "https://s3.example.com",
-				Bucket:    "test-bucket",
-				AccessKey: "access123",
-				SecretKey: "secret456",
-				Region:    "us-east-1",
-			},
-			Table: "test_table",
-		}
+		config := newTestConfig()
+		config.Database.User = "" // Clear the user field
 
 		err := config.Validate()
 		if err == nil {
@@ -65,23 +60,8 @@ func TestConfigValidation_MissingDatabaseFields(t *testing.T) {
 	})
 
 	t.Run("MissingDatabaseName", func(t *testing.T) {
-		config := &Config{
-			Database: DatabaseConfig{
-				Host:     "localhost",
-				Port:     5432,
-				User:     "testuser",
-				Password: "testpass",
-				// Name is missing
-			},
-			S3: S3Config{
-				Endpoint:  "https://s3.example.com",
-				Bucket:    "test-bucket",
-				AccessKey: "access123",
-				SecretKey: "secret456",
-				Region:    "us-east-1",
-			},
-			Table: "test_table",
-		}
+		config := newTestConfig()
+		config.Database.Name = "" // Clear the name field
 
 		err := config.Validate()
 		if err == nil {
@@ -95,23 +75,8 @@ func TestConfigValidation_MissingDatabaseFields(t *testing.T) {
 
 func TestConfigValidation_MissingS3Fields(t *testing.T) {
 	t.Run("MissingS3Endpoint", func(t *testing.T) {
-		config := &Config{
-			Database: DatabaseConfig{
-				Host:     "localhost",
-				Port:     5432,
-				User:     "testuser",
-				Password: "testpass",
-				Name:     "testdb",
-			},
-			S3: S3Config{
-				// Endpoint is missing
-				Bucket:    "test-bucket",
-				AccessKey: "access123",
-				SecretKey: "secret456",
-				Region:    "us-east-1",
-			},
-			Table: "test_table",
-		}
+		config := newTestConfig()
+		config.S3.Endpoint = "" // Clear the endpoint field
 
 		err := config.Validate()
 		if err == nil {
@@ -123,23 +88,8 @@ func TestConfigValidation_MissingS3Fields(t *testing.T) {
 	})
 
 	t.Run("MissingS3Bucket", func(t *testing.T) {
-		config := &Config{
-			Database: DatabaseConfig{
-				Host:     "localhost",
-				Port:     5432,
-				User:     "testuser",
-				Password: "testpass",
-				Name:     "testdb",
-			},
-			S3: S3Config{
-				Endpoint: "https://s3.example.com",
-				// Bucket is missing
-				AccessKey: "access123",
-				SecretKey: "secret456",
-				Region:    "us-east-1",
-			},
-			Table: "test_table",
-		}
+		config := newTestConfig()
+		config.S3.Bucket = "" // Clear the bucket field
 
 		err := config.Validate()
 		if err == nil {
@@ -151,22 +101,8 @@ func TestConfigValidation_MissingS3Fields(t *testing.T) {
 	})
 
 	t.Run("MissingS3Credentials", func(t *testing.T) {
-		config := &Config{
-			Database: DatabaseConfig{
-				Host:     "localhost",
-				Port:     5432,
-				User:     "testuser",
-				Password: "testpass",
-				Name:     "testdb",
-			},
-			S3: S3Config{
-				Endpoint: "https://s3.example.com",
-				Bucket:   "test-bucket",
-				// AccessKey and SecretKey are missing
-				Region: "us-east-1",
-			},
-			Table: "test_table",
-		}
+		config := newTestConfig()
+		config.S3.AccessKey = "" // Clear the access key field
 
 		err := config.Validate()
 		if err == nil {
@@ -180,23 +116,8 @@ func TestConfigValidation_MissingS3Fields(t *testing.T) {
 
 func TestConfigValidation_MissingTable(t *testing.T) {
 	t.Run("MissingTable", func(t *testing.T) {
-		config := &Config{
-			Database: DatabaseConfig{
-				Host:     "localhost",
-				Port:     5432,
-				User:     "testuser",
-				Password: "testpass",
-				Name:     "testdb",
-			},
-			S3: S3Config{
-				Endpoint:  "https://s3.example.com",
-				Bucket:    "test-bucket",
-				AccessKey: "access123",
-				SecretKey: "secret456",
-				Region:    "us-east-1",
-			},
-			// Table is missing
-		}
+		config := newTestConfig()
+		config.Table = "" // Clear the table field
 
 		err := config.Validate()
 		if err == nil {
@@ -210,24 +131,8 @@ func TestConfigValidation_MissingTable(t *testing.T) {
 
 func TestConfigValidation_InvalidDateFormat(t *testing.T) {
 	t.Run("InvalidDateFormat", func(t *testing.T) {
-		config := &Config{
-			Database: DatabaseConfig{
-				Host:     "localhost",
-				Port:     5432,
-				User:     "testuser",
-				Password: "testpass",
-				Name:     "testdb",
-			},
-			S3: S3Config{
-				Endpoint:  "https://s3.example.com",
-				Bucket:    "test-bucket",
-				AccessKey: "access123",
-				SecretKey: "secret456",
-				Region:    "us-east-1",
-			},
-			Table:     "test_table",
-			StartDate: "01/01/2024", // Invalid format
-		}
+		config := newTestConfig()
+		config.StartDate = "01/01/2024" // Set invalid date format
 
 		err := config.Validate()
 		if err == nil {
@@ -238,23 +143,11 @@ func TestConfigValidation_InvalidDateFormat(t *testing.T) {
 
 func TestConfigValidation_DefaultValues(t *testing.T) {
 	t.Run("DefaultValues", func(t *testing.T) {
-		config := &Config{
-			Database: DatabaseConfig{
-				// Port should default to 5432
-				User:     "testuser",
-				Password: "testpass",
-				Name:     "testdb",
-			},
-			S3: S3Config{
-				Endpoint:  "https://s3.example.com",
-				Bucket:    "test-bucket",
-				AccessKey: "access123",
-				SecretKey: "secret456",
-				// Region should default to "auto"
-			},
-			Table: "test_table",
-			// Workers should default to 4
-		}
+		config := newTestConfig()
+		// Clear fields that should have defaults
+		config.Database.Port = 0
+		config.S3.Region = ""
+		config.Workers = 0
 
 		// Simulate default values (would be set by viper in real usage)
 		if config.Database.Port == 0 {
@@ -292,26 +185,9 @@ func TestConfigValidation_DefaultValues(t *testing.T) {
 
 func TestConfigValidation_CacheViewerConfig(t *testing.T) {
 	t.Run("CacheViewerConfig", func(t *testing.T) {
-		config := &Config{
-			Database: DatabaseConfig{
-				Host:     "localhost",
-				Port:     5432,
-				User:     "testuser",
-				Password: "testpass",
-				Name:     "testdb",
-			},
-			S3: S3Config{
-				Endpoint:  "https://s3.example.com",
-				Bucket:    "test-bucket",
-				AccessKey: "access123",
-				SecretKey: "secret456",
-				Region:    "us-east-1",
-			},
-			Table:       "test_table",
-			Workers:     4,
-			CacheViewer: true,
-			ViewerPort:  8080,
-		}
+		config := newTestConfig()
+		config.CacheViewer = true
+		config.ViewerPort = 8080
 
 		err := config.Validate()
 		if err != nil {
@@ -341,24 +217,8 @@ func TestConfigValidation_InvalidDatabasePort(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				config := &Config{
-					Database: DatabaseConfig{
-						Host:     "localhost",
-						Port:     tc.port,
-						User:     "testuser",
-						Password: "testpass",
-						Name:     "testdb",
-					},
-					S3: S3Config{
-						Endpoint:  "https://s3.example.com",
-						Bucket:    "test-bucket",
-						AccessKey: "access123",
-						SecretKey: "secret456",
-						Region:    "us-east-1",
-					},
-					Table:   "test_table",
-					Workers: 4,
-				}
+				config := newTestConfig()
+				config.Database.Port = tc.port
 
 				err := config.Validate()
 				if err == nil {
@@ -382,24 +242,8 @@ func TestConfigValidation_InvalidS3Region(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				config := &Config{
-					Database: DatabaseConfig{
-						Host:     "localhost",
-						Port:     5432,
-						User:     "testuser",
-						Password: "testpass",
-						Name:     "testdb",
-					},
-					S3: S3Config{
-						Endpoint:  "https://s3.example.com",
-						Bucket:    "test-bucket",
-						AccessKey: "access123",
-						SecretKey: "secret456",
-						Region:    tc.region,
-					},
-					Table:   "test_table",
-					Workers: 4,
-				}
+				config := newTestConfig()
+				config.S3.Region = tc.region
 
 				err := config.Validate()
 				if err == nil {
@@ -422,24 +266,8 @@ func TestConfigValidation_ValidS3Regions(t *testing.T) {
 
 		for _, region := range testCases {
 			t.Run(region, func(t *testing.T) {
-				config := &Config{
-					Database: DatabaseConfig{
-						Host:     "localhost",
-						Port:     5432,
-						User:     "testuser",
-						Password: "testpass",
-						Name:     "testdb",
-					},
-					S3: S3Config{
-						Endpoint:  "https://s3.example.com",
-						Bucket:    "test-bucket",
-						AccessKey: "access123",
-						SecretKey: "secret456",
-						Region:    region,
-					},
-					Table:   "test_table",
-					Workers: 4,
-				}
+				config := newTestConfig()
+				config.S3.Region = region
 
 				err := config.Validate()
 				if err != nil {
@@ -467,24 +295,8 @@ func TestConfigValidation_InvalidTableNames(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				config := &Config{
-					Database: DatabaseConfig{
-						Host:     "localhost",
-						Port:     5432,
-						User:     "testuser",
-						Password: "testpass",
-						Name:     "testdb",
-					},
-					S3: S3Config{
-						Endpoint:  "https://s3.example.com",
-						Bucket:    "test-bucket",
-						AccessKey: "access123",
-						SecretKey: "secret456",
-						Region:    "us-east-1",
-					},
-					Table:   tc.tableName,
-					Workers: 4,
-				}
+				config := newTestConfig()
+				config.Table = tc.tableName
 
 				err := config.Validate()
 				if err == nil {
@@ -508,24 +320,8 @@ func TestConfigValidation_ValidTableNames(t *testing.T) {
 
 		for _, tableName := range testCases {
 			t.Run(tableName, func(t *testing.T) {
-				config := &Config{
-					Database: DatabaseConfig{
-						Host:     "localhost",
-						Port:     5432,
-						User:     "testuser",
-						Password: "testpass",
-						Name:     "testdb",
-					},
-					S3: S3Config{
-						Endpoint:  "https://s3.example.com",
-						Bucket:    "test-bucket",
-						AccessKey: "access123",
-						SecretKey: "secret456",
-						Region:    "us-east-1",
-					},
-					Table:   tableName,
-					Workers: 4,
-				}
+				config := newTestConfig()
+				config.Table = tableName
 
 				err := config.Validate()
 				if err != nil {
@@ -550,24 +346,8 @@ func TestConfigValidation_InvalidWorkersCount(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				config := &Config{
-					Database: DatabaseConfig{
-						Host:     "localhost",
-						Port:     5432,
-						User:     "testuser",
-						Password: "testpass",
-						Name:     "testdb",
-					},
-					S3: S3Config{
-						Endpoint:  "https://s3.example.com",
-						Bucket:    "test-bucket",
-						AccessKey: "access123",
-						SecretKey: "secret456",
-						Region:    "us-east-1",
-					},
-					Table:   "test_table",
-					Workers: tc.workers,
-				}
+				config := newTestConfig()
+				config.Workers = tc.workers
 
 				err := config.Validate()
 				if err == nil {
@@ -584,24 +364,8 @@ func TestConfigValidation_ValidWorkersCount(t *testing.T) {
 
 		for _, workers := range testCases {
 			t.Run(fmt.Sprintf("%d workers", workers), func(t *testing.T) {
-				config := &Config{
-					Database: DatabaseConfig{
-						Host:     "localhost",
-						Port:     5432,
-						User:     "testuser",
-						Password: "testpass",
-						Name:     "testdb",
-					},
-					S3: S3Config{
-						Endpoint:  "https://s3.example.com",
-						Bucket:    "test-bucket",
-						AccessKey: "access123",
-						SecretKey: "secret456",
-						Region:    "us-east-1",
-					},
-					Table:   "test_table",
-					Workers: workers,
-				}
+				config := newTestConfig()
+				config.Workers = workers
 
 				err := config.Validate()
 				if err != nil {

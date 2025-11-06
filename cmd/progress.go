@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/progress"
@@ -26,6 +27,74 @@ const (
 	PhaseProcessing
 	PhaseComplete
 )
+
+// safeSliceResults is a thread-safe wrapper for slice results
+type safeSliceResults struct {
+	mu      sync.RWMutex
+	results []struct {
+		date   string
+		result ProcessResult
+	}
+}
+
+func newSafeSliceResults() *safeSliceResults {
+	return &safeSliceResults{
+		results: make([]struct {
+			date   string
+			result ProcessResult
+		}, 0),
+	}
+}
+
+func (s *safeSliceResults) append(date string, result ProcessResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.results = append(s.results, struct {
+		date   string
+		result ProcessResult
+	}{
+		date:   date,
+		result: result,
+	})
+
+	// Keep only the last 10 slice results to avoid memory growth
+	if len(s.results) > 10 {
+		s.results = s.results[len(s.results)-10:]
+	}
+}
+
+func (s *safeSliceResults) clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.results = nil
+}
+
+func (s *safeSliceResults) len() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.results)
+}
+
+func (s *safeSliceResults) getRecent(n int) []struct {
+	date   string
+	result ProcessResult
+} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	startIndex := 0
+	if len(s.results) > n {
+		startIndex = len(s.results) - n
+	}
+
+	// Make a copy to avoid holding the lock during rendering
+	resultsCopy := make([]struct {
+		date   string
+		result ProcessResult
+	}, len(s.results[startIndex:]))
+	copy(resultsCopy, s.results[startIndex:])
+	return resultsCopy
+}
 
 type progressModel struct {
 	phase           Phase
@@ -51,6 +120,7 @@ type progressModel struct {
 	resultsChan     chan<- []ProcessResult
 	initialized     bool
 	ctx             context.Context
+	cancel          context.CancelFunc // Cancel function to stop all operations
 	pendingTables   []struct {
 		name string
 		date time.Time
@@ -60,6 +130,13 @@ type progressModel struct {
 	partitionCache      *PartitionCache
 	processingStartTime time.Time
 	taskInfo            *TaskInfo
+	program             *tea.Program // Reference for sending messages from goroutines
+	// Slice progress tracking
+	currentSliceIndex int
+	totalSlices       int
+	currentSliceDate  string
+	sliceProgress     progress.Model
+	sliceResults      *safeSliceResults
 }
 
 type progressMsg struct {
@@ -118,6 +195,25 @@ type connectedMsg struct {
 	host string
 }
 
+type setProgramMsg struct {
+	program *tea.Program
+}
+
+type sliceStartMsg struct {
+	partitionIndex int
+	sliceIndex     int
+	totalSlices    int
+	sliceDate      string
+}
+
+type sliceCompleteMsg struct {
+	partitionIndex int
+	sliceIndex     int
+	success        bool
+	result         ProcessResult
+	sliceDate      string
+}
+
 var (
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#626262")).
@@ -160,7 +256,7 @@ func (m *progressModel) updateTaskInfo() {
 	}
 }
 
-func newProgressModelWithArchiver(ctx context.Context, config *Config, archiver *Archiver, errChan chan<- error, resultsChan chan<- []ProcessResult, taskInfo *TaskInfo) progressModel {
+func newProgressModelWithArchiver(ctx context.Context, cancel context.CancelFunc, config *Config, archiver *Archiver, errChan chan<- error, resultsChan chan<- []ProcessResult, taskInfo *TaskInfo) progressModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -175,6 +271,11 @@ func newProgressModelWithArchiver(ctx context.Context, config *Config, archiver 
 		progress.WithWidth(60),
 	)
 
+	sliceProg := progress.New(
+		progress.WithScaledGradient("#9B59B6", "#3498DB"),
+		progress.WithWidth(50),
+	)
+
 	// Load cache for row counts
 	cache, _ := loadPartitionCache(config.Table)
 	if cache == nil {
@@ -187,6 +288,7 @@ func newProgressModelWithArchiver(ctx context.Context, config *Config, archiver 
 		phase:           PhaseConnecting,
 		currentProgress: currentProg,
 		overallProgress: overallProg,
+		sliceProgress:   sliceProg,
 		currentSpinner:  s,
 		currentStage:    "Initializing...",
 		results:         make([]ProcessResult, 0),
@@ -198,8 +300,10 @@ func newProgressModelWithArchiver(ctx context.Context, config *Config, archiver 
 		resultsChan:     resultsChan,
 		initialized:     false,
 		ctx:             ctx,
+		cancel:          cancel,
 		partitionCache:  cache,
 		taskInfo:        taskInfo,
+		sliceResults:    newSafeSliceResults(),
 	}
 }
 
@@ -278,13 +382,19 @@ func (m *progressModel) doDiscover() tea.Cmd {
 			return messageMsg("❌ Database not connected")
 		}
 
-		// Query for partitions
+		// Query for leaf partitions only (not intermediate parent partitions)
+		// This handles hierarchical partitioning like: flights -> flights_2024 -> flights_2024_01 -> flights_2024_01_01
 		query := `
-			SELECT tablename
-			FROM pg_tables
-			WHERE schemaname = 'public'
-				AND tablename LIKE $1
-			ORDER BY tablename;
+			SELECT c.relname::text AS tablename
+			FROM pg_class c
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = 'public'
+				AND c.relname LIKE $1
+				AND c.relkind = 'r'
+				AND NOT EXISTS (
+					SELECT 1 FROM pg_inherits WHERE inhparent = c.oid
+				)
+			ORDER BY c.relname;
 		`
 
 		pattern := m.config.Table + "_%"
@@ -454,7 +564,7 @@ func (m *progressModel) processNext() tea.Cmd {
 	return func() tea.Msg {
 		// Actually process the partition using the archiver
 		if m.archiver != nil && m.archiver.db != nil {
-			result := m.archiver.ProcessPartitionWithProgress(partition, nil)
+			result := m.archiver.ProcessPartitionWithProgress(partition, m.program)
 
 			// Debug: log any errors
 			if result.Error != nil && m.config.Debug {
@@ -495,6 +605,9 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMessageMsg(msg)
 	case connectedMsg:
 		return m.handleConnectedMsg(msg)
+	case setProgramMsg:
+		m.program = msg.program
+		return m, nil
 	case discoveredTablesMsg:
 		return m.handleDiscoveredTablesMsg(msg)
 	case partitionsFoundMsg:
@@ -513,6 +626,10 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleStageUpdateMsg(msg)
 	case stageTickMsg:
 		return m.handleStageTickMsg(msg)
+	case sliceStartMsg:
+		return m.handleSliceStartMsg(msg)
+	case sliceCompleteMsg:
+		return m.handleSliceCompleteMsg(msg)
 	}
 	return m, nil
 }
@@ -520,6 +637,10 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m progressModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" || msg.String() == "q" {
 		m.done = true
+		// Cancel the context to stop all archival operations
+		if m.cancel != nil {
+			m.cancel()
+		}
 		return m, tea.Quit
 	}
 	return m, nil
@@ -550,7 +671,12 @@ func (m progressModel) handleProgressFrameMsg(msg progress.FrameMsg) (tea.Model,
 		m.overallProgress = om
 	}
 
-	return m, tea.Batch(cmd, cmd2)
+	sliceModel, cmd3 := m.sliceProgress.Update(msg)
+	if sm, ok := sliceModel.(progress.Model); ok {
+		m.sliceProgress = sm
+	}
+
+	return m, tea.Batch(cmd, cmd2, cmd3)
 }
 
 func (m progressModel) handlePhaseMsg(msg phaseMsg) (tea.Model, tea.Cmd) {
@@ -767,6 +893,11 @@ func (m progressModel) handlePartitionCompleteMsg(msg partitionCompleteMsg) (tea
 
 	m.currentStage = ""
 	m.processingStartTime = time.Time{}
+	// Reset slice progress tracking
+	m.currentSliceIndex = 0
+	m.totalSlices = 0
+	m.currentSliceDate = ""
+	m.sliceResults.clear() // Clear slice results for next partition
 
 	if len(m.partitions) > 0 {
 		overallPercent := float64(m.currentIndex) / float64(len(m.partitions))
@@ -784,7 +915,8 @@ func (m progressModel) handlePartitionCompleteMsg(msg partitionCompleteMsg) (tea
 func (m progressModel) handleAllCompleteMsg(_ allCompleteMsg) (tea.Model, tea.Cmd) {
 	m.phase = PhaseComplete
 	m.done = true
-	return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
+	// Don't use ExitAltScreen so the completion summary stays visible
+	return m, tea.Quit
 }
 
 func (m progressModel) handleStageUpdateMsg(msg stageUpdateMsg) (tea.Model, tea.Cmd) {
@@ -814,6 +946,20 @@ func (m progressModel) handleStageTickMsg(_ stageTickMsg) (tea.Model, tea.Cmd) {
 			return stageTickMsg(t)
 		})
 	}
+	return m, nil
+}
+
+func (m progressModel) handleSliceStartMsg(msg sliceStartMsg) (tea.Model, tea.Cmd) {
+	m.currentSliceIndex = msg.sliceIndex
+	m.totalSlices = msg.totalSlices
+	m.currentSliceDate = msg.sliceDate
+	return m, nil
+}
+
+func (m progressModel) handleSliceCompleteMsg(msg sliceCompleteMsg) (tea.Model, tea.Cmd) {
+	// Store slice result for display in Recent Results
+	m.sliceResults.append(msg.sliceDate, msg.result)
+
 	return m, nil
 }
 
@@ -933,11 +1079,26 @@ func (m progressModel) renderProcessingPhase() []string {
 		sections = append(sections, tableHeaderStyle.Render("   Processing Partitions"))
 		sections = append(sections, "")
 
-		overallInfo := fmt.Sprintf("   Overall: %d/%d partitions", m.currentIndex, len(m.partitions))
+		// Show current partition name if we're actively processing
+		var overallInfo string
+		if m.currentIndex < len(m.partitions) {
+			overallInfo = fmt.Sprintf("   Overall: %d/%d partitions (%s)", m.currentIndex, len(m.partitions), m.partitions[m.currentIndex].TableName)
+		} else {
+			overallInfo = fmt.Sprintf("   Overall: %d/%d partitions", m.currentIndex, len(m.partitions))
+		}
 		sections = append(sections, progressInfoStyle.Render(overallInfo))
 
 		viewProgress := m.overallProgress.ViewAs(float64(m.currentIndex) / float64(len(m.partitions)))
 		sections = append(sections, "   "+viewProgress)
+
+		// Show slice progress if partition is being split
+		if m.totalSlices > 0 {
+			sections = append(sections, "")
+			sliceInfo := fmt.Sprintf("   Partition Slices: %d/%d (%s)", m.currentSliceIndex+1, m.totalSlices, m.currentSliceDate)
+			sections = append(sections, progressInfoStyle.Render(sliceInfo))
+			viewSliceProgress := m.sliceProgress.ViewAs(float64(m.currentSliceIndex+1) / float64(m.totalSlices))
+			sections = append(sections, "   "+viewSliceProgress)
+		}
 
 		if m.currentStage != "" {
 			stageInfo := fmt.Sprintf("   %s %s", m.currentSpinner.View(), m.currentStage)
@@ -961,38 +1122,101 @@ func (m progressModel) renderProcessingPhase() []string {
 // renderProcessingSummary renders summary of processing results
 func (m progressModel) renderProcessingSummary() []string {
 	var sections []string
-	if len(m.results) > 0 {
+
+	// Show completed partitions first, then current partition's slices
+	hasResults := len(m.results) > 0 || m.sliceResults.len() > 0
+
+	if hasResults {
 		sections = append(sections, tableHeaderStyle.Render("   Recent Results"))
 		sections = append(sections, "")
 
-		startIndex := 0
-		if len(m.results) > 5 {
-			startIndex = len(m.results) - 5
+		// Show recent partition results first (completed work)
+		partStartIndex := 0
+		if len(m.results) > 3 {
+			partStartIndex = len(m.results) - 3
 		}
-
-		for _, result := range m.results[startIndex:] {
+		for _, result := range m.results[partStartIndex:] {
 			var line string
 			if result.Skipped {
 				line = fmt.Sprintf("   ⏭  %s - %s", result.Partition.TableName, result.SkipReason)
 			} else if result.Error != nil {
 				line = fmt.Sprintf("   ❌ %s - Error: %v", result.Partition.TableName, result.Error)
+			} else if result.Uploaded && result.S3Key != "" {
+				line = fmt.Sprintf("   ✅ %s → s3://%s/%s (%d bytes) - Completed in %.1f seconds", result.Partition.TableName, m.config.S3.Bucket, result.S3Key, result.BytesWritten, result.Duration.Seconds())
 			} else if result.Uploaded {
-				line = fmt.Sprintf("   ✅ %s - Uploaded %d bytes", result.Partition.TableName, result.BytesWritten)
+				line = fmt.Sprintf("   ✅ %s - Uploaded %d bytes - Completed in %.1f seconds", result.Partition.TableName, result.BytesWritten, result.Duration.Seconds())
 			} else {
 				line = fmt.Sprintf("   ⏸  %s - In progress", result.Partition.TableName)
 			}
 			sections = append(sections, line)
 		}
+
+		// Show recent slice results (current partition's in-progress work)
+		recentSlices := m.sliceResults.getRecent(5)
+		for _, sliceRes := range recentSlices {
+			var line string
+			if sliceRes.result.Skipped {
+				line = fmt.Sprintf("   ⏭  %s - %s", sliceRes.date, sliceRes.result.SkipReason)
+			} else if sliceRes.result.Error != nil {
+				line = fmt.Sprintf("   ❌ %s - Error: %v", sliceRes.date, sliceRes.result.Error)
+			} else if sliceRes.result.Uploaded && sliceRes.result.S3Key != "" {
+				line = fmt.Sprintf("   ✅ %s → s3://%s/%s (%d bytes) - Completed in %.1f seconds", sliceRes.date, m.config.S3.Bucket, sliceRes.result.S3Key, sliceRes.result.BytesWritten, sliceRes.result.Duration.Seconds())
+			} else if sliceRes.result.Uploaded {
+				line = fmt.Sprintf("   ✅ %s - Uploaded %d bytes - Completed in %.1f seconds", sliceRes.date, sliceRes.result.BytesWritten, sliceRes.result.Duration.Seconds())
+			} else {
+				line = fmt.Sprintf("   ⏸  %s - In progress", sliceRes.date)
+			}
+			sections = append(sections, line)
+		}
+
 		sections = append(sections, "")
 	}
 	return sections
 }
 
-func (m progressModel) View() string {
-	if m.done && m.phase == PhaseComplete {
-		return ""
+// renderCompletionSummary renders the final completion summary
+func (m progressModel) renderCompletionSummary() []string {
+	var sections []string
+
+	sections = append(sections, "")
+	sections = append(sections, tableHeaderStyle.Render("   Completion Summary"))
+	sections = append(sections, "")
+
+	// Count results by status
+	var uploaded, skipped, failed int
+	var totalBytes int64
+	for _, result := range m.results {
+		if result.Error != nil {
+			failed++
+		} else if result.Skipped {
+			skipped++
+		} else if result.Uploaded {
+			uploaded++
+			totalBytes += result.BytesWritten
+		}
 	}
 
+	// Show statistics
+	sections = append(sections, fmt.Sprintf("   Total Partitions: %d", len(m.partitions)))
+	sections = append(sections, fmt.Sprintf("   ✅ Uploaded: %d", uploaded))
+	if skipped > 0 {
+		sections = append(sections, fmt.Sprintf("   ⏭  Skipped: %d", skipped))
+	}
+	if failed > 0 {
+		sections = append(sections, fmt.Sprintf("   ❌ Failed: %d", failed))
+	}
+
+	// Show total bytes if any uploads occurred
+	if totalBytes > 0 {
+		sections = append(sections, "")
+		sections = append(sections, fmt.Sprintf("   Total Data Uploaded: %s", formatBytes(totalBytes)))
+	}
+
+	sections = append(sections, "")
+	return sections
+}
+
+func (m progressModel) View() string {
 	var sections []string
 
 	// Render banner
@@ -1004,21 +1228,39 @@ func (m progressModel) View() string {
 	// Render separator
 	sections = append(sections, m.renderSeparator()...)
 
-	// Phase-specific content
-	switch m.phase { //nolint:exhaustive // PhaseComplete is terminal
-	case PhaseConnecting, PhaseCheckingPermissions, PhaseDiscovering:
-		sections = append(sections, m.renderInitialPhase()...)
-	case PhaseCounting:
-		sections = append(sections, m.renderCountingPhase()...)
-	case PhaseProcessing:
-		sections = append(sections, m.renderProcessingPhase()...)
+	// Phase-specific content or completion summary
+	if m.done && m.phase == PhaseComplete {
+		sections = append(sections, m.renderCompletionSummary()...)
+	} else {
+		switch m.phase { //nolint:exhaustive // PhaseComplete is terminal
+		case PhaseConnecting, PhaseCheckingPermissions, PhaseDiscovering:
+			sections = append(sections, m.renderInitialPhase()...)
+		case PhaseCounting:
+			sections = append(sections, m.renderCountingPhase()...)
+		case PhaseProcessing:
+			sections = append(sections, m.renderProcessingPhase()...)
+		}
+
+		// Help text (only show during processing, not on completion)
+		sections = append(sections, "")
+		sections = append(sections, helpStyle.Render("   Press Ctrl+C or 'q' to quit"))
 	}
 
-	// Help text
-	sections = append(sections, "")
-	sections = append(sections, helpStyle.Render("   Press Ctrl+C or 'q' to quit"))
-
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+// formatBytes formats byte count into human-readable string
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
 func updateProgress(stage string, current, total int64) tea.Cmd {
