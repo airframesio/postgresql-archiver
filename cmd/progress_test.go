@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -15,6 +17,10 @@ func TestSafeSliceResults(t *testing.T) {
 
 		if sr.len() != 0 {
 			t.Errorf("expected length 0, got %d", sr.len())
+		}
+
+		if cap(sr.results) != maxSliceResults {
+			t.Errorf("expected initial capacity %d, got %d", maxSliceResults, cap(sr.results))
 		}
 	})
 
@@ -110,6 +116,45 @@ func TestSafeSliceResults(t *testing.T) {
 
 		if len(recent) != 3 {
 			t.Errorf("expected 3 items, got %d", len(recent))
+		}
+	})
+
+	t.Run("getRecent with zero or negative", func(t *testing.T) {
+		sr := newSafeSliceResults()
+		sr.append("2024-01-01", ProcessResult{BytesWritten: 100})
+
+		// Request 0, should get nil
+		recent := sr.getRecent(0)
+		if recent != nil {
+			t.Errorf("expected nil for n=0, got slice with %d items", len(recent))
+		}
+
+		// Request negative, should get nil
+		recent = sr.getRecent(-1)
+		if recent != nil {
+			t.Errorf("expected nil for n=-1, got slice with %d items", len(recent))
+		}
+	})
+
+	t.Run("clear preserves capacity", func(t *testing.T) {
+		sr := newSafeSliceResults()
+		for i := 0; i < 5; i++ {
+			sr.append("2024-01-01", ProcessResult{BytesWritten: int64(i * 100)})
+		}
+
+		if sr.len() != 5 {
+			t.Errorf("expected length 5 before clear, got %d", sr.len())
+		}
+
+		sr.clear()
+
+		if sr.len() != 0 {
+			t.Errorf("expected length 0 after clear, got %d", sr.len())
+		}
+
+		// Capacity should be preserved
+		if cap(sr.results) == 0 {
+			t.Error("expected non-zero capacity after clear")
 		}
 	})
 
@@ -246,5 +291,80 @@ func TestProcessResultSkipped(t *testing.T) {
 
 	if result.SkipReason != "All slices skipped (no data in time ranges)" {
 		t.Errorf("unexpected skip reason: %s", result.SkipReason)
+	}
+}
+
+func TestFormatResultLine(t *testing.T) {
+	config := &Config{
+		S3: S3Config{
+			Bucket: "test-bucket",
+		},
+	}
+	m := progressModel{
+		config: config,
+	}
+
+	tests := []struct {
+		name       string
+		identifier string
+		result     ProcessResult
+		wantSubstr string
+	}{
+		{
+			name:       "skipped result",
+			identifier: "partition_2024_01",
+			result: ProcessResult{
+				Skipped:    true,
+				SkipReason: "no data",
+			},
+			wantSubstr: "⏭",
+		},
+		{
+			name:       "error result",
+			identifier: "partition_2024_02",
+			result: ProcessResult{
+				Error: fmt.Errorf("database error"), //nolint:err113 // test error
+			},
+			wantSubstr: "❌",
+		},
+		{
+			name:       "uploaded with S3 key",
+			identifier: "partition_2024_03",
+			result: ProcessResult{
+				Uploaded:     true,
+				S3Key:        "path/to/file.parquet",
+				BytesWritten: 1024,
+				Duration:     5 * time.Second,
+			},
+			wantSubstr: "s3://test-bucket",
+		},
+		{
+			name:       "uploaded without S3 key",
+			identifier: "partition_2024_04",
+			result: ProcessResult{
+				Uploaded:     true,
+				BytesWritten: 2048,
+				Duration:     3 * time.Second,
+			},
+			wantSubstr: "Uploaded 2048 bytes",
+		},
+		{
+			name:       "in progress",
+			identifier: "partition_2024_05",
+			result:     ProcessResult{},
+			wantSubstr: "In progress",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			line := m.formatResultLine(tt.identifier, tt.result)
+			if !strings.Contains(line, tt.wantSubstr) {
+				t.Errorf("expected line to contain %q, got: %s", tt.wantSubstr, line)
+			}
+			if !strings.Contains(line, tt.identifier) {
+				t.Errorf("expected line to contain identifier %q, got: %s", tt.identifier, line)
+			}
+		})
 	}
 }

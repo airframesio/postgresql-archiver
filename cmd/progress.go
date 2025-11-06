@@ -28,70 +28,83 @@ const (
 	PhaseComplete
 )
 
-// safeSliceResults is a thread-safe wrapper for slice results
+// sliceResultEntry represents a single slice processing result with its date
+type sliceResultEntry struct {
+	date   string
+	result ProcessResult
+}
+
+// safeSliceResults is a thread-safe wrapper for storing and retrieving slice processing results.
+// It uses a read-write mutex to allow concurrent reads while ensuring exclusive writes.
+// The structure automatically limits storage to the most recent maxSliceResults entries to prevent unbounded memory growth.
 type safeSliceResults struct {
 	mu      sync.RWMutex
-	results []struct {
-		date   string
-		result ProcessResult
-	}
+	results []sliceResultEntry
 }
 
+// maxSliceResults is the maximum number of slice results to retain in memory
+const maxSliceResults = 10
+
+// newSafeSliceResults creates a new thread-safe slice results container
 func newSafeSliceResults() *safeSliceResults {
 	return &safeSliceResults{
-		results: make([]struct {
-			date   string
-			result ProcessResult
-		}, 0),
+		results: make([]sliceResultEntry, 0, maxSliceResults),
 	}
 }
 
+// append adds a new slice result to the container.
+// If the container exceeds maxSliceResults entries, the oldest entries are discarded.
+// This method is safe for concurrent use.
 func (s *safeSliceResults) append(date string, result ProcessResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.results = append(s.results, struct {
-		date   string
-		result ProcessResult
-	}{
+
+	s.results = append(s.results, sliceResultEntry{
 		date:   date,
 		result: result,
 	})
 
-	// Keep only the last 10 slice results to avoid memory growth
-	if len(s.results) > 10 {
-		s.results = s.results[len(s.results)-10:]
+	// Keep only the last maxSliceResults to avoid memory growth
+	if len(s.results) > maxSliceResults {
+		s.results = s.results[len(s.results)-maxSliceResults:]
 	}
 }
 
+// clear removes all slice results from the container.
+// This method is safe for concurrent use.
 func (s *safeSliceResults) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.results = nil
+	s.results = s.results[:0] // Preserve capacity
 }
 
+// len returns the current number of slice results in the container.
+// This method is safe for concurrent use.
 func (s *safeSliceResults) len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.results)
 }
 
-func (s *safeSliceResults) getRecent(n int) []struct {
-	date   string
-	result ProcessResult
-} {
+// getRecent returns the n most recent slice results.
+// If fewer than n results exist, all results are returned.
+// The returned slice is a defensive copy and safe to use without holding the lock.
+// This method is safe for concurrent use.
+func (s *safeSliceResults) getRecent(n int) []sliceResultEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if n <= 0 {
+		return nil
+	}
 
 	startIndex := 0
 	if len(s.results) > n {
 		startIndex = len(s.results) - n
 	}
 
-	// Make a copy to avoid holding the lock during rendering
-	resultsCopy := make([]struct {
-		date   string
-		result ProcessResult
-	}, len(s.results[startIndex:]))
+	// Make a defensive copy to avoid holding the lock during rendering
+	resultsCopy := make([]sliceResultEntry, len(s.results[startIndex:]))
 	copy(resultsCopy, s.results[startIndex:])
 	return resultsCopy
 }
@@ -1119,6 +1132,31 @@ func (m progressModel) renderProcessingPhase() []string {
 	return sections
 }
 
+// Constants for recent results display
+const (
+	maxRecentPartitions = 3
+	maxRecentSlices     = 5
+)
+
+// formatResultLine formats a ProcessResult into a display line with the given identifier (partition name or date)
+func (m progressModel) formatResultLine(identifier string, result ProcessResult) string {
+	const indent = "   "
+	switch {
+	case result.Skipped:
+		return fmt.Sprintf("%s⏭  %s - %s", indent, identifier, result.SkipReason)
+	case result.Error != nil:
+		return fmt.Sprintf("%s❌ %s - Error: %v", indent, identifier, result.Error)
+	case result.Uploaded && result.S3Key != "":
+		return fmt.Sprintf("%s✅ %s → s3://%s/%s (%d bytes) - Completed in %.1f seconds",
+			indent, identifier, m.config.S3.Bucket, result.S3Key, result.BytesWritten, result.Duration.Seconds())
+	case result.Uploaded:
+		return fmt.Sprintf("%s✅ %s - Uploaded %d bytes - Completed in %.1f seconds",
+			indent, identifier, result.BytesWritten, result.Duration.Seconds())
+	default:
+		return fmt.Sprintf("%s⏸  %s - In progress", indent, identifier)
+	}
+}
+
 // renderProcessingSummary renders summary of processing results
 func (m progressModel) renderProcessingSummary() []string {
 	var sections []string
@@ -1132,41 +1170,19 @@ func (m progressModel) renderProcessingSummary() []string {
 
 		// Show recent partition results first (completed work)
 		partStartIndex := 0
-		if len(m.results) > 3 {
-			partStartIndex = len(m.results) - 3
+		if len(m.results) > maxRecentPartitions {
+			partStartIndex = len(m.results) - maxRecentPartitions
 		}
 		for _, result := range m.results[partStartIndex:] {
-			var line string
-			if result.Skipped {
-				line = fmt.Sprintf("   ⏭  %s - %s", result.Partition.TableName, result.SkipReason)
-			} else if result.Error != nil {
-				line = fmt.Sprintf("   ❌ %s - Error: %v", result.Partition.TableName, result.Error)
-			} else if result.Uploaded && result.S3Key != "" {
-				line = fmt.Sprintf("   ✅ %s → s3://%s/%s (%d bytes) - Completed in %.1f seconds", result.Partition.TableName, m.config.S3.Bucket, result.S3Key, result.BytesWritten, result.Duration.Seconds())
-			} else if result.Uploaded {
-				line = fmt.Sprintf("   ✅ %s - Uploaded %d bytes - Completed in %.1f seconds", result.Partition.TableName, result.BytesWritten, result.Duration.Seconds())
-			} else {
-				line = fmt.Sprintf("   ⏸  %s - In progress", result.Partition.TableName)
-			}
+			line := m.formatResultLine(result.Partition.TableName, result)
 			sections = append(sections, line)
 		}
 
 		// Show recent slice results (current partition's in-progress work) only if date-column is configured
 		if m.config.DateColumn != "" {
-			recentSlices := m.sliceResults.getRecent(5)
+			recentSlices := m.sliceResults.getRecent(maxRecentSlices)
 			for _, sliceRes := range recentSlices {
-				var line string
-				if sliceRes.result.Skipped {
-					line = fmt.Sprintf("   ⏭  %s - %s", sliceRes.date, sliceRes.result.SkipReason)
-				} else if sliceRes.result.Error != nil {
-					line = fmt.Sprintf("   ❌ %s - Error: %v", sliceRes.date, sliceRes.result.Error)
-				} else if sliceRes.result.Uploaded && sliceRes.result.S3Key != "" {
-					line = fmt.Sprintf("   ✅ %s → s3://%s/%s (%d bytes) - Completed in %.1f seconds", sliceRes.date, m.config.S3.Bucket, sliceRes.result.S3Key, sliceRes.result.BytesWritten, sliceRes.result.Duration.Seconds())
-				} else if sliceRes.result.Uploaded {
-					line = fmt.Sprintf("   ✅ %s - Uploaded %d bytes - Completed in %.1f seconds", sliceRes.date, sliceRes.result.BytesWritten, sliceRes.result.Duration.Seconds())
-				} else {
-					line = fmt.Sprintf("   ⏸  %s - In progress", sliceRes.date)
-				}
+				line := m.formatResultLine(sliceRes.date, sliceRes.result)
 				sections = append(sections, line)
 			}
 		}
