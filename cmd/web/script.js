@@ -648,50 +648,116 @@ function updateRow(row, entry) {
         statusBadge = '<span class="status-badge no-file">Count Only</span>';
     }
 
-    // Store old values to detect changes
-    const oldValues = {
-        rowCount: row.querySelector('td:nth-child(2)')?.textContent,
-        uncompressed: row.querySelector('td:nth-child(3)')?.textContent,
-        compressed: row.querySelector('td:nth-child(4)')?.textContent,
-        status: row.querySelector('td:nth-child(8) .status-badge')?.textContent
-    };
+    // Check if this is a new row (no cells yet) or an existing row
+    const cells = row.querySelectorAll('td');
+    const isNewRow = cells.length === 0;
 
-    row.innerHTML = '<td>' +
-        '<div class="partition-name">' + escapeHTML(entry.partition) + '</div>' +
-        '<div class="table-name">' + escapeHTML(entry.table) + '</div>' +
-        '</td>' +
-        '<td class="size">' + (entry.rowCount ? entry.rowCount.toLocaleString() : '—') + '</td>' +
-        '<td class="size">' + formatBytes(entry.uncompressedSize) + '</td>' +
-        '<td class="size">' + formatBytes(entry.fileSize) + '</td>' +
-        '<td class="ratio">' + ratio + '</td>' +
-        '<td class="hash">' + (entry.fileMD5 ? '<span title="' + escapeHTMLAttr(entry.fileMD5) + '">' + escapeHTML(entry.fileMD5.substring(0, 12)) + '...</span>' : '—') + '</td>' +
-        '<td><span class="age ' + age.class + '">' + age.text + '</span></td>' +
-        '<td>' + statusBadge + '</td>' +
-        '<td>' + (hasError ? '<div class="error-text" title="' + escapeHTMLAttr(entry.lastError) + '">' + escapeHTML(entry.lastError) + '</div>' : '—') + '</td>';
+    if (isNewRow) {
+        // For new rows, use innerHTML for fast initial population
+        row.innerHTML = '<td>' +
+            '<div class="partition-name">' + escapeHTML(entry.partition) + '</div>' +
+            '<div class="table-name">' + escapeHTML(entry.table) + '</div>' +
+            '</td>' +
+            '<td class="size">' + (entry.rowCount ? entry.rowCount.toLocaleString() : '—') + '</td>' +
+            '<td class="size">' + formatBytes(entry.uncompressedSize) + '</td>' +
+            '<td class="size">' + formatBytes(entry.fileSize) + '</td>' +
+            '<td class="ratio">' + ratio + '</td>' +
+            '<td class="hash">' + (entry.fileMD5 ? '<span title="' + escapeHTMLAttr(entry.fileMD5) + '">' + escapeHTML(entry.fileMD5.substring(0, 12)) + '...</span>' : '—') + '</td>' +
+            '<td><span class="age ' + age.class + '">' + age.text + '</span></td>' +
+            '<td>' + statusBadge + '</td>' +
+            '<td>' + (hasError ? '<div class="error-text" title="' + escapeHTMLAttr(entry.lastError) + '">' + escapeHTML(entry.lastError) + '</div>' : '—') + '</td>';
+    } else {
+        // For existing rows, selectively update only changed cells
+        // Calculate new values
+        const newRowCount = entry.rowCount ? entry.rowCount.toLocaleString() : '—';
+        const newUncompressed = formatBytes(entry.uncompressedSize);
+        const newCompressed = formatBytes(entry.fileSize);
 
-    // Check for changes and animate updated cells
-    const newValues = {
-        rowCount: entry.rowCount ? entry.rowCount.toLocaleString() : '—',
-        uncompressed: formatBytes(entry.uncompressedSize),
-        compressed: formatBytes(entry.fileSize),
-        status: row.querySelector('td:nth-child(8) .status-badge')?.textContent
-    };
+        // Cell 2: Row count
+        const cell2 = cells[1];
+        if (cell2) {
+            const oldValue = cell2.textContent;
+            if (oldValue !== newRowCount) {
+                cell2.textContent = newRowCount;
+                if (oldValue && oldValue !== '—') {
+                    animateCell(cell2);
+                }
+            }
+        }
 
-    // Animate changed cells
-    setTimeout(() => {
-        if (oldValues.rowCount !== newValues.rowCount && oldValues.rowCount) {
-            animateCell(row.querySelector('td:nth-child(2)'));
+        // Cell 3: Uncompressed size
+        const cell3 = cells[2];
+        if (cell3) {
+            const oldValue = cell3.textContent;
+            if (oldValue !== newUncompressed) {
+                cell3.textContent = newUncompressed;
+                if (oldValue && oldValue !== '—') {
+                    animateCell(cell3);
+                }
+            }
         }
-        if (oldValues.uncompressed !== newValues.uncompressed && oldValues.uncompressed) {
-            animateCell(row.querySelector('td:nth-child(3)'));
+
+        // Cell 4: Compressed size
+        const cell4 = cells[3];
+        if (cell4) {
+            const oldValue = cell4.textContent;
+            if (oldValue !== newCompressed) {
+                cell4.textContent = newCompressed;
+                if (oldValue && oldValue !== '—') {
+                    animateCell(cell4);
+                }
+            }
         }
-        if (oldValues.compressed !== newValues.compressed && oldValues.compressed) {
-            animateCell(row.querySelector('td:nth-child(4)'));
+
+        // Cell 5: Ratio (always update, no animation)
+        const cell5 = cells[4];
+        if (cell5 && cell5.textContent !== ratio) {
+            cell5.textContent = ratio;
         }
-        if (oldValues.status !== newValues.status && oldValues.status) {
-            animateCell(row.querySelector('td:nth-child(8)'));
+
+        // Cell 6: Hash (update if different, no animation)
+        const cell6 = cells[5];
+        if (cell6) {
+            const newHash = entry.fileMD5 ? '<span title="' + escapeHTMLAttr(entry.fileMD5) + '">' + escapeHTML(entry.fileMD5.substring(0, 12)) + '...</span>' : '—';
+            if (cell6.innerHTML !== newHash) {
+                cell6.innerHTML = newHash;
+            }
         }
-    }, 10);
+
+        // Cell 7: Age (always update, no animation)
+        const cell7 = cells[6];
+        if (cell7) {
+            const ageSpan = cell7.querySelector('span.age');
+            if (ageSpan) {
+                ageSpan.className = 'age ' + age.class;
+                ageSpan.textContent = age.text;
+            }
+        }
+
+        // Cell 8: Status badge
+        const cell8 = cells[7];
+        if (cell8) {
+            const oldStatusBadge = cell8.querySelector('.status-badge');
+            const oldStatusText = oldStatusBadge?.textContent || '';
+            const newStatusText = statusBadge.match(/>(.*?)</)?.[1] || '';
+
+            if (oldStatusText !== newStatusText) {
+                cell8.innerHTML = statusBadge;
+                if (oldStatusText) {
+                    animateCell(cell8);
+                }
+            }
+        }
+
+        // Cell 9: Error (update if different, no animation)
+        const cell9 = cells[8];
+        if (cell9) {
+            const newError = hasError ? '<div class="error-text" title="' + escapeHTMLAttr(entry.lastError) + '">' + escapeHTML(entry.lastError) + '</div>' : '—';
+            if (cell9.innerHTML !== newError) {
+                cell9.innerHTML = newError;
+            }
+        }
+    }
 }
 
 // Add animation to element
@@ -769,7 +835,7 @@ window.scrollToPartition = function(partitionName) {
             if (partitionDiv && partitionDiv.textContent.trim() === partitionName) {
                 // Highlight the row temporarily
                 const originalBg = row.style.background;
-                row.style.background = '#fffacd';
+                row.style.background = 'var(--color-warning-50)';
                 row.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
                 // Also ensure the table wrapper scrolls if needed
