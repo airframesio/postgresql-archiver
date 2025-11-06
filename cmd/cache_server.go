@@ -311,17 +311,8 @@ func broadcastManager() {
 	}
 }
 
-// Data monitor watches for changes and broadcasts updates using fsnotify
-func dataMonitor() {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Printf("Failed to create file watcher, falling back to polling: %v", err)
-		dataMonitorFallback()
-		return
-	}
-	defer watcher.Close()
-
-	// Watch directories
+// setupWatchDirs creates and watches required directories
+func setupWatchDirs(watcher *fsnotify.Watcher) {
 	homeDir, _ := os.UserHomeDir()
 	cacheDir := filepath.Join(homeDir, ".postgresql-archiver", "cache")
 	taskDir := filepath.Join(homeDir, ".postgresql-archiver")
@@ -339,6 +330,43 @@ func dataMonitor() {
 	if err := watcher.Add(taskDir); err != nil {
 		log.Printf("Failed to watch task directory: %v", err)
 	}
+}
+
+// handleFileEvent processes file system events
+func handleFileEvent(event fsnotify.Event, debounceTimer **time.Timer, debounceDuration time.Duration) {
+	// Check if it's a cache or task file
+	isCacheFile := strings.HasSuffix(event.Name, ".json") && strings.Contains(event.Name, "cache")
+	isTaskFile := strings.HasSuffix(event.Name, "current_task.json")
+
+	if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) != 0 {
+		if isCacheFile || isTaskFile {
+			// Debounce updates to avoid flooding
+			if *debounceTimer != nil {
+				(*debounceTimer).Stop()
+			}
+			*debounceTimer = time.AfterFunc(debounceDuration, func() {
+				if isCacheFile {
+					broadcastCacheUpdate()
+				}
+				if isTaskFile {
+					broadcastStatusUpdate()
+				}
+			})
+		}
+	}
+}
+
+// Data monitor watches for changes and broadcasts updates using fsnotify
+func dataMonitor() {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("Failed to create file watcher, falling back to polling: %v", err)
+		dataMonitorFallback()
+		return
+	}
+	defer watcher.Close()
+
+	setupWatchDirs(watcher)
 
 	// Debounce timer to avoid too many updates
 	var debounceTimer *time.Timer
@@ -350,27 +378,7 @@ func dataMonitor() {
 			if !ok {
 				return
 			}
-
-			// Check if it's a cache or task file
-			isCacheFile := strings.HasSuffix(event.Name, ".json") && strings.Contains(event.Name, "cache")
-			isTaskFile := strings.HasSuffix(event.Name, "current_task.json")
-
-			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) != 0 {
-				if isCacheFile || isTaskFile {
-					// Debounce updates to avoid flooding
-					if debounceTimer != nil {
-						debounceTimer.Stop()
-					}
-					debounceTimer = time.AfterFunc(debounceDuration, func() {
-						if isCacheFile {
-							broadcastCacheUpdate()
-						}
-						if isTaskFile {
-							broadcastStatusUpdate()
-						}
-					})
-				}
-			}
+			handleFileEvent(event, &debounceTimer, debounceDuration)
 
 		case err, ok := <-watcher.Errors:
 			if !ok {

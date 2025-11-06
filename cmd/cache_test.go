@@ -10,7 +10,7 @@ import (
 
 const testTablePartition = "test_table_20240101"
 
-func TestPartitionCache(t *testing.T) {
+func TestPartitionCache_NewCache(t *testing.T) {
 	// Create a temporary directory for test cache
 	tempDir, err := os.MkdirTemp("", "cache_test")
 	if err != nil {
@@ -37,7 +37,9 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatal("new cache should have no entries")
 		}
 	})
+}
 
+func TestPartitionCache_SetAndGetRowCount(t *testing.T) {
 	t.Run("SetAndGetRowCount", func(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
@@ -64,7 +66,9 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatal("today's partition should not be cached")
 		}
 	})
+}
 
+func TestPartitionCache_SetAndGetFileMetadata(t *testing.T) {
 	t.Run("SetAndGetFileMetadata", func(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
@@ -99,7 +103,9 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatalf("expected uncompressed size %d, got %d", uncompressedSize, entry.UncompressedSize)
 		}
 	})
+}
 
+func TestPartitionCache_PreserveMetadata(t *testing.T) {
 	t.Run("PreserveMetadataWhenUpdatingRowCount", func(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
@@ -129,7 +135,9 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatal("row count should be updated")
 		}
 	})
+}
 
+func TestPartitionCache_SetAndGetError(t *testing.T) {
 	t.Run("SetAndGetError", func(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
@@ -148,7 +156,9 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatal("error time should be set")
 		}
 	})
+}
 
+func TestPartitionCache_CleanExpired(t *testing.T) {
 	t.Run("CleanExpired", func(t *testing.T) {
 		cache := &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
@@ -188,6 +198,22 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatal("recent row count should be preserved")
 		}
 	})
+}
+
+func TestPartitionCache_SaveAndLoad(t *testing.T) {
+	// Create a temporary directory for test cache
+	tempDir, err := os.MkdirTemp("", "cache_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Override home directory for testing
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", originalHome)
+
+	tableName := "test_table"
 
 	t.Run("SaveAndLoad", func(t *testing.T) {
 		cache := &PartitionCache{
@@ -231,6 +257,20 @@ func TestPartitionCache(t *testing.T) {
 			t.Fatal("S3 upload status mismatch")
 		}
 	})
+}
+
+func TestPartitionCache_LegacyMigration(t *testing.T) {
+	// Create a temporary directory for test cache
+	tempDir, err := os.MkdirTemp("", "cache_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Override home directory for testing
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", originalHome)
 
 	t.Run("LegacyCacheMigration", func(t *testing.T) {
 		// Create legacy cache file

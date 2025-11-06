@@ -113,7 +113,7 @@ func TestPIDFile(t *testing.T) {
 	})
 }
 
-func TestTaskInfo(t *testing.T) {
+func TestTaskInfo_WriteTaskInfo(t *testing.T) {
 	// Create temporary directory
 	tempDir, err := os.MkdirTemp("", "task_test")
 	if err != nil {
@@ -178,6 +178,20 @@ func TestTaskInfo(t *testing.T) {
 			t.Fatal("LastUpdate should be set")
 		}
 	})
+}
+
+func TestTaskInfo_ReadTaskInfo(t *testing.T) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "task_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Override home directory
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", originalHome)
 
 	t.Run("ReadTaskInfo", func(t *testing.T) {
 		// Write task info first
@@ -218,6 +232,20 @@ func TestTaskInfo(t *testing.T) {
 			t.Fatalf("expected completed %d, got %d", info.CompletedItems, read.CompletedItems)
 		}
 	})
+}
+
+func TestTaskInfo_ReadTaskInfoNotExist(t *testing.T) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "task_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Override home directory
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", originalHome)
 
 	t.Run("ReadTaskInfoNotExist", func(t *testing.T) {
 		// Remove task file if it exists
@@ -230,6 +258,20 @@ func TestTaskInfo(t *testing.T) {
 			t.Fatal("expected error when task file doesn't exist")
 		}
 	})
+}
+
+func TestTaskInfo_RemoveTaskFile(t *testing.T) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "task_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Override home directory
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", originalHome)
 
 	t.Run("RemoveTaskFile", func(t *testing.T) {
 		// Write task file
