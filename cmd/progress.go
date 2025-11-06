@@ -62,10 +62,10 @@ type progressModel struct {
 	processingStartTime time.Time
 	taskInfo            *TaskInfo
 	// Slice progress tracking
-	currentSliceIndex   int
-	totalSlices         int
-	currentSliceDate    string
-	sliceProgress       progress.Model
+	currentSliceIndex int
+	totalSlices       int
+	currentSliceDate  string
+	sliceProgress     progress.Model
 }
 
 type progressMsg struct {

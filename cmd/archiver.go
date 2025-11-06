@@ -226,13 +226,18 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, program *tea.Program,
 	if err := a.connect(ctx); err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
-	a.logger.Info("✅ Connected to database")
+	// Only log in debug mode (when TUI is not active)
+	if program == nil {
+		a.logger.Info("✅ Connected to database")
+	}
 
 	a.logger.Debug("Checking table permissions...")
 	if err := a.checkTablePermissions(ctx); err != nil {
 		return fmt.Errorf("permission check failed: %w", err)
 	}
-	a.logger.Info("✅ Table permissions verified")
+	if program == nil {
+		a.logger.Info("✅ Table permissions verified")
+	}
 
 	a.logger.Debug("Discovering partitions...")
 	// Inline partition discovery (same logic as progress.go doDiscover)
@@ -782,7 +787,10 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 	// Split into time ranges based on output duration
 	ranges := SplitPartitionByDuration(partitionStart, partitionEnd, a.config.OutputDuration)
 
-	a.logger.Info(fmt.Sprintf("  Splitting into %d %s files", len(ranges), a.config.OutputDuration))
+	// Only log in debug mode - in TUI mode this corrupts the display
+	if a.config.Debug {
+		a.logger.Info(fmt.Sprintf("  Splitting into %d %s files", len(ranges), a.config.OutputDuration))
+	}
 
 	// Log first few ranges for debugging
 	if a.config.Debug && len(ranges) > 0 {
@@ -855,7 +863,10 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 		}
 	}
 
-	a.logger.Info(fmt.Sprintf("  Split partition complete: %d files created, %d skipped", successCount, skipCount))
+	// Only log in debug mode - in TUI mode this corrupts the display
+	if a.config.Debug {
+		a.logger.Info(fmt.Sprintf("  Split partition complete: %d files created, %d skipped", successCount, skipCount))
+	}
 
 	result.BytesWritten = totalBytes
 	result.Compressed = true
@@ -1133,9 +1144,12 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program 
 		// Save metadata to cache
 		cache.setFileMetadata(partition.TableName, objectKey, int64(len(compressed)), uncompressedSize, localMD5, true)
 		_ = cache.save(a.config.Table)
-	}
 
-	a.logger.Info(fmt.Sprintf("      ✅ Uploaded %s (%d bytes)", filename, len(compressed)))
+		// Only log in debug mode when TUI is disabled
+		if program == nil {
+			a.logger.Info(fmt.Sprintf("      ✅ Uploaded %s (%d bytes)", filename, len(compressed)))
+		}
+	}
 
 	result.Stage = "Complete"
 	return result
