@@ -185,6 +185,14 @@ func initConfig() {
 }
 
 func runArchive() {
+	// Add panic recovery to catch any unexpected crashes
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "\n❌ PANIC: %v\n", r)
+			os.Exit(1)
+		}
+	}()
+
 	config := &Config{
 		Debug:       viper.GetBool("debug"),
 		DryRun:      viper.GetBool("dry_run"),
@@ -225,10 +233,12 @@ func runArchive() {
 	logger.Info(titleStyle.Render("\n🚀 PostgreSQL Archiver"))
 	logger.Info(infoStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
 
+	logger.Debug("Validating configuration...")
 	if err := config.Validate(); err != nil {
 		logger.Error(warningStyle.Render("❌ Configuration error: " + err.Error()))
 		os.Exit(1)
 	}
+	logger.Debug("Configuration validated successfully")
 
 	// Create a context that can be cancelled by signals (SIGTERM, SIGINT)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -243,7 +253,9 @@ func runArchive() {
 		cancel()
 	}()
 
+	logger.Debug("Creating archiver...")
 	archiver := NewArchiver(config, logger)
+	logger.Debug("Starting archival process...")
 	if err := archiver.Run(ctx); err != nil {
 		logger.Error(warningStyle.Render("❌ Archive failed: " + err.Error()))
 		os.Exit(1)
