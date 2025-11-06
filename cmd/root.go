@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -185,20 +186,6 @@ func initConfig() {
 }
 
 func runArchive() {
-	// Set up signal handler FIRST, before anything else
-	fmt.Fprintln(os.Stderr, "[INIT] Setting up signal handler at very start of runArchive...")
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		fmt.Fprintln(os.Stderr, "[SIGNAL] Handler goroutine running, waiting...")
-		sig := <-sigChan
-		fmt.Fprintf(os.Stderr, "\n[SIGNAL] !!!!! GOT SIGNAL: %v !!!!!\n", sig)
-		fmt.Fprintln(os.Stderr, "[SIGNAL] Calling os.Exit(130)")
-		os.Exit(130)
-	}()
-	fmt.Fprintln(os.Stderr, "[INIT] Signal handler set up complete")
-
 	// Add panic recovery to catch any unexpected crashes
 	defer func() {
 		if r := recover(); r != nil {
@@ -254,14 +241,40 @@ func runArchive() {
 	}
 	logger.Debug("Configuration validated successfully")
 
-	// Create a simple context (signal handling is done at top of function now)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Use signal.NotifyContext to automatically cancel context on SIGINT/SIGTERM
+	// This is the modern Go 1.16+ approach and is more reliable than manual signal handling
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Set up a goroutine to force-exit if graceful shutdown takes too long
+	exited := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		logger.Info("\n⚠️  Interrupt signal received, shutting down...")
+
+		// Wait for graceful shutdown, but force exit after 2 seconds
+		select {
+		case <-exited:
+			// Graceful shutdown completed
+			return
+		case <-time.After(2 * time.Second):
+			logger.Error("⚠️  Graceful shutdown timed out, forcing exit...")
+			os.Exit(130)
+		}
+	}()
 
 	logger.Debug("Creating archiver...")
 	archiver := NewArchiver(config, logger)
 	logger.Debug("Starting archival process...")
-	if err := archiver.Run(ctx); err != nil {
+
+	err := archiver.Run(ctx)
+	close(exited) // Signal that the archival process has exited
+
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			logger.Info("\n⚠️  Archival cancelled by user")
+			os.Exit(130)
+		}
 		logger.Error(warningStyle.Render("❌ Archive failed: " + err.Error()))
 		os.Exit(1)
 	}
