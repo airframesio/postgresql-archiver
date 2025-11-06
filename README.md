@@ -213,8 +213,8 @@ export ARCHIVE_S3_ENDPOINT=https://fsn1.your-objectstorage.com
 export ARCHIVE_S3_BUCKET=my-bucket
 export ARCHIVE_S3_ACCESS_KEY=your_key
 export ARCHIVE_S3_SECRET_KEY=your_secret
+export ARCHIVE_S3_PATH_TEMPLATE="archives/{table}/{YYYY}/{MM}"
 export ARCHIVE_TABLE=flights
-export ARCHIVE_PATH_TEMPLATE="archives/{table}/{YYYY}/{MM}"
 export ARCHIVE_OUTPUT_FORMAT=jsonl           # Options: jsonl, csv, parquet
 export ARCHIVE_COMPRESSION=zstd              # Options: zstd, lz4, gzip, none
 export ARCHIVE_COMPRESSION_LEVEL=3           # zstd: 1-22, lz4/gzip: 1-9
@@ -243,9 +243,9 @@ s3:
   access_key: your_access_key
   secret_key: your_secret_key
   region: auto
+  path_template: "archives/{table}/{YYYY}/{MM}"  # S3 path template with placeholders
 
 table: flights
-path_template: "archives/{table}/{YYYY}/{MM}"  # S3 path template with placeholders
 output_format: jsonl          # Options: jsonl, csv, parquet
 compression: zstd             # Options: zstd, lz4, gzip, none
 compression_level: 3          # zstd: 1-22, lz4/gzip: 1-9

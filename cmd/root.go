@@ -152,7 +152,7 @@ func init() {
 	_ = viper.BindPFlag("workers", rootCmd.Flags().Lookup("workers"))
 	_ = viper.BindPFlag("dry_run", rootCmd.Flags().Lookup("dry-run"))
 	_ = viper.BindPFlag("skip_count", rootCmd.Flags().Lookup("skip-count"))
-	_ = viper.BindPFlag("path_template", rootCmd.Flags().Lookup("path-template"))
+	_ = viper.BindPFlag("s3.path_template", rootCmd.Flags().Lookup("path-template"))
 	_ = viper.BindPFlag("output_duration", rootCmd.Flags().Lookup("output-duration"))
 	_ = viper.BindPFlag("output_format", rootCmd.Flags().Lookup("output-format"))
 	_ = viper.BindPFlag("compression", rootCmd.Flags().Lookup("compression"))
@@ -201,16 +201,16 @@ func runArchive() {
 			SSLMode:  viper.GetString("db.sslmode"),
 		},
 		S3: S3Config{
-			Endpoint:  viper.GetString("s3.endpoint"),
-			Bucket:    viper.GetString("s3.bucket"),
-			AccessKey: viper.GetString("s3.access_key"),
-			SecretKey: viper.GetString("s3.secret_key"),
-			Region:    viper.GetString("s3.region"),
+			Endpoint:     viper.GetString("s3.endpoint"),
+			Bucket:       viper.GetString("s3.bucket"),
+			AccessKey:    viper.GetString("s3.access_key"),
+			SecretKey:    viper.GetString("s3.secret_key"),
+			Region:       viper.GetString("s3.region"),
+			PathTemplate: viper.GetString("s3.path_template"),
 		},
 		Table:            viper.GetString("table"),
 		StartDate:        viper.GetString("start_date"),
 		EndDate:          viper.GetString("end_date"),
-		PathTemplate:     viper.GetString("path_template"),
 		OutputDuration:   viper.GetString("output_duration"),
 		OutputFormat:     viper.GetString("output_format"),
 		Compression:      viper.GetString("compression"),

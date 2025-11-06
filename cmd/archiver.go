@@ -537,7 +537,7 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program
 	}
 
 	// Generate object key using path template
-	pathTemplate := NewPathTemplate(a.config.PathTemplate)
+	pathTemplate := NewPathTemplate(a.config.S3.PathTemplate)
 	basePath := pathTemplate.Generate(a.config.Table, partition.Date)
 
 	// Get formatter and compressor

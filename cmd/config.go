@@ -46,7 +46,6 @@ type Config struct {
 	Table            string
 	StartDate        string
 	EndDate          string
-	PathTemplate     string
 	OutputDuration   string
 	OutputFormat     string
 	Compression      string
@@ -64,11 +63,12 @@ type DatabaseConfig struct {
 }
 
 type S3Config struct {
-	Endpoint  string
-	Bucket    string
-	AccessKey string
-	SecretKey string
-	Region    string
+	Endpoint     string
+	Bucket       string
+	AccessKey    string
+	SecretKey    string
+	Region       string
+	PathTemplate string
 }
 
 // validPostgreSQLIdentifier checks if a string is a valid PostgreSQL identifier
@@ -225,11 +225,11 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate path template
-	if c.PathTemplate == "" {
+	if c.S3.PathTemplate == "" {
 		return ErrPathTemplateRequired
 	}
-	if !isValidPathTemplate(c.PathTemplate) {
-		return fmt.Errorf("%w: '%s'", ErrPathTemplateInvalid, c.PathTemplate)
+	if !isValidPathTemplate(c.S3.PathTemplate) {
+		return fmt.Errorf("%w: '%s'", ErrPathTemplateInvalid, c.S3.PathTemplate)
 	}
 
 	// Validate output duration
