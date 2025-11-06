@@ -1019,7 +1019,7 @@ func (m progressModel) renderCountingPhase() []string {
 func (m progressModel) renderProcessingPhase() []string {
 	var sections []string
 	if len(m.partitions) > 0 {
-		sections = append(sections, tableHeaderStyle.Render("Processing Partitions"))
+		sections = append(sections, tableHeaderStyle.Render("      Processing Partitions"))
 		sections = append(sections, "")
 
 		// Show current partition name if we're actively processing
@@ -1068,7 +1068,7 @@ func (m progressModel) renderProcessingSummary() []string {
 
 	// Show completed partitions first, then current partition's slices
 	if len(m.results) > 0 || len(m.sliceResults) > 0 {
-		sections = append(sections, tableHeaderStyle.Render("Recent Results"))
+		sections = append(sections, tableHeaderStyle.Render("      Recent Results"))
 		sections = append(sections, "")
 
 		// Show recent partition results first (completed work)
