@@ -51,7 +51,7 @@ A high-performance CLI tool for archiving PostgreSQL partitioned table data to S
 
 ## 📋 Prerequisites
 
-- Go 1.21 or higher
+- Go 1.22 or higher
 - PostgreSQL database with partitioned tables (format: `tablename_YYYYMMDD`)
 - S3-compatible object storage (Hetzner, AWS S3, MinIO, etc.)
 

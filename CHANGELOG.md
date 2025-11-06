@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2025-01-06
+
 ### Added
 - **Configurable Output Options:**
   - Dynamic path template system with placeholders (`{table}`, `{YYYY}`, `{MM}`, `{DD}`, `{HH}`)
@@ -85,11 +87,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Now correctly identifies all leaf partitions regardless of partition hierarchy depth
   - Example: flights_2024_01_01 through flights_2024_01_31 are all detected, not just flights_2024_01_01
 
+- **TUI Display Issues:**
+  - Fixed TUI corruption when showing slice results without date-column configured
+  - Slice metrics now only display when partition slicing is enabled (date-column set)
+
 - **Code Quality:**
   - Fixed LZ4 compressor to check error return from Apply()
   - Fixed unused parameter warning in NoneCompressor by using `_`
   - Fixed goconst warnings by using duration constants
   - Fixed prealloc warning in CSV formatter
+  - Removed redundant nil check in isConnectionError() function
+  - Eliminated 30+ lines of duplicated result formatting logic via helper function
+
+### Improved
+- **Code Quality & Maintainability:**
+  - Refactored progress TUI to use formatResultLine() helper function
+  - Created named sliceResultEntry type for better type safety (replaced anonymous struct)
+  - Added comprehensive godoc comments for safeSliceResults thread-safe wrapper
+  - Extracted magic numbers into constants (maxRecentPartitions, maxRecentSlices, maxSliceResults)
+  - Improved memory efficiency with capacity preservation in clear() method
+  - Pre-allocated slice capacity to reduce allocations
+  - Added defensive edge case handling in getRecent() for invalid inputs
+
+- **Test Coverage:**
+  - Increased test coverage from 19.0% to 19.5%
+  - Added TestFormatResultLine with 5 comprehensive sub-tests
+  - Added edge case tests for getRecent() (zero/negative/capacity preservation)
+  - Added tests for initial capacity verification
 
 ### Security
 
