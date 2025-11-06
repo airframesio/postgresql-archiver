@@ -1,2 +1,3 @@
 - Before releasing, the README and CHANGELOG must be updated, all lints must pass, all tests must pass, and it should build successfully.
 - Always ensure that the design system is applied to the design of the web UI. If new design concepts are introduced, be sure the design system is updated to reflect.
+- All code additions/changes require that lint, gofmt, tests, and build are successful.

@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## [1.0.1] - 2025-11-05
+
+### Changed
+- Updated CLAUDE.md with additional project instruction requiring lint, gofmt, tests, and build to pass for all code changes
+
+### Fixed
+- Verified all Go files are properly formatted with gofmt (no changes needed)
+
 ## [1.0.0] - 2025-11-05
 
 ### Added
