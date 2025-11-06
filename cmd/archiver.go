@@ -100,7 +100,27 @@ func (a *Archiver) Run(ctx context.Context) error {
 	errChan := make(chan error, 1)
 	resultsChan := make(chan []ProcessResult, 1)
 
-	// Start the UI with the archiver reference
+	// In debug mode, skip the TUI and run with simple text output
+	if a.config.Debug {
+		a.logger.Info("Running in debug mode - TUI disabled for better log visibility")
+
+		// Run archival process directly without TUI
+		go func() {
+			err := a.runArchivalProcess(ctx, nil, taskInfo)
+			errChan <- err
+		}()
+
+		// Wait for completion
+		err := <-errChan
+		if err != nil {
+			return err
+		}
+
+		a.logger.Info("✅ Archival process completed")
+		return nil
+	}
+
+	// Start the UI with the archiver reference (normal mode)
 	progressModel := newProgressModelWithArchiver(ctx, a.config, a, errChan, resultsChan, taskInfo)
 	program := tea.NewProgram(progressModel)
 
@@ -131,6 +151,95 @@ func (a *Archiver) Run(ctx context.Context) error {
 	if a.db != nil {
 		a.db.Close()
 	}
+
+	return nil
+}
+
+// runArchivalProcess runs the archival process without the TUI (for debug mode)
+func (a *Archiver) runArchivalProcess(ctx context.Context, program *tea.Program, taskInfo *TaskInfo) error {
+	a.logger.Debug("Connecting to database...")
+	if err := a.connect(ctx); err != nil {
+		return fmt.Errorf("failed to connect to database: %w", err)
+	}
+	defer func() {
+		if a.db != nil {
+			a.db.Close()
+		}
+	}()
+	a.logger.Info("✅ Connected to database")
+
+	a.logger.Debug("Checking table permissions...")
+	if err := a.checkTablePermissions(ctx); err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	a.logger.Info("✅ Table permissions verified")
+
+	a.logger.Debug("Discovering partitions...")
+	// Inline partition discovery (same logic as progress.go doDiscover)
+	query := `
+		SELECT c.relname::text AS tablename
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'public'
+			AND c.relname LIKE $1
+			AND c.relkind = 'r'
+			AND NOT EXISTS (
+				SELECT 1 FROM pg_inherits WHERE inhparent = c.oid
+			)
+		ORDER BY c.relname;
+	`
+
+	pattern := a.config.Table + "_%"
+	rows, err := a.db.Query(query, pattern)
+	if err != nil {
+		return fmt.Errorf("failed to query partitions: %w", err)
+	}
+	defer rows.Close()
+
+	var partitions []PartitionInfo
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			return fmt.Errorf("failed to scan partition name: %w", err)
+		}
+
+		date, ok := a.extractDateFromTableName(tableName)
+		if !ok {
+			a.logger.Debug(fmt.Sprintf("Skipping table %s (no valid date)", tableName))
+			continue
+		}
+
+		partitions = append(partitions, PartitionInfo{
+			TableName: tableName,
+			Date:      date,
+		})
+	}
+
+	a.logger.Info(fmt.Sprintf("✅ Found %d partitions", len(partitions)))
+
+	if len(partitions) == 0 {
+		a.logger.Info("No partitions found to archive")
+		return nil
+	}
+
+	a.logger.Debug("Processing partitions...")
+	var results []ProcessResult
+	for _, partition := range partitions {
+		a.logger.Info(fmt.Sprintf("Processing partition: %s", partition.TableName))
+		result := a.ProcessPartitionWithProgress(partition, nil)
+		results = append(results, result)
+
+		if result.Error != nil {
+			a.logger.Error(fmt.Sprintf("  ❌ Failed: %v", result.Error))
+		} else if result.Skipped {
+			a.logger.Info(fmt.Sprintf("  ⏭️  Skipped: %s", result.SkipReason))
+		} else {
+			a.logger.Info(fmt.Sprintf("  ✅ Success: %d bytes", result.BytesWritten))
+		}
+	}
+
+	a.logger.Info("✅ All partitions processed")
+	a.printSummary(results)
 
 	return nil
 }
