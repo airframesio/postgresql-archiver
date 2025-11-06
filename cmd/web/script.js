@@ -188,9 +188,9 @@ function connectWebSocket() {
         document.getElementById('status').classList.remove('disconnected');
         document.getElementById('status-text').textContent = 'Connected to live updates';
 
-        // Clear reconnect interval if exists
+        // Clear reconnect timeout if exists
         if (wsReconnectInterval) {
-            clearInterval(wsReconnectInterval);
+            clearTimeout(wsReconnectInterval);
             wsReconnectInterval = null;
         }
     };
@@ -228,21 +228,28 @@ function connectWebSocket() {
         // Set up reconnection with exponential backoff
         if (!wsReconnectInterval) {
             let reconnectAttempts = 0;
-            wsReconnectInterval = setInterval(() => {
+            let delay = 1000; // Start with 1 second
+            
+            const attemptReconnect = () => {
                 reconnectAttempts++;
                 const maxAttempts = 30;
 
                 if (reconnectAttempts > maxAttempts) {
-                    clearInterval(wsReconnectInterval);
                     wsReconnectInterval = null;
                     document.getElementById('status-text').textContent = 'Connection failed - please refresh the page';
                     return;
                 }
 
-                console.log('Reconnect attempt ' + reconnectAttempts + '/' + maxAttempts);
+                console.log('Reconnect attempt ' + reconnectAttempts + '/' + maxAttempts + ' (delay: ' + delay + 'ms)');
                 document.getElementById('status-text').textContent = 'Reconnecting (' + reconnectAttempts + '/' + maxAttempts + ')...';
                 connectWebSocket();
-            }, 2000);
+                
+                // Double the delay for next attempt, cap at 30 seconds
+                delay = Math.min(delay * 2, 30000);
+                wsReconnectInterval = setTimeout(attemptReconnect, delay);
+            };
+            
+            wsReconnectInterval = setTimeout(attemptReconnect, delay);
         }
     };
 }
@@ -782,6 +789,6 @@ window.addEventListener('beforeunload', () => {
         ws.close();
     }
     if (wsReconnectInterval) {
-        clearInterval(wsReconnectInterval);
+        clearTimeout(wsReconnectInterval);
     }
 });
