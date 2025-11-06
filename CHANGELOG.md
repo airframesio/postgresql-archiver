@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2025-01-06
+
+### Added
+- **Version Check & Update Notifications:**
+  - Automatic version checking against GitHub releases on startup
+  - Non-blocking version check with 5-second timeout
+  - 24-hour cache to avoid excessive API calls
+  - Update notifications displayed in three interfaces:
+    - Log output: Shows update message after startup banner
+    - TUI banner: Displays update notification below version line
+    - Web app: Animated update banner with download link
+  - Version flag support: `--version`, `-V` to display current version
+  - Build-time version injection via ldflags
+
+- **Configurable Log Format:**
+  - Three log format options via `--log-format` flag:
+    - `text` (default): Clean, human-readable format without key=value pairs
+    - `logfmt`: Structured key=value format for parsing
+    - `json`: JSON-formatted logs for ingestion pipelines
+  - Custom slog handler for text-only output
+  - ANSI escape code removal from structured logs
+
+### Changed
+- **Version Management:**
+  - Version variable defaults to "dev" for development builds
+  - Can be set at build time: `go build -ldflags "-X ...cmd.Version=1.2.3"`
+  - Version skips update check for dev builds
+
+### Fixed
+- **Log Output:**
+  - Fixed log messages with leading newlines appearing on separate lines
+  - Replaced `logger.Info("\nMessage")` with separate calls for proper formatting
+  - Messages now stay on same line as timestamp/level metadata
+
+### Improved
+- **Code Quality:**
+  - Added comprehensive test suite for version checking
+  - Tests for version comparison, parsing, and formatting
+  - Test coverage increased from 19.5% to 21.2%
+  - All lints pass with proper static error wrapping
+  - Secure file permissions (0600) for version check cache
+
+- **Web UI:**
+  - Version display in cache viewer header
+  - Real-time update notifications via WebSocket
+  - Responsive update banner with download link
+  - Accessibility support with ARIA labels
+
+### Security
+- Secure cache file permissions (0600) for version check data
+- Static error wrapping following Go best practices
+
 ## [1.1.0] - 2025-01-06
 
 ### Added
