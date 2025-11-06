@@ -8,10 +8,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Configurable Output Options:**
+  - Dynamic path template system with placeholders (`{table}`, `{YYYY}`, `{MM}`, `{DD}`, `{HH}`)
+  - Multiple output formats: JSONL (default), CSV, Parquet
+  - Multiple compression types: Zstandard (default), LZ4, Gzip, None
+  - Configurable compression levels (1-22 for Zstandard, 1-9 for LZ4/Gzip)
+  - Duration-based file splitting (hourly, daily, weekly, monthly, yearly)
+  - Optional date column for duration-based splitting
+
+- **Formatter System:**
+  - Modular formatter interface for extensible output formats
+  - JSONL formatter with streaming JSON Lines output
+  - CSV formatter with automatic column detection and sorted headers
+  - Parquet formatter using Apache Parquet columnar format (via parquet-go)
+  - Automatic file extension handling (.jsonl, .csv, .parquet)
+
+- **Compressor System:**
+  - Modular compressor interface for extensible compression types
+  - Zstandard compressor with worker concurrency support
+  - LZ4 compressor with configurable compression levels
+  - Gzip compressor using stdlib implementation
+  - No-op compressor for uncompressed output
+  - Automatic extension handling (.zst, .lz4, .gz, or none)
+
+- **Path Template Engine:**
+  - Flexible S3 path generation with placeholder replacement
+  - Filename generation based on configured duration and timestamp
+  - Time range calculation for different durations
+  - Support for partition splitting by duration (infrastructure added)
+
+- **New CLI Flags:**
+  - `--path-template`: S3 path template with placeholders (required)
+  - `--output-duration`: Output file duration (hourly|daily|weekly|monthly|yearly, default: daily)
+  - `--output-format`: Output format (jsonl|csv|parquet, default: jsonl)
+  - `--compression`: Compression type (zstd|lz4|gzip|none, default: zstd)
+  - `--compression-level`: Compression level (zstd: 1-22, lz4/gzip: 1-9, default: 3)
+  - `--date-column`: Timestamp column name for duration-based splitting (optional)
 
 ### Changed
+- **Partition Detection:**
+  - Fixed hierarchical partition detection to find only leaf partitions
+  - Changed from `pg_tables` LIKE query to `pg_inherits` catalog query
+  - Now correctly handles multi-level partitions (e.g., flights → flights_2024 → flights_2024_01 → flights_2024_01_01)
+  - Filters out intermediate parent partitions that have child tables
+
+- **Data Extraction:**
+  - Refactored extraction to return map-based row data instead of raw bytes
+  - Enables support for multiple output formats (CSV, Parquet)
+  - New `extractRowsWithProgress()` function replaces `extractDataWithProgress()`
+  - Formatting now happens after extraction, not during
+
+- **Configuration Validation:**
+  - Added validation for path template (required, must contain {table} placeholder)
+  - Added validation for output duration (hourly, daily, weekly, monthly, yearly)
+  - Added validation for output format (jsonl, csv, parquet)
+  - Added validation for compression type (zstd, lz4, gzip, none)
+  - Added validation for compression level based on compression type
+  - Added validation for date column name format
+
+- **Dependencies:**
+  - Upgraded Go requirement from 1.21 to 1.22
+  - Added github.com/parquet-go/parquet-go v0.25.1
+  - Added github.com/pierrec/lz4/v4 v4.1.21
+  - Upgraded github.com/google/uuid from v1.4.0 to v1.6.0
+  - Upgraded github.com/klauspost/compress from v1.17.4 to v1.17.9
+
+- **Code Quality:**
+  - Added duration constants (DurationHourly, DurationDaily, etc.)
+  - Added static error `ErrUnsupportedCompression` for better error handling
+  - Preallocated columns slice in CSV formatter for better performance
+  - Removed unused `extractDataWithProgress()` function
 
 ### Fixed
+- **Hierarchical Partition Bug:**
+  - Fixed detection of partitions in hierarchical setups where only the first day was being detected
+  - Now correctly identifies all leaf partitions regardless of partition hierarchy depth
+  - Example: flights_2024_01_01 through flights_2024_01_31 are all detected, not just flights_2024_01_01
+
+- **Code Quality:**
+  - Fixed LZ4 compressor to check error return from Apply()
+  - Fixed unused parameter warning in NoneCompressor by using `_`
+  - Fixed goconst warnings by using duration constants
+  - Fixed prealloc warning in CSV formatter
 
 ### Security
 

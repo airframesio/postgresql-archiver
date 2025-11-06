@@ -278,13 +278,19 @@ func (m *progressModel) doDiscover() tea.Cmd {
 			return messageMsg("❌ Database not connected")
 		}
 
-		// Query for partitions
+		// Query for leaf partitions only (not intermediate parent partitions)
+		// This handles hierarchical partitioning like: flights -> flights_2024 -> flights_2024_01 -> flights_2024_01_01
 		query := `
-			SELECT tablename
-			FROM pg_tables
-			WHERE schemaname = 'public'
-				AND tablename LIKE $1
-			ORDER BY tablename;
+			SELECT c.relname::text AS tablename
+			FROM pg_class c
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = 'public'
+				AND c.relname LIKE $1
+				AND c.relkind = 'r'
+				AND NOT EXISTS (
+					SELECT 1 FROM pg_inherits WHERE inhparent = c.oid
+				)
+			ORDER BY c.relname;
 		`
 
 		pattern := m.config.Table + "_%"

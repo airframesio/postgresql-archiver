@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/airframesio/postgresql-archiver/cmd/compressors"
+	"github.com/airframesio/postgresql-archiver/cmd/formatters"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -21,7 +23,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/klauspost/compress/zstd"
 	"github.com/lib/pq"
 )
 
@@ -535,11 +536,29 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program
 		}
 	}
 
-	objectKey := fmt.Sprintf("export/%s/%s/%s.jsonl.zst",
+	// Generate object key using path template
+	pathTemplate := NewPathTemplate(a.config.PathTemplate)
+	basePath := pathTemplate.Generate(a.config.Table, partition.Date)
+
+	// Get formatter and compressor
+	formatter := formatters.GetFormatter(a.config.OutputFormat)
+	compressor, err := compressors.GetCompressor(a.config.Compression)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to get compressor: %w", err)
+		result.Stage = "Setup"
+		return result
+	}
+
+	// Generate filename
+	filename := GenerateFilename(
 		a.config.Table,
-		partition.Date.Format("2006/01"),
-		partition.Date.Format("2006-01-02"),
+		partition.Date,
+		a.config.OutputDuration,
+		formatter.Extension(),
+		compressor.Extension(),
 	)
+
+	objectKey := basePath + "/" + filename
 
 	// Small delay to ensure UI can update
 	time.Sleep(50 * time.Millisecond)
@@ -646,7 +665,7 @@ func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string
 	return false, result
 }
 
-// extractPartitionData extracts data from the partition
+// extractPartitionData extracts data from the partition and formats it
 func (a *Archiver) extractPartitionData(partition PartitionInfo, program *tea.Program, cache *PartitionCache, updateTaskStage func(string)) ([]byte, int64, error) {
 	extractStart := time.Now()
 	updateTaskStage("Extracting data...")
@@ -654,7 +673,8 @@ func (a *Archiver) extractPartitionData(partition PartitionInfo, program *tea.Pr
 		program.Send(updateProgress("Extracting data...", 0, partition.RowCount))
 	}
 
-	data, err := a.extractDataWithProgress(partition, program)
+	// Extract rows as maps
+	rows, err := a.extractRowsWithProgress(partition, program)
 	if err != nil {
 		// Save error to cache
 		cache.setError(partition.TableName, fmt.Sprintf("Extraction failed: %v", err))
@@ -663,12 +683,22 @@ func (a *Archiver) extractPartitionData(partition PartitionInfo, program *tea.Pr
 	}
 
 	extractDuration := time.Since(extractStart)
-	a.logger.Debug(fmt.Sprintf("  ⏱️  Extraction took %v for %s", extractDuration, partition.TableName))
+	a.logger.Debug(fmt.Sprintf("  ⏱️  Extraction took %v for %s (%d rows)", extractDuration, partition.TableName, len(rows)))
+
+	// Format the data using configured formatter
+	updateTaskStage("Formatting data...")
+	formatter := formatters.GetFormatter(a.config.OutputFormat)
+	data, err := formatter.Format(rows)
+	if err != nil {
+		cache.setError(partition.TableName, fmt.Sprintf("Formatting failed: %v", err))
+		_ = cache.save(a.config.Table)
+		return nil, 0, fmt.Errorf("formatting failed: %w", err)
+	}
 
 	return data, int64(len(data)), nil
 }
 
-// compressPartitionData compresses the extracted data
+// compressPartitionData compresses the extracted data using configured compressor
 func (a *Archiver) compressPartitionData(data []byte, partition PartitionInfo, program *tea.Program, cache *PartitionCache, updateTaskStage func(string)) ([]byte, string, error) {
 	compressStart := time.Now()
 	updateTaskStage("Compressing data...")
@@ -676,7 +706,16 @@ func (a *Archiver) compressPartitionData(data []byte, partition PartitionInfo, p
 		program.Send(updateProgress("Compressing data...", 50, 100))
 	}
 
-	compressed, err := a.compressData(data)
+	// Get compressor based on configuration
+	compressor, err := compressors.GetCompressor(a.config.Compression)
+	if err != nil {
+		cache.setError(partition.TableName, fmt.Sprintf("Compressor setup failed: %v", err))
+		_ = cache.save(a.config.Table)
+		return nil, "", fmt.Errorf("compressor setup failed: %w", err)
+	}
+
+	// Apply compression
+	compressed, err := compressor.Compress(data, a.config.CompressionLevel)
 	if err != nil {
 		// Save error to cache
 		cache.setError(partition.TableName, fmt.Sprintf("Compression failed: %v", err))
@@ -689,8 +728,13 @@ func (a *Archiver) compressPartitionData(data []byte, partition PartitionInfo, p
 	}
 
 	compressDuration := time.Since(compressStart)
-	a.logger.Debug(fmt.Sprintf("  ⏱️  Compression took %v for %s (%.1fx ratio)",
-		compressDuration, partition.TableName, float64(len(data))/float64(len(compressed))))
+	if len(compressed) < len(data) {
+		a.logger.Debug(fmt.Sprintf("  ⏱️  Compression took %v for %s (%.1fx ratio)",
+			compressDuration, partition.TableName, float64(len(data))/float64(len(compressed))))
+	} else {
+		a.logger.Debug(fmt.Sprintf("  ⏱️  Compression took %v for %s (no compression applied)",
+			compressDuration, partition.TableName))
+	}
 
 	// Calculate MD5 hash of compressed data
 	hasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
@@ -765,106 +809,6 @@ func (a *Archiver) checkExistingFile(partition PartitionInfo, objectKey string, 
 	a.logger.Debug("     🔄 Will re-upload due to differences")
 
 	return false, result
-}
-
-func (a *Archiver) extractDataWithProgress(partition PartitionInfo, program *tea.Program) ([]byte, error) {
-	// Use pq.QuoteIdentifier to safely quote the table name
-	quotedTable := pq.QuoteIdentifier(partition.TableName)
-	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable) //nolint:gosec // Table name is quoted with pq.QuoteIdentifier
-
-	rows, err := a.db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-
-	rowCount := int64(0)
-	var updateInterval int64 = 1000 // Default to every 1000 rows
-
-	if partition.RowCount > 0 {
-		updateInterval = partition.RowCount / 100 // Update every 1%
-		if updateInterval < 1000 {
-			updateInterval = 1000
-		}
-	}
-
-	for rows.Next() {
-		var jsonData json.RawMessage
-		if err := rows.Scan(&jsonData); err != nil {
-			return nil, err
-		}
-
-		if err := encoder.Encode(jsonData); err != nil {
-			return nil, err
-		}
-		rowCount++
-
-		// Send progress updates
-		if program != nil {
-			if partition.RowCount > 0 {
-				if rowCount%updateInterval == 0 || rowCount == partition.RowCount {
-					program.Send(updateProgress("Extracting data...", rowCount, partition.RowCount))
-				}
-			} else if rowCount%10000 == 0 {
-				// For unknown counts, just show the current count
-				program.Send(updateProgress(fmt.Sprintf("Extracting data (%d rows so far)...", rowCount), 0, 0))
-			}
-		}
-	}
-
-	// Check for errors from iterating over rows
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Final update
-	if program != nil {
-		if partition.RowCount > 0 {
-			program.Send(updateProgress("Extraction complete", partition.RowCount, partition.RowCount))
-		} else {
-			program.Send(updateProgress(fmt.Sprintf("Extraction complete (%d rows)", rowCount), 0, 0))
-		}
-	}
-
-	// Save the actual row count to cache if it was unknown
-	if partition.RowCount <= 0 && rowCount > 0 {
-		cache, _ := loadPartitionCache(a.config.Table)
-		if cache != nil {
-			cache.setRowCount(partition.TableName, rowCount)
-			_ = cache.save(a.config.Table)
-		}
-	}
-
-	return buffer.Bytes(), nil
-}
-
-func (a *Archiver) compressData(data []byte) ([]byte, error) {
-	var buffer bytes.Buffer
-
-	encoder, err := zstd.NewWriter(&buffer,
-		zstd.WithEncoderLevel(zstd.SpeedBetterCompression),
-		zstd.WithEncoderConcurrency(a.config.Workers))
-	if err != nil {
-		return nil, err
-	}
-
-	if _, err := encoder.Write(data); err != nil {
-		encoder.Close()
-		return nil, err
-	}
-
-	if err := encoder.Close(); err != nil {
-		return nil, err
-	}
-
-	compressionRatio := float64(len(data)) / float64(buffer.Len())
-	a.logger.Debug(debugStyle.Render(fmt.Sprintf("  🗜️  Compressed: %d → %d bytes (%.1fx ratio)",
-		len(data), buffer.Len(), compressionRatio)))
-
-	return buffer.Bytes(), nil
 }
 
 func (a *Archiver) checkObjectExists(key string) (bool, int64, string) {
@@ -1012,4 +956,82 @@ func (a *Archiver) printSummary(results []ProcessResult) {
 				r.Error))
 		}
 	}
+}
+
+// extractRowsWithProgress extracts rows from partition as maps for formatting
+func (a *Archiver) extractRowsWithProgress(partition PartitionInfo, program *tea.Program) ([]map[string]interface{}, error) {
+	quotedTable := pq.QuoteIdentifier(partition.TableName)
+	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable) //nolint:gosec // Table name is quoted with pq.QuoteIdentifier
+
+	rows, err := a.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []map[string]interface{}
+	rowCount := int64(0)
+	var updateInterval int64 = 1000 // Default to every 1000 rows
+
+	if partition.RowCount > 0 {
+		updateInterval = partition.RowCount / 100 // Update every 1%
+		if updateInterval < 1000 {
+			updateInterval = 1000
+		}
+		// Pre-allocate slice if we know the count
+		result = make([]map[string]interface{}, 0, partition.RowCount)
+	}
+
+	for rows.Next() {
+		var jsonData json.RawMessage
+		if err := rows.Scan(&jsonData); err != nil {
+			return nil, err
+		}
+
+		// Unmarshal JSON into a map
+		var rowData map[string]interface{}
+		if err := json.Unmarshal(jsonData, &rowData); err != nil {
+			return nil, err
+		}
+
+		result = append(result, rowData)
+		rowCount++
+
+		// Send progress updates
+		if program != nil {
+			if partition.RowCount > 0 {
+				if rowCount%updateInterval == 0 || rowCount == partition.RowCount {
+					program.Send(updateProgress("Extracting data...", rowCount, partition.RowCount))
+				}
+			} else if rowCount%10000 == 0 {
+				// For unknown counts, just show the current count
+				program.Send(updateProgress(fmt.Sprintf("Extracting data (%d rows so far)...", rowCount), 0, 0))
+			}
+		}
+	}
+
+	// Check for errors from iterating over rows
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Final update
+	if program != nil {
+		if partition.RowCount > 0 {
+			program.Send(updateProgress("Extraction complete", partition.RowCount, partition.RowCount))
+		} else {
+			program.Send(updateProgress(fmt.Sprintf("Extraction complete (%d rows)", rowCount), 0, 0))
+		}
+	}
+
+	// Save the actual row count to cache if it was unknown
+	if partition.RowCount <= 0 && rowCount > 0 {
+		cache, _ := loadPartitionCache(a.config.Table)
+		if cache != nil {
+			cache.setRowCount(partition.TableName, rowCount)
+			_ = cache.save(a.config.Table)
+		}
+	}
+
+	return result, nil
 }

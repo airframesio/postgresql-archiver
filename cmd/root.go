@@ -15,27 +15,33 @@ import (
 )
 
 var (
-	cfgFile     string
-	debug       bool
-	dbHost      string
-	dbPort      int
-	dbUser      string
-	dbPassword  string
-	dbName      string
-	dbSSLMode   string
-	s3Endpoint  string
-	s3Bucket    string
-	s3AccessKey string
-	s3SecretKey string
-	s3Region    string
-	baseTable   string
-	startDate   string
-	endDate     string
-	workers     int
-	dryRun      bool
-	skipCount   bool
-	cacheViewer bool
-	viewerPort  int
+	cfgFile          string
+	debug            bool
+	dbHost           string
+	dbPort           int
+	dbUser           string
+	dbPassword       string
+	dbName           string
+	dbSSLMode        string
+	s3Endpoint       string
+	s3Bucket         string
+	s3AccessKey      string
+	s3SecretKey      string
+	s3Region         string
+	baseTable        string
+	startDate        string
+	endDate          string
+	workers          int
+	dryRun           bool
+	skipCount        bool
+	cacheViewer      bool
+	viewerPort       int
+	pathTemplate     string
+	outputDuration   string
+	outputFormat     string
+	compression      string
+	compressionLevel int
+	dateColumn       string
 
 	titleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#7D56F4")).
@@ -115,7 +121,16 @@ func init() {
 	rootCmd.Flags().BoolVar(&cacheViewer, "cache-viewer", false, "start embedded cache viewer web server")
 	rootCmd.Flags().IntVar(&viewerPort, "viewer-port", 8080, "port for cache viewer web server")
 
+	// Output configuration flags
+	rootCmd.Flags().StringVar(&pathTemplate, "path-template", "", "S3 path template with placeholders: {table}, {YYYY}, {MM}, {DD}, {HH} (required)")
+	rootCmd.Flags().StringVar(&outputDuration, "output-duration", "daily", "output file duration: hourly, daily, weekly, monthly, yearly")
+	rootCmd.Flags().StringVar(&outputFormat, "output-format", "jsonl", "output format: jsonl, csv, parquet")
+	rootCmd.Flags().StringVar(&compression, "compression", "zstd", "compression type: zstd, lz4, gzip, none")
+	rootCmd.Flags().IntVar(&compressionLevel, "compression-level", 3, "compression level (zstd: 1-22, lz4/gzip: 1-9, none: 0)")
+	rootCmd.Flags().StringVar(&dateColumn, "date-column", "", "timestamp column name for duration-based splitting (optional)")
+
 	_ = rootCmd.MarkFlagRequired("table")
+	_ = rootCmd.MarkFlagRequired("path-template")
 
 	_ = viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
 	_ = viper.BindPFlag("db.host", rootCmd.Flags().Lookup("db-host"))
@@ -137,6 +152,12 @@ func init() {
 	_ = viper.BindPFlag("workers", rootCmd.Flags().Lookup("workers"))
 	_ = viper.BindPFlag("dry_run", rootCmd.Flags().Lookup("dry-run"))
 	_ = viper.BindPFlag("skip_count", rootCmd.Flags().Lookup("skip-count"))
+	_ = viper.BindPFlag("path_template", rootCmd.Flags().Lookup("path-template"))
+	_ = viper.BindPFlag("output_duration", rootCmd.Flags().Lookup("output-duration"))
+	_ = viper.BindPFlag("output_format", rootCmd.Flags().Lookup("output-format"))
+	_ = viper.BindPFlag("compression", rootCmd.Flags().Lookup("compression"))
+	_ = viper.BindPFlag("compression_level", rootCmd.Flags().Lookup("compression-level"))
+	_ = viper.BindPFlag("date_column", rootCmd.Flags().Lookup("date-column"))
 }
 
 func initConfig() {
@@ -186,9 +207,15 @@ func runArchive() {
 			SecretKey: viper.GetString("s3.secret_key"),
 			Region:    viper.GetString("s3.region"),
 		},
-		Table:     viper.GetString("table"),
-		StartDate: viper.GetString("start_date"),
-		EndDate:   viper.GetString("end_date"),
+		Table:            viper.GetString("table"),
+		StartDate:        viper.GetString("start_date"),
+		EndDate:          viper.GetString("end_date"),
+		PathTemplate:     viper.GetString("path_template"),
+		OutputDuration:   viper.GetString("output_duration"),
+		OutputFormat:     viper.GetString("output_format"),
+		Compression:      viper.GetString("compression"),
+		CompressionLevel: viper.GetInt("compression_level"),
+		DateColumn:       viper.GetString("date_column"),
 	}
 
 	// Initialize logger

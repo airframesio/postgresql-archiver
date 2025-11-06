@@ -9,6 +9,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/airframesio/postgresql-archiver/cmd/compressors"
 )
 
 // newTestLogger creates a logger for testing
@@ -157,7 +159,13 @@ func TestCompressData(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			compressed, err := archiver.compressData(tt.data)
+			// Use zstd compressor with default level
+			compressor := archiver.config.Compression
+			archiver.config.Compression = "zstd"
+			archiver.config.CompressionLevel = 3
+
+			cache := &PartitionCache{Entries: make(map[string]PartitionCacheEntry)}
+			compressed, _, err := archiver.compressPartitionData(tt.data, PartitionInfo{TableName: "test"}, nil, cache, func(string) {})
 
 			if err != nil && tt.expectSuccess {
 				t.Fatalf("unexpected error: %v", err)
@@ -180,6 +188,9 @@ func TestCompressData(t *testing.T) {
 					t.Logf("warning: compression ratio %.2f is below expected %.2f", ratio, tt.minRatio)
 				}
 			}
+
+			// Restore original
+			archiver.config.Compression = compressor
 		})
 	}
 }
@@ -315,12 +326,17 @@ func generateJSONData(count int) []byte {
 
 // Benchmark tests
 func BenchmarkCompressData(b *testing.B) {
-	archiver := NewArchiver(&Config{}, newTestLogger())
+	archiver := NewArchiver(&Config{Compression: "zstd", CompressionLevel: 3}, newTestLogger())
 	data := bytes.Repeat([]byte("benchmark data"), 10000)
+
+	compressor, err := compressors.GetCompressor(archiver.config.Compression)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = archiver.compressData(data)
+		_, _ = compressor.Compress(data, archiver.config.CompressionLevel)
 	}
 }
 

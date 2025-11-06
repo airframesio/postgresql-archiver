@@ -9,36 +9,49 @@ import (
 
 // Static errors for configuration validation
 var (
-	ErrDatabaseUserRequired   = errors.New("database user is required")
-	ErrDatabaseNameRequired   = errors.New("database name is required")
-	ErrDatabasePortInvalid    = errors.New("database port must be between 1 and 65535")
-	ErrS3EndpointRequired     = errors.New("S3 endpoint is required")
-	ErrS3BucketRequired       = errors.New("S3 bucket is required")
-	ErrS3AccessKeyRequired    = errors.New("S3 access key is required")
-	ErrS3SecretKeyRequired    = errors.New("S3 secret key is required")
-	ErrS3RegionInvalid        = errors.New("S3 region contains invalid characters or is too long")
-	ErrTableNameRequired      = errors.New("table name is required")
-	ErrTableNameInvalid       = errors.New("table name is invalid: must be 1-63 characters, start with a letter or underscore, and contain only letters, numbers, and underscores")
-	ErrStartDateFormatInvalid = errors.New("invalid start date format")
-	ErrEndDateFormatInvalid   = errors.New("invalid end date format")
-	ErrWorkersMinimum         = errors.New("workers must be at least 1")
-	ErrWorkersMaximum         = errors.New("workers must not exceed 1000")
+	ErrDatabaseUserRequired    = errors.New("database user is required")
+	ErrDatabaseNameRequired    = errors.New("database name is required")
+	ErrDatabasePortInvalid     = errors.New("database port must be between 1 and 65535")
+	ErrS3EndpointRequired      = errors.New("S3 endpoint is required")
+	ErrS3BucketRequired        = errors.New("S3 bucket is required")
+	ErrS3AccessKeyRequired     = errors.New("S3 access key is required")
+	ErrS3SecretKeyRequired     = errors.New("S3 secret key is required")
+	ErrS3RegionInvalid         = errors.New("S3 region contains invalid characters or is too long")
+	ErrTableNameRequired       = errors.New("table name is required")
+	ErrTableNameInvalid        = errors.New("table name is invalid: must be 1-63 characters, start with a letter or underscore, and contain only letters, numbers, and underscores")
+	ErrStartDateFormatInvalid  = errors.New("invalid start date format")
+	ErrEndDateFormatInvalid    = errors.New("invalid end date format")
+	ErrWorkersMinimum          = errors.New("workers must be at least 1")
+	ErrWorkersMaximum          = errors.New("workers must not exceed 1000")
+	ErrPathTemplateRequired    = errors.New("path template is required")
+	ErrPathTemplateInvalid     = errors.New("path template must contain {table} placeholder")
+	ErrOutputDurationInvalid   = errors.New("output duration must be one of: hourly, daily, weekly, monthly, yearly")
+	ErrOutputFormatInvalid     = errors.New("output format must be one of: jsonl, csv, parquet")
+	ErrCompressionInvalid      = errors.New("compression must be one of: zstd, lz4, gzip, none")
+	ErrCompressionLevelInvalid = errors.New("compression level must be between 1 and 22 (zstd), 1-9 (lz4/gzip)")
+	ErrDateColumnInvalid       = errors.New("date column is invalid: must start with a letter or underscore, and contain only letters, numbers, and underscores")
 )
 
 const regionAuto = "auto"
 
 type Config struct {
-	Debug       bool
-	DryRun      bool
-	Workers     int
-	SkipCount   bool
-	CacheViewer bool
-	ViewerPort  int
-	Database    DatabaseConfig
-	S3          S3Config
-	Table       string
-	StartDate   string
-	EndDate     string
+	Debug            bool
+	DryRun           bool
+	Workers          int
+	SkipCount        bool
+	CacheViewer      bool
+	ViewerPort       int
+	Database         DatabaseConfig
+	S3               S3Config
+	Table            string
+	StartDate        string
+	EndDate          string
+	PathTemplate     string
+	OutputDuration   string
+	OutputFormat     string
+	Compression      string
+	CompressionLevel int
+	DateColumn       string
 }
 
 type DatabaseConfig struct {
@@ -88,6 +101,62 @@ func isValidRegion(region string) bool {
 	// Region should only contain alphanumeric, dash, and underscore
 	matched, _ := regexp.MatchString(`^[a-zA-Z0-9_-]+$`, region)
 	return matched
+}
+
+// isValidPathTemplate validates that a path template contains required placeholders
+func isValidPathTemplate(template string) bool {
+	if template == "" {
+		return false
+	}
+	// Must contain {table} placeholder
+	return regexp.MustCompile(`\{table\}`).MatchString(template)
+}
+
+// isValidOutputDuration validates the output duration
+func isValidOutputDuration(duration string) bool {
+	validDurations := map[string]bool{
+		"hourly":  true,
+		"daily":   true,
+		"weekly":  true,
+		"monthly": true,
+		"yearly":  true,
+	}
+	return validDurations[duration]
+}
+
+// isValidOutputFormat validates the output format
+func isValidOutputFormat(format string) bool {
+	validFormats := map[string]bool{
+		"jsonl":   true,
+		"csv":     true,
+		"parquet": true,
+	}
+	return validFormats[format]
+}
+
+// isValidCompression validates the compression type
+func isValidCompression(compression string) bool {
+	validCompressions := map[string]bool{
+		"zstd": true,
+		"lz4":  true,
+		"gzip": true,
+		"none": true,
+	}
+	return validCompressions[compression]
+}
+
+// isValidCompressionLevel validates compression level based on compression type
+func isValidCompressionLevel(compression string, level int) bool {
+	switch compression {
+	case "zstd":
+		return level >= 1 && level <= 22
+	case "lz4", "gzip":
+		return level >= 1 && level <= 9
+	case "none":
+		return level == 0 // no compression, level should be 0
+	default:
+		return false
+	}
 }
 
 func (c *Config) Validate() error {
@@ -153,6 +222,39 @@ func (c *Config) Validate() error {
 	// More than 1000 workers is unreasonable and could cause issues
 	if c.Workers > 1000 {
 		return fmt.Errorf("%w, got %d", ErrWorkersMaximum, c.Workers)
+	}
+
+	// Validate path template
+	if c.PathTemplate == "" {
+		return ErrPathTemplateRequired
+	}
+	if !isValidPathTemplate(c.PathTemplate) {
+		return fmt.Errorf("%w: '%s'", ErrPathTemplateInvalid, c.PathTemplate)
+	}
+
+	// Validate output duration
+	if !isValidOutputDuration(c.OutputDuration) {
+		return fmt.Errorf("%w: '%s'", ErrOutputDurationInvalid, c.OutputDuration)
+	}
+
+	// Validate output format
+	if !isValidOutputFormat(c.OutputFormat) {
+		return fmt.Errorf("%w: '%s'", ErrOutputFormatInvalid, c.OutputFormat)
+	}
+
+	// Validate compression
+	if !isValidCompression(c.Compression) {
+		return fmt.Errorf("%w: '%s'", ErrCompressionInvalid, c.Compression)
+	}
+
+	// Validate compression level
+	if !isValidCompressionLevel(c.Compression, c.CompressionLevel) {
+		return fmt.Errorf("%w for compression %s: got %d", ErrCompressionLevelInvalid, c.Compression, c.CompressionLevel)
+	}
+
+	// Validate date column (if provided, must be valid identifier)
+	if c.DateColumn != "" && !validPostgreSQLIdentifier.MatchString(c.DateColumn) {
+		return fmt.Errorf("%w: '%s'", ErrDateColumnInvalid, c.DateColumn)
 	}
 
 	return nil
