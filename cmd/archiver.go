@@ -798,7 +798,7 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 	totalBytes := int64(0)
 	successCount := 0
 	skipCount := 0
-	for _, timeRange := range ranges {
+	for i, timeRange := range ranges {
 		// Check for cancellation
 		select {
 		case <-a.ctx.Done():
@@ -808,12 +808,36 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 		default:
 		}
 
+		// Send slice start message to TUI
+		if program != nil {
+			program.Send(sliceStartMsg{
+				partitionIndex: 0, // Will be set by TUI based on current partition
+				sliceIndex:     i,
+				totalSlices:    len(ranges),
+				sliceDate:      timeRange.Start.Format("2006-01-02"),
+			})
+		} else if a.config.Debug {
+			// Only log in debug mode when TUI is disabled
+			a.logger.Info(fmt.Sprintf("    Processing slice: %s", timeRange.Start.Format("2006-01-02")))
+		}
+
 		// Process this time slice
 		sliceResult := a.processSinglePartitionSlice(partition, program, timeRange.Start, timeRange.End)
 
+		// Send slice complete message to TUI
+		if program != nil {
+			program.Send(sliceCompleteMsg{
+				partitionIndex: 0,
+				sliceIndex:     i,
+				success:        sliceResult.Error == nil && !sliceResult.Skipped,
+			})
+		}
+
 		if sliceResult.Error != nil {
-			// Log error but continue with other slices
-			a.logger.Error(fmt.Sprintf("      ❌ Error processing slice %s: %v", timeRange.Start.Format("2006-01-02"), sliceResult.Error))
+			// Only log errors in debug mode
+			if a.config.Debug {
+				a.logger.Error(fmt.Sprintf("      ❌ Error processing slice %s: %v", timeRange.Start.Format("2006-01-02"), sliceResult.Error))
+			}
 			// Only return if it's a critical error (not "no rows")
 			if !sliceResult.Skipped {
 				return sliceResult
@@ -822,6 +846,9 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 
 		if sliceResult.Skipped {
 			skipCount++
+			if a.config.Debug {
+				a.logger.Debug(fmt.Sprintf("      No data for %s, skipping", timeRange.Start.Format("2006-01-02")))
+			}
 		} else {
 			totalBytes += sliceResult.BytesWritten
 			successCount++
@@ -983,8 +1010,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 
 // processSinglePartitionSlice processes a time slice of a partition with date filtering
 func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, program *tea.Program, startTime, endTime time.Time) ProcessResult {
-	a.logger.Info(fmt.Sprintf("    Processing slice: %s", startTime.Format("2006-01-02")))
-
+	// Slice progress is now handled by TUI messages or debug logging in parent function
 	result := ProcessResult{
 		Partition: partition,
 	}

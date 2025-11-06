@@ -61,6 +61,11 @@ type progressModel struct {
 	partitionCache      *PartitionCache
 	processingStartTime time.Time
 	taskInfo            *TaskInfo
+	// Slice progress tracking
+	currentSliceIndex   int
+	totalSlices         int
+	currentSliceDate    string
+	sliceProgress       progress.Model
 }
 
 type progressMsg struct {
@@ -117,6 +122,19 @@ type stageTickMsg time.Time
 
 type connectedMsg struct {
 	host string
+}
+
+type sliceStartMsg struct {
+	partitionIndex int
+	sliceIndex     int
+	totalSlices    int
+	sliceDate      string
+}
+
+type sliceCompleteMsg struct {
+	partitionIndex int
+	sliceIndex     int
+	success        bool
 }
 
 var (
@@ -176,6 +194,11 @@ func newProgressModelWithArchiver(ctx context.Context, cancel context.CancelFunc
 		progress.WithWidth(60),
 	)
 
+	sliceProg := progress.New(
+		progress.WithScaledGradient("#9B59B6", "#3498DB"),
+		progress.WithWidth(50),
+	)
+
 	// Load cache for row counts
 	cache, _ := loadPartitionCache(config.Table)
 	if cache == nil {
@@ -188,6 +211,7 @@ func newProgressModelWithArchiver(ctx context.Context, cancel context.CancelFunc
 		phase:           PhaseConnecting,
 		currentProgress: currentProg,
 		overallProgress: overallProg,
+		sliceProgress:   sliceProg,
 		currentSpinner:  s,
 		currentStage:    "Initializing...",
 		results:         make([]ProcessResult, 0),
@@ -521,6 +545,10 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleStageUpdateMsg(msg)
 	case stageTickMsg:
 		return m.handleStageTickMsg(msg)
+	case sliceStartMsg:
+		return m.handleSliceStartMsg(msg)
+	case sliceCompleteMsg:
+		return m.handleSliceCompleteMsg(msg)
 	}
 	return m, nil
 }
@@ -562,7 +590,12 @@ func (m progressModel) handleProgressFrameMsg(msg progress.FrameMsg) (tea.Model,
 		m.overallProgress = om
 	}
 
-	return m, tea.Batch(cmd, cmd2)
+	sliceModel, cmd3 := m.sliceProgress.Update(msg)
+	if sm, ok := sliceModel.(progress.Model); ok {
+		m.sliceProgress = sm
+	}
+
+	return m, tea.Batch(cmd, cmd2, cmd3)
 }
 
 func (m progressModel) handlePhaseMsg(msg phaseMsg) (tea.Model, tea.Cmd) {
@@ -779,6 +812,10 @@ func (m progressModel) handlePartitionCompleteMsg(msg partitionCompleteMsg) (tea
 
 	m.currentStage = ""
 	m.processingStartTime = time.Time{}
+	// Reset slice progress tracking
+	m.currentSliceIndex = 0
+	m.totalSlices = 0
+	m.currentSliceDate = ""
 
 	if len(m.partitions) > 0 {
 		overallPercent := float64(m.currentIndex) / float64(len(m.partitions))
@@ -826,6 +863,18 @@ func (m progressModel) handleStageTickMsg(_ stageTickMsg) (tea.Model, tea.Cmd) {
 			return stageTickMsg(t)
 		})
 	}
+	return m, nil
+}
+
+func (m progressModel) handleSliceStartMsg(msg sliceStartMsg) (tea.Model, tea.Cmd) {
+	m.currentSliceIndex = msg.sliceIndex
+	m.totalSlices = msg.totalSlices
+	m.currentSliceDate = msg.sliceDate
+	return m, nil
+}
+
+func (m progressModel) handleSliceCompleteMsg(msg sliceCompleteMsg) (tea.Model, tea.Cmd) {
+	// Slice complete - update will be reflected in the view
 	return m, nil
 }
 
@@ -950,6 +999,15 @@ func (m progressModel) renderProcessingPhase() []string {
 
 		viewProgress := m.overallProgress.ViewAs(float64(m.currentIndex) / float64(len(m.partitions)))
 		sections = append(sections, "   "+viewProgress)
+
+		// Show slice progress if partition is being split
+		if m.totalSlices > 0 {
+			sections = append(sections, "")
+			sliceInfo := fmt.Sprintf("   Partition Slices: %d/%d (%s)", m.currentSliceIndex+1, m.totalSlices, m.currentSliceDate)
+			sections = append(sections, progressInfoStyle.Render(sliceInfo))
+			viewSliceProgress := m.sliceProgress.ViewAs(float64(m.currentSliceIndex+1) / float64(m.totalSlices))
+			sections = append(sections, "   "+viewSliceProgress)
+		}
 
 		if m.currentStage != "" {
 			stageInfo := fmt.Sprintf("   %s %s", m.currentSpinner.View(), m.currentStage)
