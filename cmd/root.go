@@ -307,7 +307,8 @@ func runArchive() {
 	initLogger(config.Debug, config.LogFormat)
 
 	// Log startup banner
-	logger.Info("\n🚀 PostgreSQL Archiver")
+	logger.Info("")
+	logger.Info("🚀 PostgreSQL Archiver")
 	logger.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	// Display stop instructions (for Warp terminal compatibility) - only in debug mode
@@ -339,7 +340,8 @@ func runArchive() {
 	exited := make(chan struct{})
 	go func() {
 		<-ctx.Done()
-		logger.Info("\n⚠️  Interrupt signal received, shutting down...")
+		logger.Info("")
+		logger.Info("⚠️  Interrupt signal received, shutting down...")
 
 		// Wait for graceful shutdown, but force exit after 2 seconds
 		select {
@@ -361,12 +363,14 @@ func runArchive() {
 
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			logger.Info("\n⚠️  Archival cancelled by user")
+			logger.Info("")
+			logger.Info("⚠️  Archival cancelled by user")
 			os.Exit(130)
 		}
 		logger.Error(fmt.Sprintf("❌ Archive failed: %s", err.Error()))
 		os.Exit(1)
 	}
 
-	logger.Info("\n✅ Archive completed successfully!")
+	logger.Info("")
+	logger.Info("✅ Archive completed successfully!")
 }

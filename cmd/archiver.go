@@ -1546,7 +1546,8 @@ func (a *Archiver) printSummary(results []ProcessResult) {
 		}
 	}
 
-	a.logger.Info("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	a.logger.Info("")
+	a.logger.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	a.logger.Info("📈 Summary")
 	a.logger.Info(fmt.Sprintf("✅ Successful: %d", successful))
 	a.logger.Info(fmt.Sprintf("⏭️  Skipped: %d", skipped))
@@ -1560,7 +1561,8 @@ func (a *Archiver) printSummary(results []ProcessResult) {
 
 	for _, r := range results {
 		if r.Error != nil {
-			a.logger.Error(fmt.Sprintf("\n❌ %s: %v",
+			a.logger.Error("")
+			a.logger.Error(fmt.Sprintf("❌ %s: %v",
 				r.Partition.TableName,
 				r.Error))
 		}

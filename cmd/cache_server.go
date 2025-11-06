@@ -106,7 +106,8 @@ func runCacheServer(_ *cobra.Command, _ []string) error {
 	if logger == nil {
 		initLogger(false, "text") // Default to text format for cache viewer
 	}
-	logger.Info("\n🚀 PostgreSQL Archiver Cache Viewer")
+	logger.Info("")
+	logger.Info("🚀 PostgreSQL Archiver Cache Viewer")
 	logger.Info(fmt.Sprintf("📊 Starting web server on http://localhost%s", addr))
 	logger.Info("🌐 Open your browser to view cache data")
 	logger.Info("⌨️  Press Ctrl+C to stop the server\n")
