@@ -102,10 +102,14 @@ func runCacheServer(_ *cobra.Command, _ []string) error {
 	startBackgroundServices()
 
 	addr := fmt.Sprintf(":%d", serverPort)
-	fmt.Printf("\n🚀 PostgreSQL Archiver Cache Viewer\n")
-	fmt.Printf("📊 Starting web server on http://localhost%s\n", addr)
-	fmt.Printf("🌐 Open your browser to view cache data\n")
-	fmt.Printf("⌨️  Press Ctrl+C to stop the server\n\n")
+	// Initialize logger if not already initialized
+	if logger == nil {
+		initLogger(false)
+	}
+	logger.Info("\n🚀 PostgreSQL Archiver Cache Viewer")
+	logger.Info(fmt.Sprintf("📊 Starting web server on http://localhost%s", addr))
+	logger.Info("🌐 Open your browser to view cache data")
+	logger.Info("⌨️  Press Ctrl+C to stop the server\n")
 
 	server := &http.Server{
 		Addr:              addr,

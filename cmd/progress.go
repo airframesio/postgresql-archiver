@@ -133,8 +133,8 @@ var (
 				Margin(0, 2)
 
 	progressInfoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#888888")).
-			Margin(0, 2)
+				Foreground(lipgloss.Color("#888888")).
+				Margin(0, 2)
 )
 
 // updateTaskInfo updates the task info file with current progress
@@ -654,7 +654,7 @@ func (m progressModel) startCacheViewerServer() {
 	}
 
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fmt.Printf("Cache viewer server error: %v\n", err)
+		m.archiver.logger.Error(fmt.Sprintf("Cache viewer server error: %v", err))
 	}
 }
 

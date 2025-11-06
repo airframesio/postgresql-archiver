@@ -1,9 +1,28 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
+)
+
+// Static errors for configuration validation
+var (
+	ErrDatabaseUserRequired   = errors.New("database user is required")
+	ErrDatabaseNameRequired   = errors.New("database name is required")
+	ErrDatabasePortInvalid    = errors.New("database port must be between 1 and 65535")
+	ErrS3EndpointRequired     = errors.New("S3 endpoint is required")
+	ErrS3BucketRequired       = errors.New("S3 bucket is required")
+	ErrS3AccessKeyRequired    = errors.New("S3 access key is required")
+	ErrS3SecretKeyRequired    = errors.New("S3 secret key is required")
+	ErrS3RegionInvalid        = errors.New("S3 region contains invalid characters or is too long")
+	ErrTableNameRequired      = errors.New("table name is required")
+	ErrTableNameInvalid       = errors.New("table name is invalid: must be 1-63 characters, start with a letter or underscore, and contain only letters, numbers, and underscores")
+	ErrStartDateFormatInvalid = errors.New("invalid start date format")
+	ErrEndDateFormatInvalid   = errors.New("invalid end date format")
+	ErrWorkersMinimum         = errors.New("workers must be at least 1")
+	ErrWorkersMaximum         = errors.New("workers must not exceed 1000")
 )
 
 const regionAuto = "auto"
@@ -74,66 +93,66 @@ func isValidRegion(region string) bool {
 func (c *Config) Validate() error {
 	// Validate database configuration
 	if c.Database.User == "" {
-		return fmt.Errorf("database user is required")
+		return ErrDatabaseUserRequired
 	}
 	if c.Database.Name == "" {
-		return fmt.Errorf("database name is required")
+		return ErrDatabaseNameRequired
 	}
 
 	// Validate database port
 	if c.Database.Port < 1 || c.Database.Port > 65535 {
-		return fmt.Errorf("database port must be between 1 and 65535, got %d", c.Database.Port)
+		return fmt.Errorf("%w, got %d", ErrDatabasePortInvalid, c.Database.Port)
 	}
 
 	// Validate S3 configuration
 	if c.S3.Endpoint == "" {
-		return fmt.Errorf("S3 endpoint is required")
+		return ErrS3EndpointRequired
 	}
 	if c.S3.Bucket == "" {
-		return fmt.Errorf("S3 bucket is required")
+		return ErrS3BucketRequired
 	}
 	if c.S3.AccessKey == "" {
-		return fmt.Errorf("S3 access key is required")
+		return ErrS3AccessKeyRequired
 	}
 	if c.S3.SecretKey == "" {
-		return fmt.Errorf("S3 secret key is required")
+		return ErrS3SecretKeyRequired
 	}
 
 	// Validate S3 region
 	if c.S3.Region != "" && c.S3.Region != regionAuto {
 		if !isValidRegion(c.S3.Region) {
-			return fmt.Errorf("S3 region contains invalid characters or is too long: %s", c.S3.Region)
+			return fmt.Errorf("%w: %s", ErrS3RegionInvalid, c.S3.Region)
 		}
 	}
 
 	// Validate and sanitize table name to prevent SQL injection
 	if c.Table == "" {
-		return fmt.Errorf("table name is required")
+		return ErrTableNameRequired
 	}
 	if !isValidTableName(c.Table) {
-		return fmt.Errorf("table name '%s' is invalid: must be 1-63 characters, start with a letter or underscore, and contain only letters, numbers, and underscores", c.Table)
+		return fmt.Errorf("%w: '%s'", ErrTableNameInvalid, c.Table)
 	}
 
 	// Validate date formats
 	if c.StartDate != "" {
 		if _, err := time.Parse("2006-01-02", c.StartDate); err != nil {
-			return fmt.Errorf("invalid start date format: %v", err)
+			return fmt.Errorf("%w: %w", ErrStartDateFormatInvalid, err)
 		}
 	}
 	if c.EndDate != "" {
 		if _, err := time.Parse("2006-01-02", c.EndDate); err != nil {
-			return fmt.Errorf("invalid end date format: %v", err)
+			return fmt.Errorf("%w: %w", ErrEndDateFormatInvalid, err)
 		}
 	}
 
 	// Validate workers count
 	if c.Workers < 1 {
-		return fmt.Errorf("workers must be at least 1")
+		return ErrWorkersMinimum
 	}
 	// Prevent integer overflow and excessive resource usage
 	// More than 1000 workers is unreasonable and could cause issues
 	if c.Workers > 1000 {
-		return fmt.Errorf("workers must not exceed 1000, got %d", c.Workers)
+		return fmt.Errorf("%w, got %d", ErrWorkersMaximum, c.Workers)
 	}
 
 	return nil

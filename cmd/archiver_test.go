@@ -5,14 +5,21 @@ import (
 	"crypto/md5"
 	"fmt"
 	"io"
+	"log/slog"
+	"os"
 	"testing"
 	"time"
 )
 
+// newTestLogger creates a logger for testing
+func newTestLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+}
+
 func TestExtractDateFromTableName(t *testing.T) {
 	// Note: extractDateFromTableName expects the full partition name
 	// and extracts based on the base table name length
-	archiver := NewArchiver(&Config{Table: "flights"})
+	archiver := NewArchiver(&Config{Table: "flights"}, newTestLogger())
 
 	tests := []struct {
 		name          string
@@ -114,7 +121,7 @@ func TestExtractDateFromTableName(t *testing.T) {
 }
 
 func TestCompressData(t *testing.T) {
-	archiver := NewArchiver(&Config{Workers: 4})
+	archiver := NewArchiver(&Config{Workers: 4}, newTestLogger())
 
 	tests := []struct {
 		name          string
@@ -178,7 +185,7 @@ func TestCompressData(t *testing.T) {
 }
 
 func TestCalculateMultipartETag(t *testing.T) {
-	archiver := NewArchiver(&Config{})
+	archiver := NewArchiver(&Config{}, newTestLogger())
 
 	tests := []struct {
 		name   string
@@ -220,7 +227,7 @@ func TestNewArchiver(t *testing.T) {
 		Workers: 4,
 	}
 
-	archiver := NewArchiver(config)
+	archiver := NewArchiver(config, newTestLogger())
 
 	if archiver == nil {
 		t.Fatal("NewArchiver returned nil")
@@ -308,7 +315,7 @@ func generateJSONData(count int) []byte {
 
 // Benchmark tests
 func BenchmarkCompressData(b *testing.B) {
-	archiver := NewArchiver(&Config{})
+	archiver := NewArchiver(&Config{}, newTestLogger())
 	data := bytes.Repeat([]byte("benchmark data"), 10000)
 
 	b.ResetTimer()
@@ -318,7 +325,7 @@ func BenchmarkCompressData(b *testing.B) {
 }
 
 func BenchmarkCalculateMultipartETag(b *testing.B) {
-	archiver := NewArchiver(&Config{})
+	archiver := NewArchiver(&Config{}, newTestLogger())
 	data := bytes.Repeat([]byte("test"), 100000)
 
 	b.ResetTimer()
@@ -328,7 +335,7 @@ func BenchmarkCalculateMultipartETag(b *testing.B) {
 }
 
 func BenchmarkExtractDateFromTableName(b *testing.B) {
-	archiver := NewArchiver(&Config{})
+	archiver := NewArchiver(&Config{}, newTestLogger())
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
