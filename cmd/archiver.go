@@ -117,14 +117,21 @@ func (a *Archiver) Run(ctx context.Context) error {
 		// Wait for completion or cancellation
 		select {
 		case err := <-errChan:
-			if err != nil {
+			if err != nil && !errors.Is(err, context.Canceled) {
 				return err
 			}
-			a.logger.Info("✅ Archival process completed")
-			return nil
+			if errors.Is(err, context.Canceled) {
+				a.logger.Info("⚠️  Archival process cancelled by user")
+			} else {
+				a.logger.Info("✅ Archival process completed")
+			}
+			return err
 		case <-ctx.Done():
-			a.logger.Info("⚠️  Archival process cancelled by user")
-			return ctx.Err()
+			a.logger.Info("⚠️  Cancellation requested, waiting for cleanup...")
+			// Wait for the goroutine to finish cleanup
+			err := <-errChan
+			a.logger.Info("✅ Cleanup completed")
+			return err
 		}
 	}
 
@@ -198,7 +205,7 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, program *tea.Program,
 	`
 
 	pattern := a.config.Table + "_%"
-	rows, err := a.db.Query(query, pattern)
+	rows, err := a.db.QueryContext(ctx, query, pattern)
 	if err != nil {
 		return fmt.Errorf("failed to query partitions: %w", err)
 	}
@@ -698,13 +705,27 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 	partitionStart := time.Date(partition.Date.Year(), partition.Date.Month(), 1, 0, 0, 0, 0, partition.Date.Location())
 	partitionEnd := partitionStart.AddDate(0, 1, 0) // Start of next month
 
+	a.logger.Debug(fmt.Sprintf("  Partition time range: %s to %s", partitionStart.Format("2006-01-02"), partitionEnd.Format("2006-01-02")))
+
 	// Split into time ranges based on output duration
 	ranges := SplitPartitionByDuration(partitionStart, partitionEnd, a.config.OutputDuration)
 
 	a.logger.Info(fmt.Sprintf("  Splitting into %d %s files", len(ranges), a.config.OutputDuration))
 
+	// Log first few ranges for debugging
+	if a.config.Debug && len(ranges) > 0 {
+		for i := 0; i < len(ranges) && i < 3; i++ {
+			a.logger.Debug(fmt.Sprintf("    Range %d: %s to %s", i+1, ranges[i].Start.Format("2006-01-02"), ranges[i].End.Format("2006-01-02")))
+		}
+		if len(ranges) > 3 {
+			a.logger.Debug(fmt.Sprintf("    ... and %d more ranges", len(ranges)-3))
+		}
+	}
+
 	// Process each time range separately
 	totalBytes := int64(0)
+	successCount := 0
+	skipCount := 0
 	for _, timeRange := range ranges {
 		// Check for cancellation
 		select {
@@ -719,14 +740,23 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 		sliceResult := a.processSinglePartitionSlice(partition, program, timeRange.Start, timeRange.End)
 
 		if sliceResult.Error != nil {
-			// If any slice fails, return the error
-			return sliceResult
+			// Log error but continue with other slices
+			a.logger.Error(fmt.Sprintf("      ❌ Error processing slice %s: %v", timeRange.Start.Format("2006-01-02"), sliceResult.Error))
+			// Only return if it's a critical error (not "no rows")
+			if !sliceResult.Skipped {
+				return sliceResult
+			}
 		}
 
-		if !sliceResult.Skipped {
+		if sliceResult.Skipped {
+			skipCount++
+		} else {
 			totalBytes += sliceResult.BytesWritten
+			successCount++
 		}
 	}
+
+	a.logger.Info(fmt.Sprintf("  Split partition complete: %d files created, %d skipped", successCount, skipCount))
 
 	result.BytesWritten = totalBytes
 	result.Compressed = true
