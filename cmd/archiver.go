@@ -174,7 +174,8 @@ func (a *Archiver) Run(ctx context.Context) error {
 
 	// Start the UI with the archiver reference (normal mode)
 	progressModel := newProgressModelWithArchiver(ctx, a.config, a, errChan, resultsChan, taskInfo)
-	program := tea.NewProgram(progressModel)
+	// CRITICAL: Disable Bubble Tea's signal handler so our custom handler can work
+	program := tea.NewProgram(progressModel, tea.WithoutSignalHandler())
 
 	// Run the TUI (this will handle everything internally)
 	if _, err := program.Run(); err != nil {
