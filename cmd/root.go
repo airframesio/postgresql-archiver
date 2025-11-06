@@ -185,6 +185,20 @@ func initConfig() {
 }
 
 func runArchive() {
+	// Set up signal handler FIRST, before anything else
+	fmt.Fprintln(os.Stderr, "[INIT] Setting up signal handler at very start of runArchive...")
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		fmt.Fprintln(os.Stderr, "[SIGNAL] Handler goroutine running, waiting...")
+		sig := <-sigChan
+		fmt.Fprintf(os.Stderr, "\n[SIGNAL] !!!!! GOT SIGNAL: %v !!!!!\n", sig)
+		fmt.Fprintln(os.Stderr, "[SIGNAL] Calling os.Exit(130)")
+		os.Exit(130)
+	}()
+	fmt.Fprintln(os.Stderr, "[INIT] Signal handler set up complete")
+
 	// Add panic recovery to catch any unexpected crashes
 	defer func() {
 		if r := recover(); r != nil {
@@ -240,22 +254,9 @@ func runArchive() {
 	}
 	logger.Debug("Configuration validated successfully")
 
-	// Create a context that will be cancelled by signals
-	// Using signal.NotifyContext instead of manual signal.Notify
-	fmt.Fprintln(os.Stderr, "[DEBUG] Creating signal context with NotifyContext...")
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	fmt.Fprintln(os.Stderr, "[DEBUG] Signal context created, signals will cancel context")
-
-	// Monitor for cancellation and immediately exit
-	go func() {
-		fmt.Fprintln(os.Stderr, "[DEBUG] Signal monitor goroutine started, waiting for ctx.Done()...")
-		<-ctx.Done() // This will block until signal is received
-		fmt.Fprintln(os.Stderr, "[DEBUG] !!!!! ctx.Done() FIRED - SIGNAL WAS RECEIVED !!!!!")
-		fmt.Fprintln(os.Stderr, "[DEBUG] Exiting immediately with os.Exit(130)")
-		fmt.Fprintf(os.Stderr, "\n⚠️  Interrupted by user - exiting now!\n")
-		os.Exit(130)
-	}()
+	// Create a simple context (signal handling is done at top of function now)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	logger.Debug("Creating archiver...")
 	archiver := NewArchiver(config, logger)
