@@ -1022,7 +1022,13 @@ func (m progressModel) renderProcessingPhase() []string {
 		sections = append(sections, tableHeaderStyle.Render("Processing Partitions"))
 		sections = append(sections, "")
 
-		overallInfo := fmt.Sprintf("Overall: %d/%d partitions", m.currentIndex, len(m.partitions))
+		// Show current partition name if we're actively processing
+		var overallInfo string
+		if m.currentIndex < len(m.partitions) {
+			overallInfo = fmt.Sprintf("Overall: %d/%d partitions (%s)", m.currentIndex, len(m.partitions), m.partitions[m.currentIndex].TableName)
+		} else {
+			overallInfo = fmt.Sprintf("Overall: %d/%d partitions", m.currentIndex, len(m.partitions))
+		}
 		sections = append(sections, progressInfoStyle.Render(overallInfo))
 
 		viewProgress := m.overallProgress.ViewAs(float64(m.currentIndex) / float64(len(m.partitions)))
