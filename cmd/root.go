@@ -19,6 +19,7 @@ var (
 	// signalContext is set by main() before Cobra initialization
 	// This ensures signal handling is set up before any library can interfere
 	signalContext context.Context
+	stopFilePath  string
 
 	cfgFile          string
 	debug            bool
@@ -72,8 +73,9 @@ var (
 
 // SetSignalContext stores the signal-aware context created in main()
 // This must be called before Execute() to ensure proper signal handling
-func SetSignalContext(ctx context.Context) {
+func SetSignalContext(ctx context.Context, stopFile string) {
 	signalContext = ctx
+	stopFilePath = stopFile
 }
 
 // initLogger initializes the slog logger based on debug flag
@@ -243,6 +245,12 @@ func runArchive() {
 	// Log startup banner
 	logger.Info(titleStyle.Render("\n🚀 PostgreSQL Archiver"))
 	logger.Info(infoStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
+
+	// Display stop instructions (for Warp terminal compatibility)
+	if stopFilePath != "" {
+		fmt.Fprintln(os.Stderr, "\n"+infoStyle.Render("💡 To stop archiver: Press CTRL-C, or run:"))
+		fmt.Fprintf(os.Stderr, "   "+infoStyle.Render("touch %s")+"\n\n", stopFilePath)
+	}
 
 	logger.Debug("Validating configuration...")
 	if err := config.Validate(); err != nil {
