@@ -188,9 +188,9 @@ function connectWebSocket() {
         document.getElementById('status').classList.remove('disconnected');
         document.getElementById('status-text').textContent = 'Connected to live updates';
 
-        // Clear reconnect interval if exists
+        // Clear reconnect timeout if exists
         if (wsReconnectInterval) {
-            clearInterval(wsReconnectInterval);
+            clearTimeout(wsReconnectInterval);
             wsReconnectInterval = null;
         }
     };
@@ -225,25 +225,43 @@ function connectWebSocket() {
             document.getElementById('status-text').textContent = 'Connection lost - attempting to reconnect...';
         }
 
-        // Set up reconnection with exponential backoff
-        if (!wsReconnectInterval) {
-            let reconnectAttempts = 0;
-            wsReconnectInterval = setInterval(() => {
-                reconnectAttempts++;
-                const maxAttempts = 30;
-
-                if (reconnectAttempts > maxAttempts) {
-                    clearInterval(wsReconnectInterval);
-                    wsReconnectInterval = null;
-                    document.getElementById('status-text').textContent = 'Connection failed - please refresh the page';
-                    return;
-                }
-
-                console.log('Reconnect attempt ' + reconnectAttempts + '/' + maxAttempts);
-                document.getElementById('status-text').textContent = 'Reconnecting (' + reconnectAttempts + '/' + maxAttempts + ')...';
-                connectWebSocket();
-            }, 2000);
+        // Clear any existing reconnection timer to prevent memory leaks
+        if (wsReconnectInterval) {
+            clearTimeout(wsReconnectInterval);
+            wsReconnectInterval = null;
         }
+
+        // Set up reconnection with exponential backoff
+        let reconnectAttempts = 0;
+        let delay = 1000; // Start with 1 second
+        
+        const attemptReconnect = () => {
+            reconnectAttempts++;
+            const maxAttempts = 30;
+
+            if (reconnectAttempts > maxAttempts) {
+                wsReconnectInterval = null;
+                document.getElementById('status-text').textContent = 'Connection failed - please refresh the page';
+                return;
+            }
+
+            console.log('Reconnect attempt ' + reconnectAttempts + '/' + maxAttempts + ' (delay: ' + delay + 'ms)');
+            document.getElementById('status-text').textContent = 'Reconnecting (' + reconnectAttempts + '/' + maxAttempts + ')...';
+            
+            // Close existing WebSocket if it exists to avoid resource leaks
+            if (ws) {
+                ws.onclose = null; // Remove handler to prevent triggering another reconnection
+                ws.close();
+            }
+            
+            connectWebSocket();
+            
+            // Double the delay for next attempt, cap at 30 seconds
+            delay = Math.min(delay * 2, 30000);
+            wsReconnectInterval = setTimeout(attemptReconnect, delay);
+        };
+        
+        wsReconnectInterval = setTimeout(attemptReconnect, delay);
     };
 }
 
@@ -782,6 +800,6 @@ window.addEventListener('beforeunload', () => {
         ws.close();
     }
     if (wsReconnectInterval) {
-        clearInterval(wsReconnectInterval);
+        clearTimeout(wsReconnectInterval);
     }
 });
