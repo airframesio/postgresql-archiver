@@ -181,6 +181,9 @@ func (a *Archiver) Run(ctx context.Context) error {
 	// CRITICAL: Disable Bubble Tea's signal handler so our custom handler can work
 	program := tea.NewProgram(progressModel, tea.WithoutSignalHandler())
 
+	// Store the program reference in the model so goroutines can send messages
+	program.Send(setProgramMsg{program: program})
+
 	// Run the TUI (this will handle everything internally)
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("error running progress display: %w", err)

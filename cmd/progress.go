@@ -61,6 +61,7 @@ type progressModel struct {
 	partitionCache      *PartitionCache
 	processingStartTime time.Time
 	taskInfo            *TaskInfo
+	program             *tea.Program // Reference for sending messages from goroutines
 	// Slice progress tracking
 	currentSliceIndex int
 	totalSlices       int
@@ -122,6 +123,10 @@ type stageTickMsg time.Time
 
 type connectedMsg struct {
 	host string
+}
+
+type setProgramMsg struct {
+	program *tea.Program
 }
 
 type sliceStartMsg struct {
@@ -486,7 +491,7 @@ func (m *progressModel) processNext() tea.Cmd {
 	return func() tea.Msg {
 		// Actually process the partition using the archiver
 		if m.archiver != nil && m.archiver.db != nil {
-			result := m.archiver.ProcessPartitionWithProgress(partition, nil)
+			result := m.archiver.ProcessPartitionWithProgress(partition, m.program)
 
 			// Debug: log any errors
 			if result.Error != nil && m.config.Debug {
@@ -527,6 +532,9 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMessageMsg(msg)
 	case connectedMsg:
 		return m.handleConnectedMsg(msg)
+	case setProgramMsg:
+		m.program = msg.program
+		return m, nil
 	case discoveredTablesMsg:
 		return m.handleDiscoveredTablesMsg(msg)
 	case partitionsFoundMsg:
