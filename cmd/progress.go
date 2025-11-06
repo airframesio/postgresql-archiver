@@ -1044,7 +1044,7 @@ func (m progressModel) renderProcessingPhase() []string {
 		}
 
 		if m.currentStage != "" {
-			stageInfo := fmt.Sprintf("  %s %s", m.currentSpinner.View(), m.currentStage)
+			stageInfo := fmt.Sprintf("    %s %s", m.currentSpinner.View(), m.currentStage)
 			sections = append(sections, "")
 			sections = append(sections, stageStyle.Render(stageInfo))
 		}
@@ -1101,15 +1101,15 @@ func (m progressModel) renderProcessingSummary() []string {
 		for _, sliceRes := range m.sliceResults[sliceStartIndex:] {
 			var line string
 			if sliceRes.result.Skipped {
-				line = fmt.Sprintf("    ⏭  %s - %s", sliceRes.date, sliceRes.result.SkipReason)
+				line = fmt.Sprintf("      ⏭  %s - %s", sliceRes.date, sliceRes.result.SkipReason)
 			} else if sliceRes.result.Error != nil {
-				line = fmt.Sprintf("    ❌ %s - Error: %v", sliceRes.date, sliceRes.result.Error)
+				line = fmt.Sprintf("      ❌ %s - Error: %v", sliceRes.date, sliceRes.result.Error)
 			} else if sliceRes.result.Uploaded && sliceRes.result.S3Key != "" {
-				line = fmt.Sprintf("    ✅ %s → s3://%s/%s (%d bytes)", sliceRes.date, m.config.S3.Bucket, sliceRes.result.S3Key, sliceRes.result.BytesWritten)
+				line = fmt.Sprintf("      ✅ %s → s3://%s/%s (%d bytes)", sliceRes.date, m.config.S3.Bucket, sliceRes.result.S3Key, sliceRes.result.BytesWritten)
 			} else if sliceRes.result.Uploaded {
-				line = fmt.Sprintf("    ✅ %s - Uploaded %d bytes", sliceRes.date, sliceRes.result.BytesWritten)
+				line = fmt.Sprintf("      ✅ %s - Uploaded %d bytes", sliceRes.date, sliceRes.result.BytesWritten)
 			} else {
-				line = fmt.Sprintf("    ⏸  %s - In progress", sliceRes.date)
+				line = fmt.Sprintf("      ⏸  %s - In progress", sliceRes.date)
 			}
 			sections = append(sections, line)
 		}
