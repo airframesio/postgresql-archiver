@@ -511,7 +511,7 @@ func (a *Archiver) processPartitionsWithProgress(partitions []PartitionInfo, pro
 }
 */
 
-func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, index int, program *tea.Program) ProcessResult {
+func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, _ int, program *tea.Program) ProcessResult {
 	result := ProcessResult{
 		Partition: partition,
 	}

@@ -781,7 +781,7 @@ func (m progressModel) handlePartitionCompleteMsg(msg partitionCompleteMsg) (tea
 	return m, nil
 }
 
-func (m progressModel) handleAllCompleteMsg(msg allCompleteMsg) (tea.Model, tea.Cmd) {
+func (m progressModel) handleAllCompleteMsg(_ allCompleteMsg) (tea.Model, tea.Cmd) {
 	m.phase = PhaseComplete
 	m.done = true
 	return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
@@ -793,7 +793,7 @@ func (m progressModel) handleStageUpdateMsg(msg stageUpdateMsg) (tea.Model, tea.
 	return m, nil
 }
 
-func (m progressModel) handleStageTickMsg(msg stageTickMsg) (tea.Model, tea.Cmd) {
+func (m progressModel) handleStageTickMsg(_ stageTickMsg) (tea.Model, tea.Cmd) {
 	if m.phase == PhaseProcessing && m.currentIndex < len(m.partitions) && !m.processingStartTime.IsZero() {
 		elapsed := time.Since(m.processingStartTime)
 
