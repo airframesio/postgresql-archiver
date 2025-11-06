@@ -22,7 +22,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/lib/pq"
 )
 
@@ -1493,8 +1492,8 @@ func (a *Archiver) calculateMultipartETag(data []byte) string {
 }
 
 func (a *Archiver) uploadToS3(key string, data []byte) error {
-	a.logger.Debug(debugStyle.Render(fmt.Sprintf("  ☁️  Uploading to s3://%s/%s (size: %d bytes)",
-		a.config.S3.Bucket, key, len(data))))
+	a.logger.Debug(fmt.Sprintf("  ☁️  Uploading to s3://%s/%s (size: %d bytes)",
+		a.config.S3.Bucket, key, len(data)))
 
 	// Use multipart upload for files larger than 100MB
 	if len(data) > 100*1024*1024 {
@@ -1547,22 +1546,21 @@ func (a *Archiver) printSummary(results []ProcessResult) {
 		}
 	}
 
-	a.logger.Info(infoStyle.Render("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
-	a.logger.Info(titleStyle.Render("📈 Summary"))
-	a.logger.Info(fmt.Sprintf("%s %d", successStyle.Render("✅ Successful:"), successful))
-	a.logger.Info(fmt.Sprintf("%s %d", warningStyle.Render("⏭️  Skipped:"), skipped))
+	a.logger.Info("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	a.logger.Info("📈 Summary")
+	a.logger.Info(fmt.Sprintf("✅ Successful: %d", successful))
+	a.logger.Info(fmt.Sprintf("⏭️  Skipped: %d", skipped))
 	if failed > 0 {
-		a.logger.Info(fmt.Sprintf("%s %d", lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000")).Render("❌ Failed:"), failed))
+		a.logger.Info(fmt.Sprintf("❌ Failed: %d", failed))
 	}
 
 	if totalBytes > 0 {
-		a.logger.Info(fmt.Sprintf("%s %.2f MB", infoStyle.Render("💾 Total compressed:"), float64(totalBytes)/(1024*1024)))
+		a.logger.Info(fmt.Sprintf("💾 Total compressed: %.2f MB", float64(totalBytes)/(1024*1024)))
 	}
 
 	for _, r := range results {
 		if r.Error != nil {
-			a.logger.Error(fmt.Sprintf("\n%s %s: %v",
-				lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000")).Render("❌"),
+			a.logger.Error(fmt.Sprintf("\n❌ %s: %v",
 				r.Partition.TableName,
 				r.Error))
 		}

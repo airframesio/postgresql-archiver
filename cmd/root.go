@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -23,6 +24,7 @@ var (
 
 	cfgFile          string
 	debug            bool
+	logFormat        string
 	dbHost           string
 	dbPort           int
 	dbUser           string
@@ -54,17 +56,19 @@ var (
 			Bold(true).
 			Underline(true)
 
-	successStyle = lipgloss.NewStyle().
+	// Terminal styling for fmt.Println messages (not logger output)
+	// These are used in archiver.go for direct terminal output
+	successStyle = lipgloss.NewStyle(). //nolint:unused // used in archiver.go
 			Foreground(lipgloss.Color("#04B575")).
 			Bold(true)
 
 	infoStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#00D9FF"))
 
-	warningStyle = lipgloss.NewStyle().
+	warningStyle = lipgloss.NewStyle(). //nolint:unused // used in archiver.go
 			Foreground(lipgloss.Color("#FFB700"))
 
-	debugStyle = lipgloss.NewStyle().
+	debugStyle = lipgloss.NewStyle(). //nolint:unused // used in archiver.go
 			Foreground(lipgloss.Color("#666666")).
 			Italic(true)
 
@@ -78,15 +82,72 @@ func SetSignalContext(ctx context.Context, stopFile string) {
 	stopFilePath = stopFile
 }
 
-// initLogger initializes the slog logger based on debug flag
-func initLogger(isDebug bool) {
+// textOnlyHandler is a custom slog handler that outputs human-readable text
+// without key=value pairs, suitable for interactive terminal usage
+type textOnlyHandler struct {
+	opts   slog.HandlerOptions
+	writer io.Writer
+}
+
+func newTextOnlyHandler(w io.Writer, opts *slog.HandlerOptions) *textOnlyHandler {
+	if opts == nil {
+		opts = &slog.HandlerOptions{}
+	}
+	return &textOnlyHandler{
+		opts:   *opts,
+		writer: w,
+	}
+}
+
+func (h *textOnlyHandler) Enabled(_ context.Context, level slog.Level) bool {
+	minLevel := slog.LevelInfo
+	if h.opts.Level != nil {
+		minLevel = h.opts.Level.Level()
+	}
+	return level >= minLevel
+}
+
+func (h *textOnlyHandler) Handle(_ context.Context, r slog.Record) error {
+	// Format: YYYY-MM-DD HH:MM:SS LEVEL message
+	timestamp := r.Time.Format("2006-01-02 15:04:05")
+	level := r.Level.String()
+
+	// Write the log entry
+	_, err := fmt.Fprintf(h.writer, "%s %s %s\n", timestamp, level, r.Message)
+	return err
+}
+
+func (h *textOnlyHandler) WithAttrs(_ []slog.Attr) slog.Handler {
+	// For simplicity, we ignore attributes in text-only mode
+	return h
+}
+
+func (h *textOnlyHandler) WithGroup(_ string) slog.Handler {
+	// For simplicity, we ignore groups in text-only mode
+	return h
+}
+
+// initLogger initializes the slog logger based on debug flag and log format
+func initLogger(isDebug bool, format string) {
 	opts := &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}
 	if isDebug {
 		opts.Level = slog.LevelDebug
 	}
-	handler := slog.NewTextHandler(os.Stdout, opts)
+
+	var handler slog.Handler
+	switch format {
+	case "json":
+		handler = slog.NewJSONHandler(os.Stdout, opts)
+	case "logfmt":
+		// logfmt uses slog.TextHandler which outputs key=value pairs
+		handler = slog.NewTextHandler(os.Stdout, opts)
+	default: // "text" or anything else
+		// For human-readable text output, we'll use a custom handler
+		// that formats messages more naturally without key=value pairs
+		handler = newTextOnlyHandler(os.Stdout, opts)
+	}
 	logger = slog.New(handler)
 }
 
@@ -111,6 +172,7 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.postgresql-archiver.yaml)")
 	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "enable debug output")
+	rootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "text", "log format (text, logfmt, json)")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "perform a dry run without uploading")
 
 	rootCmd.Flags().StringVar(&dbHost, "db-host", "localhost", "PostgreSQL host")
@@ -146,6 +208,7 @@ func init() {
 	// Instead, validation happens in config.Validate() which runs after all config sources are loaded.
 
 	_ = viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
+	_ = viper.BindPFlag("log_format", rootCmd.PersistentFlags().Lookup("log-format"))
 	_ = viper.BindPFlag("db.host", rootCmd.Flags().Lookup("db-host"))
 	_ = viper.BindPFlag("db.port", rootCmd.Flags().Lookup("db-port"))
 	_ = viper.BindPFlag("db.user", rootCmd.Flags().Lookup("db-user"))
@@ -191,9 +254,9 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil && debug {
 		// Initialize logger early if reading config in debug mode
 		if logger == nil {
-			initLogger(debug)
+			initLogger(debug, logFormat)
 		}
-		logger.Debug(debugStyle.Render("📄 Using config file: " + viper.ConfigFileUsed()))
+		logger.Debug(fmt.Sprintf("📄 Using config file: %s", viper.ConfigFileUsed()))
 	}
 }
 
@@ -208,6 +271,7 @@ func runArchive() {
 
 	config := &Config{
 		Debug:       viper.GetBool("debug"),
+		LogFormat:   viper.GetString("log_format"),
 		DryRun:      viper.GetBool("dry_run"),
 		Workers:     viper.GetInt("workers"),
 		SkipCount:   viper.GetBool("skip_count"),
@@ -240,11 +304,11 @@ func runArchive() {
 	}
 
 	// Initialize logger
-	initLogger(config.Debug)
+	initLogger(config.Debug, config.LogFormat)
 
 	// Log startup banner
-	logger.Info(titleStyle.Render("\n🚀 PostgreSQL Archiver"))
-	logger.Info(infoStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
+	logger.Info("\n🚀 PostgreSQL Archiver")
+	logger.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	// Display stop instructions (for Warp terminal compatibility) - only in debug mode
 	// In TUI mode, printing to stderr corrupts the display
@@ -255,7 +319,7 @@ func runArchive() {
 
 	logger.Debug("Validating configuration...")
 	if err := config.Validate(); err != nil {
-		logger.Error(warningStyle.Render("❌ Configuration error: " + err.Error()))
+		logger.Error(fmt.Sprintf("❌ Configuration error: %s", err.Error()))
 		os.Exit(1)
 	}
 	logger.Debug("Configuration validated successfully")
@@ -300,9 +364,9 @@ func runArchive() {
 			logger.Info("\n⚠️  Archival cancelled by user")
 			os.Exit(130)
 		}
-		logger.Error(warningStyle.Render("❌ Archive failed: " + err.Error()))
+		logger.Error(fmt.Sprintf("❌ Archive failed: %s", err.Error()))
 		os.Exit(1)
 	}
 
-	logger.Info(successStyle.Render("\n✅ Archive completed successfully!"))
+	logger.Info("\n✅ Archive completed successfully!")
 }

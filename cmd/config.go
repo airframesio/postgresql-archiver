@@ -36,6 +36,7 @@ const regionAuto = "auto"
 
 type Config struct {
 	Debug            bool
+	LogFormat        string
 	DryRun           bool
 	Workers          int
 	SkipCount        bool
