@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.3] - 2025-11-07
+
+### Fixed
+- **Multipart Upload Caching:**
+  - Fixed issue where multipart uploads (files >100MB) would always be re-processed even when cached metadata was available
+  - Added proper multipart ETag caching and comparison to avoid re-extracting and re-uploading files that haven't changed
+  - Previously, multipart uploads would bypass cache checks because S3 ETag format for multipart uploads differs from simple MD5 hashes
+
+### Technical Details
+- Added `MultipartETag` field to `PartitionCacheEntry` struct
+- Created `calculateMultipartETagFromFile()` to compute S3 multipart ETag from temp files using the same 5MB part size as s3manager
+- Updated cache storage to calculate and save multipart ETag after upload
+- Updated cache retrieval to return multipart ETag along with MD5
+- Modified `shouldSkipPartition` logic to compare multipart ETags when appropriate
+- S3 multipart ETag format: "MD5_of_MD5s-partCount" (e.g., "abc123-56")
+- Part size: 5MB (matches s3manager.NewUploader default)
+- Multipart threshold: 100MB (matches uploadTempFileToS3 logic)
+- Backward compatible: Old cache entries without multipartETag still work
+
+### Impact
+- Eliminates unnecessary re-extraction and re-upload of large files
+- Reduces database load from redundant queries
+- Improves performance for incremental archival runs
+- Maintains data integrity through proper ETag validation
+
 ## [1.4.2] - 2025-11-07
 
 ### Added
