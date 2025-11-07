@@ -2,12 +2,16 @@ package formatters
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
 
 	"github.com/parquet-go/parquet-go"
 )
+
+// ErrNoColumns is returned when a table schema has no columns
+var ErrNoColumns = errors.New("table schema has no columns")
 
 // ParquetFormatter handles Parquet format output
 type ParquetFormatter struct {
@@ -174,7 +178,7 @@ func (f *ParquetStreamingFormatter) NewWriter(w io.Writer, tableSchema TableSche
 
 	columns := tableSchema.GetColumns()
 	if len(columns) == 0 {
-		return nil, fmt.Errorf("table schema has no columns")
+		return nil, ErrNoColumns
 	}
 
 	// Sort columns for consistency

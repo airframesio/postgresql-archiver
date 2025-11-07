@@ -52,7 +52,7 @@ func NewJSONLStreamingFormatter() *JSONLStreamingFormatter {
 }
 
 // NewWriter creates a new JSONL stream writer
-func (f *JSONLStreamingFormatter) NewWriter(w io.Writer, schema TableSchema) (StreamWriter, error) {
+func (f *JSONLStreamingFormatter) NewWriter(w io.Writer, _ TableSchema) (StreamWriter, error) {
 	return &jsonlStreamWriter{
 		writer: w,
 	}, nil

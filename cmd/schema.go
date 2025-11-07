@@ -2,10 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/airframesio/data-archiver/cmd/formatters"
 )
+
+// ErrTableNotFoundOrEmpty is returned when a table is not found or has no columns
+var ErrTableNotFoundOrEmpty = errors.New("table not found or has no columns")
 
 // ColumnInfo represents metadata about a database column
 type ColumnInfo struct {
@@ -72,7 +76,7 @@ func (a *Archiver) getTableSchema(ctx context.Context, tableName string) (*Table
 	}
 
 	if len(schema.Columns) == 0 {
-		return nil, fmt.Errorf("table %s not found or has no columns", tableName)
+		return nil, fmt.Errorf("%w: %s", ErrTableNotFoundOrEmpty, tableName)
 	}
 
 	return schema, nil

@@ -107,9 +107,8 @@ func isRetryableError(err error) bool {
 }
 
 // getTempDir returns the directory to use for temporary files
-// Falls back to os.TempDir() if no specific directory is configured
+// Currently uses os.TempDir(). Could be made configurable via Config.TempDir if needed.
 func getTempDir() string {
-	// TODO: Make this configurable via Config.TempDir if needed
 	return os.TempDir()
 }
 
@@ -1854,6 +1853,8 @@ func (a *Archiver) extractRowsWithDateFilter(partition PartitionInfo, startTime,
 
 // extractPartitionDataStreaming extracts partition data using streaming architecture
 // This streams data in chunks to a temp file, avoiding loading everything into memory
+//
+//nolint:nakedret,gocognit,gocyclo // Complex streaming function with named returns for clarity, high complexity unavoidable
 func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, program *tea.Program, cache *PartitionCache, updateTaskStage func(string)) (tempFilePath string, fileSize int64, md5Hash string, uncompressedSize int64, err error) {
 	extractStart := time.Now()
 	updateTaskStage("Getting table schema...")
@@ -1941,6 +1942,7 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 	}
 
 	quotedTable := pq.QuoteIdentifier(partition.TableName)
+	//nolint:gosec // G201: SQL string formatting is safe here - quotedTable is properly quoted via pq.QuoteIdentifier
 	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable)
 
 	rows, queryErr := a.db.QueryContext(a.ctx, query)

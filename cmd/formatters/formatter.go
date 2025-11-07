@@ -4,6 +4,8 @@ import "io"
 
 // Format type constants
 const (
+	FormatJSONL   = "jsonl"
+	FormatCSV     = "csv"
 	FormatParquet = "parquet"
 )
 
@@ -56,9 +58,9 @@ type StreamingFormatter interface {
 // GetFormatter returns the appropriate formatter based on the format string
 func GetFormatter(format string) Formatter {
 	switch format {
-	case "jsonl":
+	case FormatJSONL:
 		return NewJSONLFormatter()
-	case "csv":
+	case FormatCSV:
 		return NewCSVFormatter()
 	case FormatParquet:
 		return NewParquetFormatter()
@@ -71,9 +73,9 @@ func GetFormatter(format string) Formatter {
 // For Parquet, this enables internal compression. For other formats, compression parameter is ignored.
 func GetFormatterWithCompression(format string, compression string) Formatter {
 	switch format {
-	case "jsonl":
+	case FormatJSONL:
 		return NewJSONLFormatter()
-	case "csv":
+	case FormatCSV:
 		return NewCSVFormatter()
 	case FormatParquet:
 		return NewParquetFormatterWithCompression(compression)
@@ -85,9 +87,9 @@ func GetFormatterWithCompression(format string, compression string) Formatter {
 // GetStreamingFormatter returns the appropriate streaming formatter based on the format string
 func GetStreamingFormatter(format string) StreamingFormatter {
 	switch format {
-	case "jsonl":
+	case FormatJSONL:
 		return NewJSONLStreamingFormatter()
-	case "csv":
+	case FormatCSV:
 		return NewCSVStreamingFormatter()
 	case FormatParquet:
 		return NewParquetStreamingFormatter()
