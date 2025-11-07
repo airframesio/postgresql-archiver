@@ -41,6 +41,36 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Determine tags from workflow_run
+        id: tag-check
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+            echo "head_branch=$HEAD_BRANCH" >> $GITHUB_OUTPUT
+
+            # Check if it's a tag (starts with v)
+            if [[ $HEAD_BRANCH == v* ]]; then
+              VERSION=${HEAD_BRANCH#v}
+              MAJOR=$(echo $VERSION | cut -d. -f1)
+              MINOR=$(echo $VERSION | cut -d. -f1-2)
+
+              echo "is_tag=true" >> $GITHUB_OUTPUT
+              echo "version=$VERSION" >> $GITHUB_OUTPUT
+              echo "major=$MAJOR" >> $GITHUB_OUTPUT
+              echo "minor=$MINOR" >> $GITHUB_OUTPUT
+              echo "is_main=false" >> $GITHUB_OUTPUT
+            elif [[ $HEAD_BRANCH == "main" ]]; then
+              echo "is_tag=false" >> $GITHUB_OUTPUT
+              echo "is_main=true" >> $GITHUB_OUTPUT
+            else
+              echo "is_tag=false" >> $GITHUB_OUTPUT
+              echo "is_main=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+            echo "is_main=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Log into registry ${{ env.REGISTRY }}
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -55,7 +85,11 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Version tags (v1.2.3)
+            # Version tags for workflow_run from tags
+            type=raw,value=${{ steps.tag-check.outputs.version }},enable=${{ steps.tag-check.outputs.is_tag == 'true' }}
+            type=raw,value=${{ steps.tag-check.outputs.minor }},enable=${{ steps.tag-check.outputs.is_tag == 'true' }}
+            type=raw,value=${{ steps.tag-check.outputs.major }},enable=${{ steps.tag-check.outputs.is_tag == 'true' }}
+            # Version tags for direct tag pushes (v1.2.3)
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
@@ -63,8 +97,8 @@ jobs:
             type=ref,event=branch
             # PR tags
             type=ref,event=pr
-            # Latest tag for main branch
-            type=raw,value=latest,enable={{is_default_branch}}
+            # Latest tag for main branch or version tags
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref_type == 'tag' || (github.event_name == 'workflow_run' && (steps.tag-check.outputs.is_main == 'true' || steps.tag-check.outputs.is_tag == 'true')) }}
             # Edge tag for develop branch
             type=raw,value=edge,enable=${{ github.ref == 'refs/heads/develop' }}
             # Git commit SHA (short) - only for branch builds
