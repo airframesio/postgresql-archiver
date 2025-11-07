@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.4] - 2025-11-07
+
+### Improved
+- **Enhanced Completion Summary Display:**
+  - Added color-coded statistics with styled output (success in green, skipped in orange, errors in red)
+  - Added success rate calculation with color-coded display based on percentage
+  - Added total rows transferred count
+  - Added throughput metrics (rows/sec and MB/sec)
+  - Added average time per partition calculation
+  - Added date range tracking for processed partitions
+  - Improved visual formatting with separator lines and better spacing
+  - Enhanced readability with styled labels and values
+
 ## [1.4.3] - 2025-11-07
 
 ### Fixed
