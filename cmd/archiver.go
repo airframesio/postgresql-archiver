@@ -283,7 +283,15 @@ func (a *Archiver) Run(ctx context.Context) error {
 	// Get results and print summary
 	select {
 	case results := <-resultsChan:
-		a.printSummary(results)
+		// Use TaskInfo start time for TUI mode
+		startTime := taskInfo.StartTime
+		totalPartitions := len(results)
+		// Try to get partition count from results if available
+		if len(results) > 0 {
+			// Estimate from results - this is approximate for TUI mode
+			totalPartitions = len(results)
+		}
+		a.printSummary(results, startTime, totalPartitions)
 	default:
 		// No results (might have quit early)
 	}
@@ -399,11 +407,12 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, _ *tea.Program, _ *Ta
 
 	a.logger.Debug("Processing partitions...")
 	results := make([]ProcessResult, 0, len(partitions))
+	startTime := time.Now()
 
 	// Ensure summary is printed even on cancellation
 	defer func() {
 		if len(results) > 0 {
-			a.printSummary(results)
+			a.printSummary(results, startTime, len(partitions))
 		}
 	}()
 
@@ -558,9 +567,9 @@ func (a *Archiver) checkTablePermissions(ctx context.Context) error {
 	// Check if we can see and access partition tables
 	pattern := a.config.Table + "_%"
 	partitionCheckQuery := `
-		SELECT tablename 
-		FROM pg_tables 
-		WHERE schemaname = 'public' 
+		SELECT tablename
+		FROM pg_tables
+		WHERE schemaname = 'public'
 		AND tablename LIKE $1
 		AND has_table_privilege(tablename, 'SELECT')
 		LIMIT 1
@@ -1724,42 +1733,195 @@ func (a *Archiver) uploadToS3(key string, data []byte) error {
 	return err
 }
 
-func (a *Archiver) printSummary(results []ProcessResult) {
+func (a *Archiver) printSummary(results []ProcessResult, startTime time.Time, totalPartitions int) {
 	var successful, failed, skipped int
 	var totalBytes int64
+	var totalRows int64
+	var totalDuration time.Duration
+	var failedResults []ProcessResult
+	var minDate, maxDate *time.Time
 
 	for _, r := range results {
 		if r.Error != nil {
 			failed++
+			failedResults = append(failedResults, r)
 		} else if r.Skipped {
 			skipped++
-		} else {
+		} else if r.Uploaded {
 			successful++
 			totalBytes += r.BytesWritten
+			if r.Partition.RowCount > 0 {
+				totalRows += r.Partition.RowCount
+			}
+			totalDuration += r.Duration
 		}
+
+		// Track date range
+		if !r.Partition.Date.IsZero() {
+			if minDate == nil || r.Partition.Date.Before(*minDate) {
+				minDate = &r.Partition.Date
+			}
+			if maxDate == nil || r.Partition.Date.After(*maxDate) {
+				maxDate = &r.Partition.Date
+			}
+		}
+	}
+
+	// Calculate total elapsed time
+	totalElapsed := time.Since(startTime)
+
+	// Calculate success rate
+	totalProcessed := successful + skipped + failed
+	var successRate float64
+	if totalProcessed > 0 {
+		successRate = float64(successful) / float64(totalProcessed) * 100
 	}
 
 	a.logger.Info("")
 	a.logger.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	a.logger.Info("📈 Summary")
+	a.logger.Info(fmt.Sprintf("   Total Partitions: %d", totalPartitions))
+	a.logger.Info("")
 	a.logger.Info(fmt.Sprintf("✅ Successful: %d", successful))
-	a.logger.Info(fmt.Sprintf("⏭️  Skipped: %d", skipped))
+	if skipped > 0 {
+		a.logger.Info(fmt.Sprintf("⏭️  Skipped: %d", skipped))
+	}
 	if failed > 0 {
 		a.logger.Info(fmt.Sprintf("❌ Failed: %d", failed))
 	}
+	a.logger.Info("")
 
-	if totalBytes > 0 {
-		a.logger.Info(fmt.Sprintf("💾 Total compressed: %.2f MB", float64(totalBytes)/(1024*1024)))
+	// Show success rate
+	if totalProcessed > 0 {
+		rateStr := fmt.Sprintf("%.1f%%", successRate)
+		a.logger.Info(fmt.Sprintf("   Success Rate: %s", rateStr))
+		a.logger.Info("")
 	}
 
-	for _, r := range results {
-		if r.Error != nil {
-			a.logger.Error("")
-			a.logger.Error(fmt.Sprintf("❌ %s: %v",
-				r.Partition.TableName,
-				r.Error))
+	// Show total rows transferred
+	if totalRows > 0 {
+		a.logger.Info(fmt.Sprintf("   Total Transferred: %s rows", formatNumberForSummary(totalRows)))
+		a.logger.Info("")
+	}
+
+	// Show total bytes if any uploads occurred
+	if totalBytes > 0 {
+		a.logger.Info(fmt.Sprintf("   Total Data Uploaded: %s", formatBytesForSummary(totalBytes)))
+		a.logger.Info("")
+	}
+
+	// Show duration and throughput
+	if totalElapsed > 0 {
+		a.logger.Info(fmt.Sprintf("   Total Duration: %s", formatDurationForSummary(totalElapsed)))
+		a.logger.Info("")
+
+		// Calculate throughput
+		if totalRows > 0 && totalElapsed.Seconds() > 0 {
+			rowsPerSec := float64(totalRows) / totalElapsed.Seconds()
+			a.logger.Info(fmt.Sprintf("   Throughput: %s rows/sec", formatFloatForSummary(rowsPerSec)))
+			if totalBytes > 0 {
+				mbPerSec := float64(totalBytes) / (1024 * 1024) / totalElapsed.Seconds()
+				a.logger.Info(fmt.Sprintf("   Throughput: %s MB/sec", formatFloatForSummary(mbPerSec)))
+			}
+			a.logger.Info("")
+		}
+
+		// Show average time per partition
+		if successful > 0 && totalDuration > 0 {
+			avgDuration := totalDuration / time.Duration(successful)
+			a.logger.Info(fmt.Sprintf("   Avg Time per Partition: %s", formatDurationForSummary(avgDuration)))
+			a.logger.Info("")
 		}
 	}
+
+	// Show date range
+	if minDate != nil && maxDate != nil {
+		if minDate.Equal(*maxDate) {
+			a.logger.Info(fmt.Sprintf("   Date Range: %s", minDate.Format("2006-01-02")))
+		} else {
+			a.logger.Info(fmt.Sprintf("   Date Range: %s to %s", minDate.Format("2006-01-02"), maxDate.Format("2006-01-02")))
+		}
+		a.logger.Info("")
+	}
+
+	// List failures with details
+	if len(failedResults) > 0 {
+		a.logger.Error("")
+		a.logger.Error("   Failed Partitions:")
+		a.logger.Error("")
+		for _, result := range failedResults {
+			partitionName := result.Partition.TableName
+			errorMsg := result.Error.Error()
+			// Truncate long error messages for better display
+			if len(errorMsg) > 80 {
+				errorMsg = errorMsg[:77] + "..."
+			}
+			a.logger.Error(fmt.Sprintf("   ❌ %s: %s", partitionName, errorMsg))
+		}
+	}
+}
+
+// Helper functions for formatting summary output
+func formatNumberForSummary(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	str := fmt.Sprintf("%d", n)
+	var result strings.Builder
+	length := len(str)
+	for i, char := range str {
+		if i > 0 && (length-i)%3 == 0 {
+			result.WriteString(",")
+		}
+		result.WriteRune(char)
+	}
+	return result.String()
+}
+
+func formatBytesForSummary(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+func formatDurationForSummary(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	if d < time.Hour {
+		minutes := int(d.Minutes())
+		seconds := int(d.Seconds()) % 60
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	}
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+	return fmt.Sprintf("%dh %dm", hours, minutes)
+}
+
+func formatFloatForSummary(f float64) string {
+	if f < 0.01 {
+		return fmt.Sprintf("%.4f", f)
+	}
+	if f < 1 {
+		return fmt.Sprintf("%.2f", f)
+	}
+	if f < 1000 {
+		return fmt.Sprintf("%.1f", f)
+	}
+	if f < 1000000 {
+		return fmt.Sprintf("%.0f", f)
+	}
+	return fmt.Sprintf("%.2f", f)
 }
 
 // extractRowsWithProgress extracts rows from partition as maps for formatting
