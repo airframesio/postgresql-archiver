@@ -22,7 +22,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write  # For signing images with cosign
+      id-token: write        # For signing images with cosign
+      attestations: write    # For build provenance attestation
 
     steps:
       - name: Checkout repository
