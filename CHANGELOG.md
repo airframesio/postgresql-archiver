@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.6] - 2025-01-06
+
+### Fixed
+- **Docker Tag Generation for workflow_run:**
+  - Fixed Docker image tagging when triggered via workflow_run from tag pushes
+  - metadata-action now correctly generates semver tags (version, major.minor, major)
+  - Manually extract and apply tags from workflow_run.head_branch
+  - Ensures Docker images are properly tagged with version numbers
+
 ## [1.2.5] - 2025-01-06
 
 ### Changed
