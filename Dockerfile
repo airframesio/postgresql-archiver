@@ -1,34 +1,45 @@
 # syntax=docker/dockerfile:1
 
-# Build stage - includes Go and Node.js for asset minification
-FROM golang:1.23-alpine AS builder
+# Minify stage - runs on native build platform to avoid cross-compilation issues
+# This ensures npm packages with native binaries work correctly
+FROM --platform=$BUILDPLATFORM node:20-alpine AS minifier
 
-# Install Node.js and npm for web asset minification
-RUN apk add --no-cache nodejs npm
+WORKDIR /build
+
+# Copy source files needed for minification
+COPY package.json package-lock.json ./
+COPY cmd/web ./cmd/web
+COPY scripts/minify.sh ./scripts/
+
+# Install dependencies and run minification on native platform
+RUN npm install && \
+    chmod +x ./scripts/minify.sh && \
+    ./scripts/minify.sh
+
+# Build stage - compiles Go binary for target platform
+FROM golang:1.23-alpine AS builder
 
 # Set working directory
 WORKDIR /build
 
-# Copy package.json and install npm dependencies first (for layer caching)
-COPY package.json package-lock.json ./
-RUN npm install
-
-# Copy go mod files and download dependencies (for layer caching)
+# Copy go mod files and download dependencies first (for layer caching)
 COPY go.mod go.sum ./
 RUN go mod download
 
 # Copy source code
 COPY . .
 
-# Minify web assets (required before building - assets are embedded via go:embed)
-RUN chmod +x ./scripts/minify.sh && ./scripts/minify.sh
+# Copy minified assets from minifier stage
+COPY --from=minifier /build/cmd/web/*.min.* ./cmd/web/
 
-# Build the application
+# Build the application for target platform
 # - CGO_ENABLED=0: Build static binary without C dependencies
 # - GOOS=linux: Target Linux OS
 # - -ldflags: Inject version information and reduce binary size
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=linux go build \
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags="-X github.com/airframesio/data-archiver/cmd.Version=${VERSION} -w -s" \
     -o data-archiver \
     .

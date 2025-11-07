@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2025-01-06
+
+### Fixed
+- **Docker Multi-Arch Build:**
+  - Fixed ARM64 Docker builds failing with "Illegal instruction" error during minification
+  - Split Dockerfile into separate minifier and builder stages
+  - Minification now runs on native build platform using `--platform=$BUILDPLATFORM`
+  - Ensures npm packages with native binaries work correctly during cross-compilation
+  - Properly uses `TARGETOS` and `TARGETARCH` build arguments for Go compilation
+
 ## [1.3.0] - 2025-01-06
 
 ### Added
