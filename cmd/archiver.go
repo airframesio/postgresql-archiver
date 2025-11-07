@@ -1747,7 +1747,9 @@ func (a *Archiver) printSummary(results []ProcessResult, startTime time.Time, to
 			failedResults = append(failedResults, r)
 		} else if r.Skipped {
 			skipped++
-		} else if r.Uploaded {
+		} else {
+			// Count as successful if processed without error and not skipped
+			// This includes DryRun mode where Uploaded=false but processing succeeded
 			successful++
 			totalBytes += r.BytesWritten
 			if r.Partition.RowCount > 0 {
