@@ -1942,9 +1942,16 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 		program.Send(updateProgress("Extracting data...", 0, partition.RowCount))
 	}
 
+	// Build column list for SELECT query
+	columns := schema.GetColumns()
+	columnNames := make([]string, len(columns))
+	for i, col := range columns {
+		columnNames[i] = pq.QuoteIdentifier(col.GetName())
+	}
+
 	quotedTable := pq.QuoteIdentifier(partition.TableName)
-	//nolint:gosec // G201: SQL string formatting is safe here - quotedTable is properly quoted via pq.QuoteIdentifier
-	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable)
+	//nolint:gosec // G201: SQL string formatting is safe here - all identifiers are properly quoted via pq.QuoteIdentifier
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(columnNames, ", "), quotedTable)
 
 	rows, queryErr := a.db.QueryContext(a.ctx, query)
 	if queryErr != nil {
@@ -1956,6 +1963,13 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 		return
 	}
 	defer rows.Close()
+
+	// Prepare scan targets - use interface{} to let database/sql handle type conversion
+	scanValues := make([]interface{}, len(columns))
+	scanPointers := make([]interface{}, len(columns))
+	for i := range scanValues {
+		scanPointers[i] = &scanValues[i]
+	}
 
 	// Process rows in chunks
 	chunk := make([]map[string]interface{}, 0, chunkSize)
@@ -1984,8 +1998,8 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 			}
 		}
 
-		var jsonData json.RawMessage
-		if scanErr := rows.Scan(&jsonData); scanErr != nil {
+		// Scan row columns into scanValues
+		if scanErr := rows.Scan(scanPointers...); scanErr != nil {
 			streamWriter.Close()
 			if compressorWriter != nil {
 				compressorWriter.Close()
@@ -1994,14 +2008,10 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 			return
 		}
 
-		var rowData map[string]interface{}
-		if unmarshalErr := json.Unmarshal(jsonData, &rowData); unmarshalErr != nil {
-			streamWriter.Close()
-			if compressorWriter != nil {
-				compressorWriter.Close()
-			}
-			err = fmt.Errorf("failed to unmarshal row: %w", unmarshalErr)
-			return
+		// Convert to map[string]interface{}
+		rowData := make(map[string]interface{}, len(columns))
+		for i, col := range columns {
+			rowData[col.GetName()] = scanValues[i]
 		}
 
 		chunk = append(chunk, rowData)

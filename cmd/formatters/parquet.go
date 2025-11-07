@@ -237,7 +237,7 @@ func (f *ParquetStreamingFormatter) MIMEType() string {
 // This duplicates logic from cmd/schema.go but avoids circular import
 func mapPostgreSQLTypeToParquetNode(udtName string) parquet.Node {
 	switch udtName {
-	// Integer types
+	// Integer types - now with proper precision since we're not using row_to_json()
 	case "int2":
 		return parquet.Optional(parquet.Leaf(parquet.Int32Type))
 	case "int4":
@@ -251,17 +251,21 @@ func mapPostgreSQLTypeToParquetNode(udtName string) parquet.Node {
 	case "float8":
 		return parquet.Optional(parquet.Leaf(parquet.DoubleType))
 
+	// Numeric/Decimal - use DOUBLE for precision
+	case "numeric", "decimal":
+		return parquet.Optional(parquet.Leaf(parquet.DoubleType))
+
 	// Boolean
 	case "bool":
 		return parquet.Optional(parquet.Leaf(parquet.BooleanType))
 
-	// Timestamp types (store as int64 microseconds)
+	// Timestamp types (store as int64 microseconds since epoch)
 	case "timestamp", "timestamptz":
-		return parquet.Optional(parquet.Leaf(parquet.Int64Type))
+		return parquet.Optional(parquet.Timestamp(parquet.Microsecond))
 
-	// Date type (store as int32 days)
+	// Date type (store as int32 days since epoch)
 	case "date":
-		return parquet.Optional(parquet.Leaf(parquet.Int32Type))
+		return parquet.Optional(parquet.Date())
 
 	// Text/String types
 	case "varchar", "text", "char", "bpchar":
