@@ -1210,42 +1210,248 @@ func (m progressModel) renderProcessingSummary() []string {
 func (m progressModel) renderCompletionSummary() []string {
 	var sections []string
 
+	// Create styled sections for better visual appeal
+	successStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#04B575")).
+		Bold(true)
+	skipStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFAA00"))
+	errorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FF4444")).
+		Bold(true)
+	statStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888"))
+	valueStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Bold(true)
+
 	sections = append(sections, "")
+	sections = append(sections, tableHeaderStyle.Render("   ═══════════════════════════════════════════════"))
 	sections = append(sections, tableHeaderStyle.Render("   Completion Summary"))
+	sections = append(sections, tableHeaderStyle.Render("   ═══════════════════════════════════════════════"))
 	sections = append(sections, "")
 
-	// Count results by status
+	// Count results by status and collect failures
 	var uploaded, skipped, failed int
 	var totalBytes int64
+	var totalRows int64
+	var failedResults []ProcessResult
+	var totalDuration time.Duration
+	var minDate, maxDate *time.Time
+
 	for _, result := range m.results {
 		if result.Error != nil {
 			failed++
+			failedResults = append(failedResults, result)
 		} else if result.Skipped {
 			skipped++
 		} else if result.Uploaded {
 			uploaded++
 			totalBytes += result.BytesWritten
+			if result.Partition.RowCount > 0 {
+				totalRows += result.Partition.RowCount
+			}
+			totalDuration += result.Duration
+		}
+
+		// Track date range
+		if !result.Partition.Date.IsZero() {
+			if minDate == nil || result.Partition.Date.Before(*minDate) {
+				minDate = &result.Partition.Date
+			}
+			if maxDate == nil || result.Partition.Date.After(*maxDate) {
+				maxDate = &result.Partition.Date
+			}
 		}
 	}
 
-	// Show statistics
-	sections = append(sections, fmt.Sprintf("   Total Partitions: %d", len(m.partitions)))
-	sections = append(sections, fmt.Sprintf("   ✅ Uploaded: %d", uploaded))
+	// Calculate total elapsed time
+	totalElapsed := time.Since(m.startTime)
+
+	// Calculate success rate
+	totalProcessed := uploaded + skipped + failed
+	var successRate float64
+	if totalProcessed > 0 {
+		successRate = float64(uploaded) / float64(totalProcessed) * 100
+	}
+
+	// Show statistics with enhanced formatting
+	sections = append(sections, statStyle.Render("   Total Partitions:"))
+	sections = append(sections, fmt.Sprintf("   %s", valueStyle.Render(fmt.Sprintf("%d", len(m.partitions)))))
+	sections = append(sections, "")
+
+	sections = append(sections, successStyle.Render(fmt.Sprintf("   ✅ Uploaded: %d", uploaded)))
 	if skipped > 0 {
-		sections = append(sections, fmt.Sprintf("   ⏭  Skipped: %d", skipped))
+		sections = append(sections, skipStyle.Render(fmt.Sprintf("   ⏭  Skipped: %d", skipped)))
 	}
 	if failed > 0 {
-		sections = append(sections, fmt.Sprintf("   ❌ Failed: %d", failed))
+		sections = append(sections, errorStyle.Render(fmt.Sprintf("   ❌ Failed: %d", failed)))
+	}
+
+	// Show success rate
+	if totalProcessed > 0 {
+		rateColor := successStyle
+		if successRate < 50 {
+			rateColor = errorStyle
+		} else if successRate < 90 {
+			rateColor = skipStyle
+		}
+		sections = append(sections, "")
+		sections = append(sections, statStyle.Render("   Success Rate:"))
+		sections = append(sections, fmt.Sprintf("   %s", rateColor.Render(fmt.Sprintf("%.1f%%", successRate))))
+	}
+
+	sections = append(sections, "")
+
+	// Show total rows transferred
+	if totalRows > 0 {
+		sections = append(sections, statStyle.Render("   Total Transferred:"))
+		sections = append(sections, fmt.Sprintf("   %s", valueStyle.Render(formatNumber(totalRows)+" rows")))
+		sections = append(sections, "")
 	}
 
 	// Show total bytes if any uploads occurred
 	if totalBytes > 0 {
+		sections = append(sections, statStyle.Render("   Total Data Uploaded:"))
+		sections = append(sections, fmt.Sprintf("   %s", valueStyle.Render(formatBytes(totalBytes))))
 		sections = append(sections, "")
-		sections = append(sections, fmt.Sprintf("   Total Data Uploaded: %s", formatBytes(totalBytes)))
+	}
+
+	// Show duration and throughput
+	if totalElapsed > 0 {
+		sections = append(sections, statStyle.Render("   Total Duration:"))
+		sections = append(sections, fmt.Sprintf("   %s", valueStyle.Render(formatDuration(totalElapsed))))
+		sections = append(sections, "")
+
+		// Calculate throughput
+		if totalRows > 0 && totalElapsed.Seconds() > 0 {
+			rowsPerSec := float64(totalRows) / totalElapsed.Seconds()
+			sections = append(sections, statStyle.Render("   Throughput:"))
+			sections = append(sections, fmt.Sprintf("   %s", valueStyle.Render(fmt.Sprintf("%s rows/sec", formatFloat(rowsPerSec)))))
+			if totalBytes > 0 {
+				mbPerSec := float64(totalBytes) / (1024 * 1024) / totalElapsed.Seconds()
+				sections = append(sections, fmt.Sprintf("   %s", valueStyle.Render(fmt.Sprintf("%s MB/sec", formatFloat(mbPerSec)))))
+			}
+			sections = append(sections, "")
+		}
+
+		// Show average time per partition
+		if uploaded > 0 && totalDuration > 0 {
+			avgDuration := totalDuration / time.Duration(uploaded)
+			sections = append(sections, statStyle.Render("   Avg Time per Partition:"))
+			sections = append(sections, fmt.Sprintf("   %s", valueStyle.Render(formatDuration(avgDuration))))
+			sections = append(sections, "")
+		}
+	}
+
+	// Show date range
+	if minDate != nil && maxDate != nil {
+		sections = append(sections, statStyle.Render("   Date Range:"))
+		if minDate.Equal(*maxDate) {
+			sections = append(sections, fmt.Sprintf("   %s", valueStyle.Render(minDate.Format("2006-01-02"))))
+		} else {
+			sections = append(sections, fmt.Sprintf("   %s", valueStyle.Render(fmt.Sprintf("%s to %s", minDate.Format("2006-01-02"), maxDate.Format("2006-01-02")))))
+		}
+		sections = append(sections, "")
+	}
+
+	// Show configuration summary
+	if m.config != nil {
+		sections = append(sections, statStyle.Render("   Configuration:"))
+		configParts := []string{}
+		if m.config.OutputFormat != "" {
+			configParts = append(configParts, fmt.Sprintf("Format: %s", strings.ToUpper(m.config.OutputFormat)))
+		}
+		if m.config.Compression != "" {
+			compStr := strings.ToUpper(m.config.Compression)
+			if m.config.CompressionLevel > 0 {
+				compStr += fmt.Sprintf(" (level %d)", m.config.CompressionLevel)
+			}
+			configParts = append(configParts, fmt.Sprintf("Compression: %s", compStr))
+		}
+		if m.config.S3.Bucket != "" {
+			configParts = append(configParts, fmt.Sprintf("S3: s3://%s", m.config.S3.Bucket))
+		}
+		if len(configParts) > 0 {
+			sections = append(sections, fmt.Sprintf("   %s", valueStyle.Render(strings.Join(configParts, " | "))))
+		}
+		sections = append(sections, "")
+	}
+
+	// List failures with details
+	if len(failedResults) > 0 {
+		sections = append(sections, errorStyle.Render("   Failed Partitions:"))
+		sections = append(sections, "")
+		for _, result := range failedResults {
+			partitionName := result.Partition.TableName
+			errorMsg := result.Error.Error()
+			// Truncate long error messages for better display
+			if len(errorMsg) > 80 {
+				errorMsg = errorMsg[:77] + "..."
+			}
+			sections = append(sections, fmt.Sprintf("   %s %s", errorStyle.Render("❌"), statStyle.Render(partitionName+":")))
+			sections = append(sections, fmt.Sprintf("      %s", errorStyle.Render(errorMsg)))
+			sections = append(sections, "")
+		}
 	}
 
 	sections = append(sections, "")
 	return sections
+}
+
+// formatNumber formats large numbers with comma separators
+func formatNumber(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+
+	str := fmt.Sprintf("%d", n)
+	var result strings.Builder
+	length := len(str)
+
+	for i, char := range str {
+		if i > 0 && (length-i)%3 == 0 {
+			result.WriteString(",")
+		}
+		result.WriteRune(char)
+	}
+
+	return result.String()
+}
+
+// formatDuration formats a duration into a human-readable string
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	if d < time.Hour {
+		minutes := int(d.Minutes())
+		seconds := int(d.Seconds()) % 60
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	}
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+	return fmt.Sprintf("%dh %dm", hours, minutes)
+}
+
+// formatFloat formats a float64 with appropriate precision
+func formatFloat(f float64) string {
+	if f < 0.01 {
+		return fmt.Sprintf("%.4f", f)
+	}
+	if f < 1 {
+		return fmt.Sprintf("%.2f", f)
+	}
+	if f < 1000 {
+		return fmt.Sprintf("%.1f", f)
+	}
+	if f < 1000000 {
+		return fmt.Sprintf("%.0f", f)
+	}
+	return fmt.Sprintf("%.2f", f)
 }
 
 func (m progressModel) View() string {
