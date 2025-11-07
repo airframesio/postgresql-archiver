@@ -1288,7 +1288,7 @@ func (m progressModel) renderCompletionSummary() []string {
 		sections = append(sections, errorStyle.Render(fmt.Sprintf("   ❌ Failed: %d", failed)))
 	}
 
-	// Show success rate
+	// Show archive rate
 	if totalProcessed > 0 {
 		rateColor := successStyle
 		if successRate < 50 {
@@ -1297,7 +1297,7 @@ func (m progressModel) renderCompletionSummary() []string {
 			rateColor = skipStyle
 		}
 		sections = append(sections, "")
-		sections = append(sections, statStyle.Render("   Success Rate:"))
+		sections = append(sections, statStyle.Render("   Archive Rate:"))
 		sections = append(sections, fmt.Sprintf("   %s", rateColor.Render(fmt.Sprintf("%.1f%%", successRate))))
 	}
 

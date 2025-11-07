@@ -1791,10 +1791,10 @@ func (a *Archiver) printSummary(results []ProcessResult, startTime time.Time, to
 		a.logger.Info(fmt.Sprintf("❌ Failed: %d", failed))
 	}
 
-	// Show success rate
+	// Show archive rate
 	if totalProcessed > 0 {
 		rateStr := fmt.Sprintf("%.1f%%", successRate)
-		a.logger.Info(fmt.Sprintf("   Success Rate: %s", rateStr))
+		a.logger.Info(fmt.Sprintf("   Archive Rate: %s", rateStr))
 	}
 
 	// Show total rows transferred
