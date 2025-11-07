@@ -399,6 +399,14 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, _ *tea.Program, _ *Ta
 
 	a.logger.Debug("Processing partitions...")
 	results := make([]ProcessResult, 0, len(partitions))
+
+	// Ensure summary is printed even on cancellation
+	defer func() {
+		if len(results) > 0 {
+			a.printSummary(results)
+		}
+	}()
+
 	for _, partition := range partitions {
 		// Check if context was cancelled
 		select {
@@ -423,8 +431,6 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, _ *tea.Program, _ *Ta
 	}
 
 	a.logger.Info("✅ All partitions processed")
-	a.printSummary(results)
-
 	return nil
 }
 
