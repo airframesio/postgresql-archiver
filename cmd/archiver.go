@@ -1385,7 +1385,6 @@ func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string
 // extractPartitionData extracts data from the partition and formats it
 // Deprecated: Replaced by extractPartitionDataStreaming. Kept for potential rollback.
 //
-//nolint:unused // Kept for rollback capability
 //lint:ignore U1000 Kept for potential rollback to non-streaming architecture
 func (a *Archiver) extractPartitionData(partition PartitionInfo, program *tea.Program, cache *PartitionCache, updateTaskStage func(string)) ([]byte, int64, error) {
 	extractStart := time.Now()
@@ -1683,7 +1682,7 @@ func (a *Archiver) printSummary(results []ProcessResult) {
 // extractRowsWithProgress extracts rows from partition as maps for formatting
 // Deprecated: Replaced by extractPartitionDataStreaming. Kept for potential rollback.
 //
-//nolint:gocognit,unused // complex row extraction with progress tracking, kept for rollback capability
+//nolint:gocognit // complex row extraction with progress tracking, kept for rollback capability
 //lint:ignore U1000 Kept for potential rollback to non-streaming architecture
 func (a *Archiver) extractRowsWithProgress(partition PartitionInfo, program *tea.Program) ([]map[string]interface{}, error) {
 	quotedTable := pq.QuoteIdentifier(partition.TableName)
