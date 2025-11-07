@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2025-01-06
+
+### Changed
+- **Streaming Architecture (Memory Efficiency):**
+  - Refactored data extraction to use streaming/chunked processing
+  - Memory usage now constant (~150 MB) regardless of partition size
+  - Eliminates out-of-memory (OOM) crashes on large partitions (10+ GB)
+  - Data flows: PostgreSQL → formatter → compressor → temp file → S3
+  - Replaced in-memory pipeline that required O(3x partition size) memory
+  - Processing pipeline now disk-based with constant memory footprint
+
+### Fixed
+- **Statement Timeout Retry Coverage:**
+  - Retry logic now wraps entire extraction process, not just query initialization
+  - Statement timeouts during row iteration (`rows.Next()`) are now properly retried
+  - Prevents silent failures on large partition extractions that timeout mid-processing
+  - Added `extractPartitionDataWithRetry()` wrapper function
+
+### Added
+- **Streaming Formatters:**
+  - New streaming interfaces: `StreamingFormatter` and `StreamWriter`
+  - Streaming implementations for JSONL, CSV, and Parquet formats
+  - Schema pre-query for CSV headers and Parquet type mapping
+  - Compression handled in streaming mode for all formats
+  - Parquet uses internal compression (snappy, zstd, gzip, lz4, none)
+  - JSONL/CSV use external compression via compressor pipeline
+
+- **Chunk Size Configuration:**
+  - New `--chunk-size` flag (default: 10,000 rows)
+  - YAML config: `chunk_size`
+  - Range: 100 to 1,000,000 rows
+  - Allows tuning based on average row size for optimal memory usage
+
+- **Temp File Infrastructure:**
+  - Added temp file creation and cleanup utilities
+  - Streaming data written to temp files before S3 upload
+  - MD5 hash calculated during streaming (no re-reading required)
+  - Automatic cleanup on errors or cancellation
+
+- **Schema Querying:**
+  - New `getTableSchema()` function queries `information_schema.columns`
+  - Returns column names and PostgreSQL UDT types
+  - Required for CSV column ordering and Parquet type mapping
+  - Implements `formatters.TableSchema` and `formatters.ColumnSchema` interfaces
+
+### Technical Details
+- **Memory Characteristics:**
+  - Chunk buffer: ~10,000 rows × ~10 KB/row = ~100 MB max
+  - Formatter buffer: Minimal (writes immediately)
+  - Compressor buffer: 4-32 MB (library-specific)
+  - **Total**: ~150 MB worst case, regardless of partition size
+
+- **Files Modified:**
+  - `cmd/archiver.go`: Streaming extraction, retry wrapper, temp file upload
+  - `cmd/schema.go`: New file for schema querying
+  - `cmd/config.go`: Added chunk_size configuration
+  - `cmd/root.go`: Added --chunk-size flag
+  - `cmd/formatters/*.go`: Streaming formatter implementations
+  - `cmd/compressors/*.go`: Added streaming writer support
+
 ## [1.3.1] - 2025-01-06
 
 ### Fixed

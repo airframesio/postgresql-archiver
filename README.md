@@ -193,6 +193,9 @@ Flags:
   - LZ4/Gzip: 1-9 (higher = better compression, slower)
 - `--output-duration` - File duration: `hourly`, `daily` (default), `weekly`, `monthly`, or `yearly`
 - `--date-column` - Optional timestamp column for duration-based splitting
+- `--chunk-size` - Number of rows to process per chunk (default: 10000, range: 100-1000000)
+  - Tune based on average row size for optimal memory usage
+  - Smaller chunks for large rows, larger chunks for small rows
 
 ## ⚙️ Configuration
 
@@ -548,7 +551,14 @@ The tool provides detailed error messages for common issues:
 1. **Increase Workers**: Use `--workers` to process more partitions in parallel
 2. **Network**: Ensure good bandwidth to S3 endpoint
 3. **Database**: Add indexes on date columns for faster queries
-4. **Memory**: Tool streams data to minimize memory usage
+4. **Memory Management**:
+   - Tool uses streaming architecture with constant ~150 MB memory footprint
+   - Memory usage independent of partition size (no OOM on multi-GB partitions)
+   - Tune `--chunk-size` based on average row size:
+     - Small rows (~1 KB): `--chunk-size 50000` (~50 MB)
+     - Medium rows (~10 KB): `--chunk-size 10000` (~100 MB, default)
+     - Large rows (~100 KB): `--chunk-size 1000` (~100 MB)
+     - Very large rows (1+ MB): `--chunk-size 100` (~100 MB)
 5. **Compression**: Multi-core zstd scales with CPU cores
 
 ## 🧪 Testing
