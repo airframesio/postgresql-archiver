@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] - 2025-11-07
+
+### Added
+- **Cancellation Summary:**
+  - Summary statistics now display when archival process is cancelled or interrupted
+  - Shows successful/failed partition counts and total bytes processed before interruption
+  - Uses deferred function to ensure summary prints even on context cancellation
+  - Provides visibility into progress made before Ctrl+C or other interruptions
+
+### Technical Details
+- Added `defer` statement in `runArchivalProcess()` to call `printSummary()` unconditionally
+- Summary displays for any interruption: user cancellation, timeout, or error
+- Maintains consistent user experience between successful completion and interruption
+
 ## [1.4.1] - 2025-01-07
 
 ### Fixed
