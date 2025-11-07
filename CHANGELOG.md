@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2] - 2025-01-06
+
+### Fixed
+- **Docker Tag Generation:**
+  - Fixed invalid Docker tag format error in GitHub Actions workflow
+  - SHA-based tags now only generated for branch builds, not tag builds
+  - Prevents error: `invalid tag "ghcr.io/airframesio/data-archiver:-91d167a"`
+
 ## [1.2.1] - 2025-01-06
 
 ### Fixed
