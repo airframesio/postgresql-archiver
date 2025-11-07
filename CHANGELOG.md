@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2025-01-06
+
+### Fixed
+- **Docker Build Issues:**
+  - Added `package-lock.json` to repository for reproducible npm dependency resolution in Docker builds
+  - Fixed `scripts/minify.sh` shebang from `#!/bin/bash` to `#!/bin/sh` for Alpine Linux compatibility
+  - Docker builds now work correctly with golang:1.23-alpine base image
+
+### Changed
+- Removed `package-lock.json` from `.gitignore` to ensure reproducible builds across environments
+
 ## [1.2.0] - 2025-01-06
 
 ### Changed
