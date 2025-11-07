@@ -164,7 +164,7 @@ type VersionCheckCache struct {
 // getVersionCheckCachePath returns the path to the version check cache file
 func getVersionCheckCachePath() string {
 	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, ".postgresql-archiver", "version_check.json")
+	return filepath.Join(homeDir, ".data-archiver", "version_check.json")
 }
 
 // getVersionCheckCache reads cached version check data

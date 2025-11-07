@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/airframesio/postgresql-archiver/cmd/compressors"
-	"github.com/airframesio/postgresql-archiver/cmd/formatters"
+	"github.com/airframesio/data-archiver/cmd/compressors"
+	"github.com/airframesio/data-archiver/cmd/formatters"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2025-01-06
+
+### Changed
+- **Project Renamed:** `postgresql-archiver` → `data-archiver`
+  - Binary renamed from `postgresql-archiver` to `data-archiver`
+  - Module path changed to `github.com/airframesio/data-archiver`
+  - Config file path changed from `~/.postgresql-archiver.yaml` to `~/.data-archiver.yaml`
+  - Cache directory changed from `~/.postgresql-archiver/` to `~/.data-archiver/`
+  - Docker image renamed from `ghcr.io/airframesio/postgresql-archiver` to `ghcr.io/airframesio/data-archiver`
+  - Homebrew formula renamed from `postgresql-archiver` to `data-archiver`
+  - Product description updated to clarify: "Currently supports PostgreSQL input and S3-compatible output"
+  - Environment variable prefix remains `ARCHIVE_` for backward compatibility
+
+### Breaking Changes
+- Users must update binary name in scripts and commands
+- Existing config files must be moved from `~/.postgresql-archiver.yaml` to `~/.data-archiver.yaml`
+- Existing cache will not be migrated automatically
+- Docker users must update image references
+
 ## [1.1.1] - 2025-01-06
 
 ### Added

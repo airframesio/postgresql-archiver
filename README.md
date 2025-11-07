@@ -1,19 +1,21 @@
-# PostgreSQL Archiver
+# Data Archiver
 
-[![CI](https://github.com/airframesio/postgresql-archiver/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/airframesio/postgresql-archiver/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/airframesio/postgresql-archiver)](https://goreportcard.com/report/github.com/airframesio/postgresql-archiver)
+[![CI](https://github.com/airframesio/data-archiver/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/airframesio/data-archiver/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/airframesio/data-archiver)](https://goreportcard.com/report/github.com/airframesio/data-archiver)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/airframesio/postgresql-archiver)](go.mod)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/airframesio/data-archiver)](go.mod)
 
-A high-performance CLI tool for archiving PostgreSQL partitioned table data to S3-compatible object storage.
+A high-performance CLI tool for archiving database data to S3-compatible object storage.
+
+**Currently supports:** PostgreSQL input (partitioned tables) and S3-compatible object storage output.
 
 ## Screenshots
 
 ### Terminal UI (TUI)
-![PostgreSQL Archiver TUI Screenshot](screenshot-tui.png)
+![Data Archiver TUI Screenshot](screenshot-tui.png)
 
 ### Web-based Cache Viewer
-![PostgreSQL Archiver Web UI Screenshot](screenshot-web.png)
+![Data Archiver Web UI Screenshot](screenshot-web.png)
 
 ## Features
 
@@ -62,31 +64,31 @@ A high-performance CLI tool for archiving PostgreSQL partitioned table data to S
 The easiest way to install on macOS or Linux:
 
 ```bash
-brew install airframesio/tap/postgresql-archiver
+brew install airframesio/tap/data-archiver
 ```
 
 ### Pre-built Binaries
 
-Download the latest release for your platform from the [releases page](https://github.com/airframesio/postgresql-archiver/releases).
+Download the latest release for your platform from the [releases page](https://github.com/airframesio/data-archiver/releases).
 
 ### Go Install
 
 ```bash
-go install github.com/airframesio/postgresql-archiver@latest
+go install github.com/airframesio/data-archiver@latest
 ```
 
 ### Build from Source
 
 ```bash
-git clone https://github.com/airframesio/postgresql-archiver.git
-cd postgresql-archiver
-go build -o postgresql-archiver
+git clone https://github.com/airframesio/data-archiver.git
+cd data-archiver
+go build -o data-archiver
 ```
 
 ## 🚀 Quick Start
 
 ```bash
-postgresql-archiver \
+data-archiver \
   --db-user myuser \
   --db-password mypass \
   --db-name mydb \
@@ -102,7 +104,7 @@ postgresql-archiver \
 
 **Advanced Example with Custom Output:**
 ```bash
-postgresql-archiver \
+data-archiver \
   --db-user myuser \
   --db-password mypass \
   --db-name mydb \
@@ -125,26 +127,26 @@ postgresql-archiver \
 ### Basic Command Structure
 
 ```bash
-postgresql-archiver [flags]
+data-archiver [flags]
 ```
 
 ### Help Output
 
 ```
-PostgreSQL Archiver
+Data Archiver
 
-A CLI tool to efficiently archive PostgreSQL partitioned table data to object storage.
+A CLI tool to efficiently archive database data to object storage.
 Supports multiple output formats (JSONL/CSV/Parquet), compression types (Zstandard/LZ4/Gzip),
 and flexible path templates for S3-compatible storage.
 
 Usage:
-  postgresql-archiver [flags]
+  data-archiver [flags]
 
 Flags:
       --cache-viewer                 start embedded cache viewer web server
       --compression string           compression type: zstd, lz4, gzip, none (default "zstd")
       --compression-level int        compression level (zstd: 1-22, lz4/gzip: 1-9, none: 0) (default 3)
-      --config string                config file (default is $HOME/.postgresql-archiver.yaml)
+      --config string                config file (default is $HOME/.data-archiver.yaml)
       --date-column string           timestamp column name for duration-based splitting (optional)
       --db-host string               PostgreSQL host (default "localhost")
       --db-name string               PostgreSQL database name
@@ -155,7 +157,7 @@ Flags:
   -d, --debug                        enable debug output
       --dry-run                      perform a dry run without uploading
       --end-date string              end date (YYYY-MM-DD) (default "2025-08-27")
-  -h, --help                         help for postgresql-archiver
+  -h, --help                         help for data-archiver
       --output-duration string       output file duration: hourly, daily, weekly, monthly, yearly (default "daily")
       --output-format string         output format: jsonl, csv, parquet (default "jsonl")
       --path-template string         S3 path template with placeholders: {table}, {YYYY}, {MM}, {DD}, {HH} (required)
@@ -226,7 +228,7 @@ export ARCHIVE_VIEWER_PORT=8080
 
 ### Configuration File
 
-Create `~/.postgresql-archiver.yaml`:
+Create `~/.data-archiver.yaml`:
 
 ```yaml
 db:
@@ -312,10 +314,10 @@ The archiver includes an embedded web server for monitoring cache and progress:
 
 ```bash
 # Start archiver with embedded cache viewer
-postgresql-archiver --cache-viewer --viewer-port 8080 [other options]
+data-archiver --cache-viewer --viewer-port 8080 [other options]
 
 # Or run standalone cache viewer
-postgresql-archiver cache-viewer --port 8080
+data-archiver cache-viewer --port 8080
 ```
 
 Features:
@@ -401,7 +403,7 @@ Files are skipped if:
 Enable debug mode for detailed output:
 
 ```bash
-postgresql-archiver --debug --table flights ...
+data-archiver --debug --table flights ...
 ```
 
 Debug mode shows:
@@ -417,7 +419,7 @@ Debug mode shows:
 Test your configuration without uploading:
 
 ```bash
-postgresql-archiver --dry-run --table flights ...
+data-archiver --dry-run --table flights ...
 ```
 
 This will:
@@ -435,7 +437,7 @@ The archiver uses an intelligent two-tier caching system to maximize performance
 - Caches partition row counts for 24 hours
 - Speeds up progress bar initialization
 - Always recounts today's partition for accuracy
-- Cache location: `~/.postgresql-archiver/cache/{table}_metadata.json`
+- Cache location: `~/.data-archiver/cache/{table}_metadata.json`
 
 ### File Metadata Cache
 - Caches compressed/uncompressed sizes, MD5 hash, and S3 upload status
@@ -457,12 +459,12 @@ On subsequent runs with cached metadata:
 The archiver provides real-time monitoring capabilities:
 
 ### PID Tracking
-- Creates PID file at `~/.postgresql-archiver/archiver.pid` when running
+- Creates PID file at `~/.data-archiver/archiver.pid` when running
 - Allows external tools to check if archiver is active
 - Automatically cleaned up on exit
 
 ### Task Progress File
-- Writes current task details to `~/.postgresql-archiver/current_task.json`
+- Writes current task details to `~/.data-archiver/current_task.json`
 - Includes:
   - Current operation (connecting, counting, extracting, uploading)
   - Progress percentage
@@ -503,7 +505,7 @@ The archiver ensures data integrity through multiple verification methods:
 ### Archive Last 30 Days
 
 ```bash
-postgresql-archiver \
+data-archiver \
   --table events \
   --start-date $(date -d '30 days ago' +%Y-%m-%d) \
   --config ~/.archive-config.yaml
@@ -512,7 +514,7 @@ postgresql-archiver \
 ### Archive Specific Month with Debug
 
 ```bash
-postgresql-archiver \
+data-archiver \
   --table transactions \
   --start-date 2024-06-01 \
   --end-date 2024-06-30 \
@@ -523,7 +525,7 @@ postgresql-archiver \
 ### Dry Run with Custom Config
 
 ```bash
-postgresql-archiver \
+data-archiver \
   --config production.yaml \
   --table orders \
   --dry-run \
@@ -579,7 +581,7 @@ Build and run with Docker:
 
 ```bash
 # Build the Docker image
-docker build -t postgresql-archiver .
+docker build -t data-archiver .
 
 # Run with environment variables
 docker run --rm \
@@ -592,12 +594,12 @@ docker run --rm \
   -e ARCHIVE_S3_ACCESS_KEY=key \
   -e ARCHIVE_S3_SECRET_KEY=secret \
   -e ARCHIVE_TABLE=events \
-  postgresql-archiver
+  data-archiver
 
 # Run with config file
 docker run --rm \
-  -v ~/.postgresql-archiver.yaml:/root/.postgresql-archiver.yaml \
-  postgresql-archiver
+  -v ~/.data-archiver.yaml:/root/.data-archiver.yaml \
+  data-archiver
 ```
 
 ## 🔧 Development
@@ -612,8 +614,8 @@ docker run --rm \
 
 ```bash
 # Clone the repository
-git clone https://github.com/airframesio/postgresql-archiver.git
-cd postgresql-archiver
+git clone https://github.com/airframesio/data-archiver.git
+cd data-archiver
 
 # Install Go dependencies
 go mod download
@@ -625,7 +627,7 @@ npm install
 npm run minify
 
 # Build the binary (with minified assets embedded)
-go build -o postgresql-archiver
+go build -o data-archiver
 
 # Or use the npm build script which minifies and builds in one command
 npm run build
@@ -634,9 +636,9 @@ npm run build
 go test ./...
 
 # Build for different platforms
-GOOS=linux GOARCH=amd64 go build -o postgresql-archiver-linux-amd64
-GOOS=darwin GOARCH=arm64 go build -o postgresql-archiver-darwin-arm64
-GOOS=windows GOARCH=amd64 go build -o postgresql-archiver.exe
+GOOS=linux GOARCH=amd64 go build -o data-archiver-linux-amd64
+GOOS=darwin GOARCH=arm64 go build -o data-archiver-darwin-arm64
+GOOS=windows GOARCH=amd64 go build -o data-archiver.exe
 ```
 
 ### Web Asset Minification

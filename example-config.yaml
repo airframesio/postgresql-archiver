@@ -1,5 +1,5 @@
-# Example configuration file for postgresql-archiver
-# Copy this to ~/.postgresql-archiver.yaml and update with your settings
+# Example configuration file for data-archiver
+# Copy this to ~/.data-archiver.yaml and update with your settings
 
 # PostgreSQL connection settings
 db:

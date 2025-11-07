@@ -284,7 +284,7 @@ func TestPartitionCache_LegacyMigration(t *testing.T) {
 		}
 
 		// Save legacy cache
-		cacheDir := filepath.Join(tempDir, ".postgresql-archiver", "cache")
+		cacheDir := filepath.Join(tempDir, ".data-archiver", "cache")
 		_ = os.MkdirAll(cacheDir, 0o755)
 		legacyPath := filepath.Join(cacheDir, "legacy_table_counts.json")
 
@@ -324,7 +324,7 @@ func TestCachePathGeneration(t *testing.T) {
 	defer os.Setenv("HOME", originalHome)
 
 	tableName := "my_table"
-	expectedPath := filepath.Join(tempDir, ".postgresql-archiver", "cache", "my_table_metadata.json")
+	expectedPath := filepath.Join(tempDir, ".data-archiver", "cache", "my_table_metadata.json")
 
 	actualPath := getCachePath(tableName)
 	if actualPath != expectedPath {

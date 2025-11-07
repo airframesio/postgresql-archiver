@@ -94,25 +94,25 @@ jobs:
     - name: Build for multiple platforms
       run: |
         # Linux AMD64
-        GOOS=linux GOARCH=amd64 go build -o postgresql-archiver-linux-amd64
-        
+        GOOS=linux GOARCH=amd64 go build -o data-archiver-linux-amd64
+
         # Linux ARM64
-        GOOS=linux GOARCH=arm64 go build -o postgresql-archiver-linux-arm64
-        
+        GOOS=linux GOARCH=arm64 go build -o data-archiver-linux-arm64
+
         # macOS AMD64
-        GOOS=darwin GOARCH=amd64 go build -o postgresql-archiver-darwin-amd64
-        
+        GOOS=darwin GOARCH=amd64 go build -o data-archiver-darwin-amd64
+
         # macOS ARM64 (Apple Silicon)
-        GOOS=darwin GOARCH=arm64 go build -o postgresql-archiver-darwin-arm64
-        
+        GOOS=darwin GOARCH=arm64 go build -o data-archiver-darwin-arm64
+
         # Windows AMD64
-        GOOS=windows GOARCH=amd64 go build -o postgresql-archiver-windows-amd64.exe
-    
+        GOOS=windows GOARCH=amd64 go build -o data-archiver-windows-amd64.exe
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: binaries
-        path: postgresql-archiver-*
+        path: data-archiver-*
         retention-days: 7
 
   lint:

@@ -24,7 +24,7 @@ builds:
       - -X main.Version={{.Version}}
       - -X main.CommitHash={{.ShortCommit}}
       - -X main.BuildDate={{.Date}}
-    binary: postgresql-archiver
+    binary: data-archiver
 
 archives:
   - format: tar.gz
@@ -70,14 +70,14 @@ changelog:
       order: 999
 
 brews:
-  - name: postgresql-archiver
+  - name: data-archiver
     repository:
       owner: airframesio
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
-    homepage: "https://github.com/airframesio/postgresql-archiver"
-    description: "Archive PostgreSQL partition data to object storage with parallel processing"
+    homepage: "https://github.com/airframesio/data-archiver"
+    description: "Archive database data to object storage with parallel processing. Currently supports PostgreSQL input and S3-compatible output."
     license: "MIT"
     commit_author:
       name: goreleaserbot
@@ -87,30 +87,30 @@ brews:
       - name: postgresql
         type: optional
     test: |
-      system "#{bin}/postgresql-archiver", "--version"
-      assert_match version.to_s, shell_output("#{bin}/postgresql-archiver --version 2>&1")
+      system "#{bin}/data-archiver", "--version"
+      assert_match version.to_s, shell_output("#{bin}/data-archiver --version 2>&1")
     install: |
-      bin.install "postgresql-archiver"
+      bin.install "data-archiver"
 
 release:
   github:
     owner: airframesio
-    name: postgresql-archiver
+    name: data-archiver
   draft: false
   prerelease: auto
   mode: replace
   header: |
     ## Release {{.Tag}}
 
-    See [CHANGELOG.md](https://github.com/airframesio/postgresql-archiver/blob/main/CHANGELOG.md) for detailed changes.
+    See [CHANGELOG.md](https://github.com/airframesio/data-archiver/blob/main/CHANGELOG.md) for detailed changes.
   footer: |
-    **Full Changelog**: https://github.com/airframesio/postgresql-archiver/compare/{{ .PreviousTag }}...{{ .Tag }}
+    **Full Changelog**: https://github.com/airframesio/data-archiver/compare/{{ .PreviousTag }}...{{ .Tag }}
 
     ## Installation
 
     ### Homebrew (macOS/Linux)
     ```bash
-    brew install airframesio/tap/postgresql-archiver
+    brew install airframesio/tap/data-archiver
     ```
 
     ### Direct Download

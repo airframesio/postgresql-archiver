@@ -46,7 +46,7 @@ type RowCountEntry struct {
 
 func getCachePath(tableName string) string {
 	homeDir, _ := os.UserHomeDir()
-	cacheDir := filepath.Join(homeDir, ".postgresql-archiver", "cache")
+	cacheDir := filepath.Join(homeDir, ".data-archiver", "cache")
 	_ = os.MkdirAll(cacheDir, 0o755)
 	return filepath.Join(cacheDir, fmt.Sprintf("%s_metadata.json", tableName))
 }
@@ -54,7 +54,7 @@ func getCachePath(tableName string) string {
 // Legacy cache path for migration
 func getLegacyCachePath(tableName string) string {
 	homeDir, _ := os.UserHomeDir()
-	cacheDir := filepath.Join(homeDir, ".postgresql-archiver", "cache")
+	cacheDir := filepath.Join(homeDir, ".data-archiver", "cache")
 	return filepath.Join(cacheDir, fmt.Sprintf("%s_counts.json", tableName))
 }
 

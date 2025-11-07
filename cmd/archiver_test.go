@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/airframesio/postgresql-archiver/cmd/compressors"
+	"github.com/airframesio/data-archiver/cmd/compressors"
 )
 
 // newTestLogger creates a logger for testing

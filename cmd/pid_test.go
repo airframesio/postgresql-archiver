@@ -310,7 +310,7 @@ func TestPathFunctions(t *testing.T) {
 	defer os.Setenv("HOME", originalHome)
 
 	t.Run("GetPIDFilePath", func(t *testing.T) {
-		expected := filepath.Join(tempDir, ".postgresql-archiver", "archiver.pid")
+		expected := filepath.Join(tempDir, ".data-archiver", "archiver.pid")
 		actual := GetPIDFilePath()
 		if actual != expected {
 			t.Fatalf("expected path %s, got %s", expected, actual)
@@ -318,7 +318,7 @@ func TestPathFunctions(t *testing.T) {
 	})
 
 	t.Run("GetTaskFilePath", func(t *testing.T) {
-		expected := filepath.Join(tempDir, ".postgresql-archiver", "current_task.json")
+		expected := filepath.Join(tempDir, ".data-archiver", "current_task.json")
 		actual := GetTaskFilePath()
 		if actual != expected {
 			t.Fatalf("expected path %s, got %s", expected, actual)

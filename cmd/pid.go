@@ -29,13 +29,13 @@ type TaskInfo struct {
 // GetPIDFilePath returns the path to the PID file
 func GetPIDFilePath() string {
 	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, ".postgresql-archiver", "archiver.pid")
+	return filepath.Join(homeDir, ".data-archiver", "archiver.pid")
 }
 
 // GetTaskFilePath returns the path to the task info file
 func GetTaskFilePath() string {
 	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, ".postgresql-archiver", "current_task.json")
+	return filepath.Join(homeDir, ".data-archiver", "current_task.json")
 }
 
 // WritePIDFile writes the current process PID to a file

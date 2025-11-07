@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  archiver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+    image: data-archiver:${VERSION:-latest}
+    container_name: data-archiver
+    restart: unless-stopped
+
+    # Environment variables for configuration
+    # All settings can be overridden via environment variables with ARCHIVE_ prefix
+    environment:
+      # Debug and logging
+      ARCHIVE_DEBUG: ${ARCHIVE_DEBUG:-false}
+      ARCHIVE_LOG_FORMAT: ${ARCHIVE_LOG_FORMAT:-json}
+
+      # PostgreSQL connection (REQUIRED - set in .env file)
+      ARCHIVE_DB_HOST: ${ARCHIVE_DB_HOST}
+      ARCHIVE_DB_PORT: ${ARCHIVE_DB_PORT:-5432}
+      ARCHIVE_DB_USER: ${ARCHIVE_DB_USER}
+      ARCHIVE_DB_PASSWORD: ${ARCHIVE_DB_PASSWORD}
+      ARCHIVE_DB_NAME: ${ARCHIVE_DB_NAME}
+      ARCHIVE_DB_SSLMODE: ${ARCHIVE_DB_SSLMODE:-require}
+
+      # S3 configuration (REQUIRED - set in .env file)
+      ARCHIVE_S3_ENDPOINT: ${ARCHIVE_S3_ENDPOINT}
+      ARCHIVE_S3_BUCKET: ${ARCHIVE_S3_BUCKET}
+      ARCHIVE_S3_ACCESS_KEY: ${ARCHIVE_S3_ACCESS_KEY}
+      ARCHIVE_S3_SECRET_KEY: ${ARCHIVE_S3_SECRET_KEY}
+      ARCHIVE_S3_REGION: ${ARCHIVE_S3_REGION:-auto}
+      ARCHIVE_S3_PATH_TEMPLATE: ${ARCHIVE_S3_PATH_TEMPLATE}
+
+      # Archival configuration
+      ARCHIVE_TABLE: ${ARCHIVE_TABLE}
+      ARCHIVE_START_DATE: ${ARCHIVE_START_DATE}
+      ARCHIVE_END_DATE: ${ARCHIVE_END_DATE}
+      ARCHIVE_WORKERS: ${ARCHIVE_WORKERS:-4}
+      ARCHIVE_DRY_RUN: ${ARCHIVE_DRY_RUN:-false}
+      ARCHIVE_SKIP_COUNT: ${ARCHIVE_SKIP_COUNT:-false}
+
+      # Output configuration
+      ARCHIVE_OUTPUT_DURATION: ${ARCHIVE_OUTPUT_DURATION:-daily}
+      ARCHIVE_OUTPUT_FORMAT: ${ARCHIVE_OUTPUT_FORMAT:-jsonl}
+      ARCHIVE_COMPRESSION: ${ARCHIVE_COMPRESSION:-zstd}
+      ARCHIVE_COMPRESSION_LEVEL: ${ARCHIVE_COMPRESSION_LEVEL:-3}
+      ARCHIVE_DATE_COLUMN: ${ARCHIVE_DATE_COLUMN}
+
+      # Cache viewer (optional)
+      ARCHIVE_CACHE_VIEWER: ${ARCHIVE_CACHE_VIEWER:-false}
+      ARCHIVE_VIEWER_PORT: ${ARCHIVE_VIEWER_PORT:-8080}
+
+    # Volumes for cache persistence
+    volumes:
+      # Cache directory for metadata and progress tracking
+      - archiver-cache:/tmp/.data-archiver
+
+      # Optional: Mount custom config file
+      # - ./config/data-archiver.yaml:/root/.data-archiver.yaml:ro
+
+    # Expose web viewer port (optional)
+    ports:
+      - "${VIEWER_PORT:-8080}:8080"
+
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 512M
+
+    # Healthcheck for the web viewer (if enabled)
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  archiver-cache:
+    driver: local
+
+# Example .env file configuration:
+#
+# # PostgreSQL
+# ARCHIVE_DB_HOST=your-postgres-host.example.com
+# ARCHIVE_DB_PORT=5432
+# ARCHIVE_DB_USER=archiver
+# ARCHIVE_DB_PASSWORD=your-secure-password
+# ARCHIVE_DB_NAME=production
+# ARCHIVE_DB_SSLMODE=require
+#
+# # S3
+# ARCHIVE_S3_ENDPOINT=https://s3.amazonaws.com
+# ARCHIVE_S3_BUCKET=your-archive-bucket
+# ARCHIVE_S3_ACCESS_KEY=your-access-key
+# ARCHIVE_S3_SECRET_KEY=your-secret-key
+# ARCHIVE_S3_REGION=us-east-1
+# ARCHIVE_S3_PATH_TEMPLATE=archives/{table}/{YYYY}/{MM}/{DD}/{table}_{YYYY}{MM}{DD}.jsonl.zst
+#
+# # Archival
+# ARCHIVE_TABLE=events
+# ARCHIVE_START_DATE=2024-01-01
+# ARCHIVE_END_DATE=2024-12-31
+# ARCHIVE_WORKERS=4
+#
+# # Optional
+# ARCHIVE_CACHE_VIEWER=true
+# VIEWER_PORT=8080

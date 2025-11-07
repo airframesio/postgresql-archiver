@@ -1,0 +1,188 @@
+# Data Archiver - Example Configuration for Docker
+# This file demonstrates all available configuration options
+# Copy to ~/.data-archiver.yaml or mount in container
+
+# Debug mode - enables verbose logging
+debug: false
+
+# Log format: text, logfmt, or json
+# - text: Human-readable output (default)
+# - logfmt: Key-value pairs (machine-readable)
+# - json: JSON structured logging (best for log aggregation)
+log_format: text
+
+# Dry run mode - perform all operations without uploading to S3
+dry_run: false
+
+# Number of parallel workers for archiving
+# Adjust based on database and network capacity
+workers: 4
+
+# Skip row counting - faster startup but no progress bars
+# Useful for very large tables where counting is slow
+skip_count: false
+
+# Enable cache viewer web interface
+cache_viewer: true
+
+# Port for cache viewer web server
+viewer_port: 8080
+
+# PostgreSQL database configuration
+db:
+  # Database host (use service name in docker-compose)
+  host: postgres
+
+  # Database port
+  port: 5432
+
+  # Database user
+  user: archiver
+
+  # Database password
+  # SECURITY: Use environment variables in production!
+  # password: ${ARCHIVE_DB_PASSWORD}
+  password: devpassword
+
+  # Database name
+  name: archiver_dev
+
+  # SSL mode: disable, require, verify-ca, verify-full
+  # Use 'disable' for docker-compose (internal network)
+  # Use 'require' or higher for production
+  sslmode: disable
+
+# S3-compatible storage configuration
+s3:
+  # S3 endpoint URL
+  # - AWS S3: https://s3.amazonaws.com
+  # - MinIO (docker): http://minio:9000
+  # - Hetzner: https://your-bucket.your-region.hetzner.com
+  endpoint: http://minio:9000
+
+  # S3 bucket name
+  bucket: archives
+
+  # S3 access key
+  # SECURITY: Use environment variables in production!
+  # access_key: ${ARCHIVE_S3_ACCESS_KEY}
+  access_key: minioadmin
+
+  # S3 secret key
+  # SECURITY: Use environment variables in production!
+  # secret_key: ${ARCHIVE_S3_SECRET_KEY}
+  secret_key: minioadmin
+
+  # S3 region
+  region: us-east-1
+
+  # S3 path template with placeholders
+  # Available placeholders:
+  #   {table}  - Table name
+  #   {YYYY}   - 4-digit year
+  #   {MM}     - 2-digit month
+  #   {DD}     - 2-digit day
+  #   {HH}     - 2-digit hour (for hourly duration)
+  #
+  # Examples:
+  #   Daily files:   "archives/{table}/{YYYY}/{MM}/{DD}/{table}_{YYYY}{MM}{DD}.jsonl.zst"
+  #   Hourly files:  "archives/{table}/{YYYY}/{MM}/{DD}/{HH}/{table}_{YYYY}{MM}{DD}_{HH}.jsonl.zst"
+  #   Monthly files: "archives/{table}/{YYYY}/{MM}/{table}_{YYYY}{MM}.jsonl.zst"
+  path_template: "archives/{table}/{YYYY}/{MM}/{DD}/{table}_{YYYY}{MM}{DD}.jsonl.zst"
+
+# Base table name to archive (required)
+# This should be the parent table name for partitioned tables
+table: events
+
+# Start date for archiving (YYYY-MM-DD format)
+# Defaults to beginning of data if not specified
+start_date: "2024-01-01"
+
+# End date for archiving (YYYY-MM-DD format)
+# Defaults to today if not specified
+end_date: "2024-01-31"
+
+# Output file duration
+# Options: hourly, daily, weekly, monthly, yearly
+# Determines how data is grouped into output files
+output_duration: daily
+
+# Output format
+# Options:
+#   - jsonl: JSON Lines (one JSON object per line)
+#   - csv: Comma-separated values
+#   - parquet: Apache Parquet columnar format
+output_format: jsonl
+
+# Compression type
+# Options:
+#   - zstd: Zstandard (recommended, best compression ratio)
+#   - lz4: LZ4 (faster, lower compression ratio)
+#   - gzip: Gzip (compatible, slower)
+#   - none: No compression
+compression: zstd
+
+# Compression level
+# - zstd: 1-22 (default: 3, higher = better compression but slower)
+# - lz4: 1-9 (default: 1)
+# - gzip: 1-9 (default: 6)
+# - none: 0
+compression_level: 3
+
+# Timestamp column name for duration-based splitting
+# Optional: If specified, data will be split based on this column's timestamp
+# If not specified, partition names will be used for splitting
+# date_column: created_at
+
+# Example configurations for different scenarios:
+
+# === Scenario 1: AWS S3 Production ===
+# db:
+#   host: prod-postgres.example.com
+#   port: 5432
+#   user: archiver
+#   password: ${ARCHIVE_DB_PASSWORD}
+#   name: production
+#   sslmode: verify-full
+# s3:
+#   endpoint: https://s3.amazonaws.com
+#   bucket: company-archives
+#   access_key: ${ARCHIVE_S3_ACCESS_KEY}
+#   secret_key: ${ARCHIVE_S3_SECRET_KEY}
+#   region: us-east-1
+#   path_template: "prod/{table}/year={YYYY}/month={MM}/day={DD}/data.parquet.zst"
+# table: user_events
+# output_format: parquet
+# compression: zstd
+# compression_level: 9
+
+# === Scenario 2: Hetzner Storage Box ===
+# s3:
+#   endpoint: https://your-bucket.fsn1.your-region.hetzner.cloud
+#   bucket: archives
+#   access_key: ${HETZNER_ACCESS_KEY}
+#   secret_key: ${HETZNER_SECRET_KEY}
+#   region: auto
+#   path_template: "archives/{table}/{YYYY}-{MM}/{table}_{YYYY}{MM}{DD}.jsonl.zst"
+
+# === Scenario 3: High-frequency hourly archiving ===
+# output_duration: hourly
+# s3:
+#   path_template: "archives/{table}/{YYYY}/{MM}/{DD}/{HH}/{table}_{YYYY}{MM}{DD}_{HH}00.jsonl.lz4"
+# compression: lz4  # Faster compression for high-frequency archiving
+# compression_level: 1
+# workers: 8  # More workers for parallel processing
+
+# === Scenario 4: Monthly archiving with CSV ===
+# output_duration: monthly
+# output_format: csv
+# compression: gzip
+# s3:
+#   path_template: "archives/{table}/{YYYY}/{table}_{YYYY}{MM}.csv.gz"
+
+# === Scenario 5: Large data volumes with Parquet ===
+# output_format: parquet
+# compression: zstd
+# compression_level: 6  # Higher compression for large files
+# workers: 8
+# date_column: event_timestamp  # Use specific timestamp column

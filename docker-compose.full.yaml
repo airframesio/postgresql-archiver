@@ -1,0 +1,228 @@
+version: '3.8'
+
+# Full stack deployment with PostgreSQL, MinIO, and Archiver
+# Suitable for production single-server deployments
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: data-archiver-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-archiver}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-archiver}
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=en_US.UTF-8"
+
+    volumes:
+      # Persistent data storage
+      - postgres-data:/var/lib/postgresql/data
+
+      # Optional: Custom initialization scripts
+      # - ./docker/init-db:/docker-entrypoint-initdb.d:ro
+
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-archiver}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+    networks:
+      - archiver-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # MinIO S3-compatible storage
+  minio:
+    image: minio/minio:latest
+    container_name: data-archiver-s3
+    restart: unless-stopped
+
+    command: server /data --console-address ":9001"
+
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+
+    volumes:
+      - minio-data:/data
+
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+    networks:
+      - archiver-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # MinIO bucket initialization
+  minio-init:
+    image: minio/mc:latest
+    container_name: data-archiver-s3-init
+    depends_on:
+      minio:
+        condition: service_healthy
+
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin};
+      mc mb --ignore-existing myminio/${MINIO_BUCKET:-archives};
+      mc anonymous set download myminio/${MINIO_BUCKET:-archives};
+      exit 0;
+      "
+
+    networks:
+      - archiver-network
+
+  # PostgreSQL Archiver
+  archiver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+    image: data-archiver:${VERSION:-latest}
+    container_name: data-archiver
+    restart: unless-stopped
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+    environment:
+      # Debug and logging
+      ARCHIVE_DEBUG: ${ARCHIVE_DEBUG:-false}
+      ARCHIVE_LOG_FORMAT: ${ARCHIVE_LOG_FORMAT:-json}
+
+      # PostgreSQL connection (using service name)
+      ARCHIVE_DB_HOST: postgres
+      ARCHIVE_DB_PORT: 5432
+      ARCHIVE_DB_USER: ${POSTGRES_USER:-archiver}
+      ARCHIVE_DB_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      ARCHIVE_DB_NAME: ${POSTGRES_DB:-archiver}
+      ARCHIVE_DB_SSLMODE: disable
+
+      # MinIO S3 configuration (using service name)
+      ARCHIVE_S3_ENDPOINT: http://minio:9000
+      ARCHIVE_S3_BUCKET: ${MINIO_BUCKET:-archives}
+      ARCHIVE_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      ARCHIVE_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      ARCHIVE_S3_REGION: us-east-1
+      ARCHIVE_S3_PATH_TEMPLATE: ${ARCHIVE_S3_PATH_TEMPLATE:-archives/{table}/{YYYY}/{MM}/{DD}/{table}_{YYYY}{MM}{DD}.jsonl.zst}
+
+      # Archival configuration
+      ARCHIVE_TABLE: ${ARCHIVE_TABLE}
+      ARCHIVE_START_DATE: ${ARCHIVE_START_DATE}
+      ARCHIVE_END_DATE: ${ARCHIVE_END_DATE}
+      ARCHIVE_WORKERS: ${ARCHIVE_WORKERS:-4}
+      ARCHIVE_DRY_RUN: ${ARCHIVE_DRY_RUN:-false}
+      ARCHIVE_SKIP_COUNT: ${ARCHIVE_SKIP_COUNT:-false}
+
+      # Output configuration
+      ARCHIVE_OUTPUT_DURATION: ${ARCHIVE_OUTPUT_DURATION:-daily}
+      ARCHIVE_OUTPUT_FORMAT: ${ARCHIVE_OUTPUT_FORMAT:-jsonl}
+      ARCHIVE_COMPRESSION: ${ARCHIVE_COMPRESSION:-zstd}
+      ARCHIVE_COMPRESSION_LEVEL: ${ARCHIVE_COMPRESSION_LEVEL:-3}
+      ARCHIVE_DATE_COLUMN: ${ARCHIVE_DATE_COLUMN}
+
+      # Cache viewer
+      ARCHIVE_CACHE_VIEWER: ${ARCHIVE_CACHE_VIEWER:-true}
+      ARCHIVE_VIEWER_PORT: 8080
+
+    volumes:
+      # Cache directory for metadata and progress tracking
+      - archiver-cache:/tmp/.data-archiver
+
+      # Optional: Mount custom config file
+      # - ./docker/config/data-archiver.yaml:/root/.data-archiver.yaml:ro
+
+    ports:
+      - "${VIEWER_PORT:-8080}:8080"
+
+    networks:
+      - archiver-network
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 512M
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  archiver-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+    driver: local
+  minio-data:
+    driver: local
+  archiver-cache:
+    driver: local
+
+# Example .env file configuration:
+#
+# # PostgreSQL
+# POSTGRES_USER=archiver
+# POSTGRES_PASSWORD=your-secure-password
+# POSTGRES_DB=production
+#
+# # MinIO
+# MINIO_ROOT_USER=minioadmin
+# MINIO_ROOT_PASSWORD=your-secure-password
+# MINIO_BUCKET=archives
+#
+# # Archival
+# ARCHIVE_TABLE=events
+# ARCHIVE_START_DATE=2024-01-01
+# ARCHIVE_END_DATE=2024-12-31
+# ARCHIVE_WORKERS=4
+#
+# # Optional
+# ARCHIVE_CACHE_VIEWER=true
+# VIEWER_PORT=8080
+# POSTGRES_PORT=5432
+# MINIO_API_PORT=9000
+# MINIO_CONSOLE_PORT=9001

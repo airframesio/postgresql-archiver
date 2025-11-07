@@ -18,7 +18,7 @@ import (
 
 var (
 	// Version information - set via ldflags during build
-	// Example: go build -ldflags "-X github.com/airframesio/postgresql-archiver/cmd.Version=1.2.3"
+	// Example: go build -ldflags "-X github.com/airframesio/data-archiver/cmd.Version=1.2.3"
 	Version = "dev" // Default to "dev" if not set during build
 
 	// signalContext is set by main() before Cobra initialization
@@ -147,13 +147,14 @@ func initLogger(isDebug bool, format string) {
 }
 
 var rootCmd = &cobra.Command{
-	Use:     "postgresql-archiver",
+	Use:     "data-archiver",
 	Version: Version,
-	Short:   "📦 Archive PostgreSQL partition data to object storage",
-	Long: titleStyle.Render("PostgreSQL Archiver") + `
+	Short:   "📦 Archive database data to object storage (currently PostgreSQL → S3)",
+	Long: titleStyle.Render("Data Archiver") + `
 
-A CLI tool to efficiently archive PostgreSQL partitioned table data to object storage.
-Extracts data by day, converts to JSONL, compresses with zstd, and uploads to S3-compatible storage.`,
+A CLI tool to efficiently archive database data to object storage.
+Currently supports PostgreSQL input (partitioned tables) and S3-compatible storage output.
+Extracts data by day, converts to JSONL/CSV/Parquet, compresses with zstd/lz4/gzip, and uploads.`,
 	Run: func(_ *cobra.Command, _ []string) {
 		runArchive()
 	},
@@ -166,7 +167,7 @@ func Execute() error {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.postgresql-archiver.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.data-archiver.yaml)")
 	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "enable debug output")
 	rootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "text", "log format (text, logfmt, json)")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "perform a dry run without uploading")
@@ -241,7 +242,7 @@ func initConfig() {
 
 		viper.AddConfigPath(home)
 		viper.SetConfigType("yaml")
-		viper.SetConfigName(".postgresql-archiver")
+		viper.SetConfigName(".data-archiver")
 	}
 
 	viper.SetEnvPrefix("ARCHIVE")
@@ -304,7 +305,7 @@ func runArchive() {
 
 	// Log startup banner
 	logger.Info("")
-	logger.Info(fmt.Sprintf("🚀 PostgreSQL Archiver v%s", Version))
+	logger.Info(fmt.Sprintf("🚀 Data Archiver v%s", Version))
 	logger.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	// Display stop instructions (for Warp terminal compatibility) - only in debug mode

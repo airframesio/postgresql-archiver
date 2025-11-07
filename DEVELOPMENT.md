@@ -1,6 +1,6 @@
 # Development Guide
 
-This guide covers setting up your development environment for contributing to PostgreSQL Archiver.
+This guide covers setting up your development environment for contributing to Data Archiver.
 
 ## Prerequisites
 
@@ -74,7 +74,7 @@ golangci-lint run --fix
 go build -v ./...
 
 # Build for specific platform
-GOOS=linux GOARCH=amd64 go build -o postgresql-archiver-linux-amd64
+GOOS=linux GOARCH=amd64 go build -o data-archiver-linux-amd64
 
 # Build all supported platforms
 ./scripts/build-all.sh  # (if available)
@@ -143,10 +143,10 @@ The archiver logs to stdout. For more detailed information:
 
 ```bash
 # Run with verbose output
-postgresql-archiver -v -table flights ...
+data-archiver -v -table flights ...
 
 # Pipe output to a file
-postgresql-archiver -table flights ... > archiver.log 2>&1
+data-archiver -table flights ... > archiver.log 2>&1
 ```
 
 ### Test Coverage Analysis

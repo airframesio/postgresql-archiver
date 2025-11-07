@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/airframesio/postgresql-archiver/cmd"
+	"github.com/airframesio/data-archiver/cmd"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -19,7 +19,7 @@ var errorStyle = lipgloss.NewStyle().
 
 func main() {
 	pid := os.Getpid()
-	stopFile := filepath.Join(os.TempDir(), fmt.Sprintf("postgresql-archiver-%d.stop", pid))
+	stopFile := filepath.Join(os.TempDir(), fmt.Sprintf("data-archiver-%d.stop", pid))
 
 	// Set up signal handling BEFORE any other initialization
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

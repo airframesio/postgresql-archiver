@@ -138,7 +138,7 @@ func serveCacheData(w http.ResponseWriter, _ *http.Request) {
 
 	// Get cache directory
 	homeDir, _ := os.UserHomeDir()
-	cacheDir := filepath.Join(homeDir, ".postgresql-archiver", "cache")
+	cacheDir := filepath.Join(homeDir, ".data-archiver", "cache")
 
 	// Read all cache files
 	files, err := os.ReadDir(cacheDir)
@@ -331,8 +331,8 @@ func broadcastManager() {
 // setupWatchDirs creates and watches required directories
 func setupWatchDirs(watcher *fsnotify.Watcher) {
 	homeDir, _ := os.UserHomeDir()
-	cacheDir := filepath.Join(homeDir, ".postgresql-archiver", "cache")
-	taskDir := filepath.Join(homeDir, ".postgresql-archiver")
+	cacheDir := filepath.Join(homeDir, ".data-archiver", "cache")
+	taskDir := filepath.Join(homeDir, ".data-archiver")
 
 	// Create directories if they don't exist
 	_ = os.MkdirAll(cacheDir, 0o755)
@@ -417,7 +417,7 @@ func dataMonitorFallback() {
 	for range ticker.C {
 		// Check cache files
 		homeDir, _ := os.UserHomeDir()
-		cacheDir := filepath.Join(homeDir, ".postgresql-archiver", "cache")
+		cacheDir := filepath.Join(homeDir, ".data-archiver", "cache")
 
 		// Check if cache directory was modified
 		if info, err := os.Stat(cacheDir); err == nil {
@@ -479,7 +479,7 @@ func sendStatusData(conn *websocket.Conn) {
 func getCacheDataForWS() CacheResponse {
 	// Get cache directory
 	homeDir, _ := os.UserHomeDir()
-	cacheDir := filepath.Join(homeDir, ".postgresql-archiver", "cache")
+	cacheDir := filepath.Join(homeDir, ".data-archiver", "cache")
 
 	response := CacheResponse{
 		Tables:    []TableCache{},

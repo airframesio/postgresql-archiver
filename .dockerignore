@@ -1,0 +1,61 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# GitHub workflows and CI
+.github
+
+# Documentation
+*.md
+!README.md
+docs/design-system
+
+# Docker files (avoid recursive copying)
+Dockerfile
+.dockerignore
+docker-compose*.yaml
+docker-compose*.yml
+
+# Development tools
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Build artifacts
+postgresql-archiver
+postgresql-archiver-*
+dist/
+bin/
+
+# Test files
+*_test.go
+testdata/
+
+# Node.js (will be installed during build)
+node_modules/
+
+# Cache and temporary files
+.postgresql-archiver/
+*.log
+*.tmp
+*.temp
+
+# macOS
+.DS_Store
+
+# Linux
+*.core
+
+# Coverage reports
+*.out
+coverage.txt
+coverage.html
+
+# GoReleaser
+.goreleaser.yaml
+
+# Scripts that aren't needed in container
+scripts/release.sh
