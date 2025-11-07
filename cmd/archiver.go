@@ -1380,16 +1380,16 @@ func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string
 
 	exists, s3Size, s3ETag := a.checkObjectExists(objectKey)
 	if !exists {
-		a.logger.Debug("  💾 Have cached metadata but file doesn't exist in S3, will upload")
+		a.logger.Debug("💾 Have cached metadata but file doesn't exist in S3, will upload")
 		return false, result
 	}
 
 	s3ETag = strings.Trim(s3ETag, "\"")
 	isMultipart := strings.Contains(s3ETag, "-")
 
-	a.logger.Debug(fmt.Sprintf("  💾 Using cached metadata for %s:", partition.TableName))
-	a.logger.Debug(fmt.Sprintf("     Cached: size=%d, md5=%s, multipartETag=%s", cachedSize, cachedMD5, cachedMultipartETag))
-	a.logger.Debug(fmt.Sprintf("     S3: size=%d, etag=%s (multipart=%v)", s3Size, s3ETag, isMultipart))
+	a.logger.Debug(fmt.Sprintf("💾 Using cached metadata for %s:", partition.TableName))
+	a.logger.Debug(fmt.Sprintf("   Cached: size=%d, md5=%s, multipartETag=%s", cachedSize, cachedMD5, cachedMultipartETag))
+	a.logger.Debug(fmt.Sprintf("   S3:     size=%d, etag=%s (multipart=%v)", s3Size, s3ETag, isMultipart))
 
 	// Check if cached metadata matches S3
 	if s3Size == cachedSize {
@@ -1399,7 +1399,7 @@ func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string
 			result.SkipReason = fmt.Sprintf("Cached metadata matches S3 (size=%d, md5=%s)", cachedSize, cachedMD5)
 			result.Stage = StageSkipped
 			result.BytesWritten = cachedSize
-			a.logger.Debug("     ✅ Skipping based on cache: Size and MD5 match")
+			a.logger.Debug("   ✅ Skipping based on cache: Size and MD5 match")
 			return true, result
 		} else if isMultipart {
 			// For multipart uploads, compare cached multipart ETag with S3 ETag
@@ -1408,10 +1408,10 @@ func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string
 				result.SkipReason = fmt.Sprintf("Cached metadata matches S3 (size=%d, multipartETag=%s)", cachedSize, cachedMultipartETag)
 				result.Stage = StageSkipped
 				result.BytesWritten = cachedSize
-				a.logger.Debug("     ✅ Skipping based on cache: Size and multipart ETag match")
+				a.logger.Debug("   ✅ Skipping based on cache: Size and multipart ETag match")
 				return true, result
 			}
-			a.logger.Debug("     ℹ️  Multipart upload with matching size but no cached ETag or ETag mismatch, proceeding with extraction to verify")
+			a.logger.Debug("   ℹ️  Multipart upload with matching size but no cached ETag or ETag mismatch, proceeding with extraction to verify")
 		}
 	}
 
@@ -1511,7 +1511,7 @@ func (a *Archiver) checkExistingFile(partition PartitionInfo, objectKey string, 
 	updateTaskStage("Checking if file exists...")
 	exists, s3Size, s3ETag := a.checkObjectExists(objectKey)
 	if !exists {
-		a.logger.Debug(fmt.Sprintf("  📊 File does not exist in S3: %s", objectKey))
+		a.logger.Debug(fmt.Sprintf("📊 File does not exist in S3: %s", objectKey))
 		return false, result
 	}
 
@@ -1520,12 +1520,12 @@ func (a *Archiver) checkExistingFile(partition PartitionInfo, objectKey string, 
 	isMultipart := strings.Contains(s3ETag, "-")
 
 	// Always log comparison details in debug mode
-	a.logger.Debug(fmt.Sprintf("  📊 Comparing files for %s:", partition.TableName))
-	a.logger.Debug(fmt.Sprintf("     S3: size=%d, etag=%s (multipart=%v)", s3Size, s3ETag, isMultipart))
-	a.logger.Debug(fmt.Sprintf("     Local: size=%d, md5=%s", localSize, localMD5))
+	a.logger.Debug(fmt.Sprintf("📊 Comparing files for %s:", partition.TableName))
+	a.logger.Debug(fmt.Sprintf("   S3:     size=%d, etag=%s (multipart=%v)", s3Size, s3ETag, isMultipart))
+	a.logger.Debug(fmt.Sprintf("   Local:  size=%d, md5=%s", localSize, localMD5))
 
 	if s3Size != localSize {
-		a.logger.Debug(fmt.Sprintf("     ❌ Size mismatch: S3=%d, Local=%d", s3Size, localSize))
+		a.logger.Debug(fmt.Sprintf("   ❌ Size mismatch: S3=%d, Local=%d", s3Size, localSize))
 		return false, result
 	}
 
@@ -1535,7 +1535,7 @@ func (a *Archiver) checkExistingFile(partition PartitionInfo, objectKey string, 
 		result.Skipped = true
 		result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and MD5 (%s)", s3Size, s3ETag)
 		result.Stage = StageSkipped
-		a.logger.Debug("     ✅ Skipping: Size and MD5 match")
+		a.logger.Debug("   ✅ Skipping: Size and MD5 match")
 		// Save to cache for future runs
 		cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
 		_ = cache.save(a.config.Table)
@@ -1545,24 +1545,24 @@ func (a *Archiver) checkExistingFile(partition PartitionInfo, objectKey string, 
 	if isMultipart {
 		// For multipart uploads, calculate the multipart ETag
 		localMultipartETag := a.calculateMultipartETag(compressed)
-		a.logger.Debug(fmt.Sprintf("     Local multipart ETag: %s", localMultipartETag))
+		a.logger.Debug(fmt.Sprintf("   Local multipart ETag: %s", localMultipartETag))
 		if s3ETag == localMultipartETag {
 			result.Skipped = true
 			result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and multipart ETag (%s)", s3Size, s3ETag)
 			result.Stage = StageSkipped
-			a.logger.Debug("     ✅ Skipping: Size and multipart ETag match")
+			a.logger.Debug("   ✅ Skipping: Size and multipart ETag match")
 			// Save to cache for future runs
 			cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
 			_ = cache.save(a.config.Table)
 			return true, result
 		}
-		a.logger.Debug(fmt.Sprintf("     ❌ Multipart ETag mismatch: S3=%s, Local=%s", s3ETag, localMultipartETag))
+		a.logger.Debug(fmt.Sprintf("   ❌ Multipart ETag mismatch: S3=%s, Local=%s", s3ETag, localMultipartETag))
 	} else {
-		a.logger.Debug(fmt.Sprintf("     ❌ MD5 mismatch: S3=%s, Local=%s", s3ETag, localMD5))
+		a.logger.Debug(fmt.Sprintf("   ❌ MD5 mismatch: S3=%s, Local=%s", s3ETag, localMD5))
 	}
 
 	// Size or hash doesn't match, we'll re-upload
-	a.logger.Debug("     🔄 Will re-upload due to differences")
+	a.logger.Debug("   🔄 Will re-upload due to differences")
 
 	return false, result
 }
@@ -1783,7 +1783,6 @@ func (a *Archiver) printSummary(results []ProcessResult, startTime time.Time, to
 	a.logger.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	a.logger.Info("📈 Summary")
 	a.logger.Info(fmt.Sprintf("   Total Partitions: %d", totalPartitions))
-	a.logger.Info("")
 	a.logger.Info(fmt.Sprintf("✅ Successful: %d", successful))
 	if skipped > 0 {
 		a.logger.Info(fmt.Sprintf("⏭️  Skipped: %d", skipped))
@@ -1791,31 +1790,26 @@ func (a *Archiver) printSummary(results []ProcessResult, startTime time.Time, to
 	if failed > 0 {
 		a.logger.Info(fmt.Sprintf("❌ Failed: %d", failed))
 	}
-	a.logger.Info("")
 
 	// Show success rate
 	if totalProcessed > 0 {
 		rateStr := fmt.Sprintf("%.1f%%", successRate)
 		a.logger.Info(fmt.Sprintf("   Success Rate: %s", rateStr))
-		a.logger.Info("")
 	}
 
 	// Show total rows transferred
 	if totalRows > 0 {
 		a.logger.Info(fmt.Sprintf("   Total Transferred: %s rows", formatNumberForSummary(totalRows)))
-		a.logger.Info("")
 	}
 
 	// Show total bytes if any uploads occurred
 	if totalBytes > 0 {
 		a.logger.Info(fmt.Sprintf("   Total Data Uploaded: %s", formatBytesForSummary(totalBytes)))
-		a.logger.Info("")
 	}
 
 	// Show duration and throughput
 	if totalElapsed > 0 {
 		a.logger.Info(fmt.Sprintf("   Total Duration: %s", formatDurationForSummary(totalElapsed)))
-		a.logger.Info("")
 
 		// Calculate throughput
 		if totalRows > 0 && totalElapsed.Seconds() > 0 {
@@ -1825,14 +1819,12 @@ func (a *Archiver) printSummary(results []ProcessResult, startTime time.Time, to
 				mbPerSec := float64(totalBytes) / (1024 * 1024) / totalElapsed.Seconds()
 				a.logger.Info(fmt.Sprintf("   Throughput: %s MB/sec", formatFloatForSummary(mbPerSec)))
 			}
-			a.logger.Info("")
 		}
 
 		// Show average time per partition
 		if successful > 0 && totalDuration > 0 {
 			avgDuration := totalDuration / time.Duration(successful)
 			a.logger.Info(fmt.Sprintf("   Avg Time per Partition: %s", formatDurationForSummary(avgDuration)))
-			a.logger.Info("")
 		}
 	}
 
@@ -1843,7 +1835,6 @@ func (a *Archiver) printSummary(results []ProcessResult, startTime time.Time, to
 		} else {
 			a.logger.Info(fmt.Sprintf("   Date Range: %s to %s", minDate.Format("2006-01-02"), maxDate.Format("2006-01-02")))
 		}
-		a.logger.Info("")
 	}
 
 	// List failures with details
