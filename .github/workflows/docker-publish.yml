@@ -60,8 +60,8 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             # Edge tag for develop branch
             type=raw,value=edge,enable=${{ github.ref == 'refs/heads/develop' }}
-            # Git commit SHA (short)
-            type=sha,prefix={{branch}}-
+            # Git commit SHA (short) - only for branch builds
+            type=sha,prefix={{branch}}-,enable=${{ github.ref_type == 'branch' }}
           labels: |
             org.opencontainers.image.title=Data Archiver
             org.opencontainers.image.description=Archive database data to object storage. Currently supports PostgreSQL input and S3-compatible output.
