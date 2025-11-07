@@ -51,4 +51,3 @@ build/
 
 # Node.js dependencies (for minification tools)
 node_modules/
-package-lock.json
