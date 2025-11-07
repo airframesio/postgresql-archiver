@@ -1852,6 +1852,49 @@ func (a *Archiver) extractRowsWithDateFilter(partition PartitionInfo, startTime,
 	return result, nil
 }
 
+// convertPostgreSQLValue converts PostgreSQL driver values to appropriate Go types
+// The pq driver returns int64 for all integer types, but formatters (especially Parquet)
+// need specific types based on the actual PostgreSQL column type
+func convertPostgreSQLValue(value interface{}, pgType string) interface{} {
+	if value == nil {
+		return nil
+	}
+
+	switch pgType {
+	case "int2", "int4":
+		// PostgreSQL driver returns int64, but we need int32 for Parquet INT32
+		// Safe conversion: PostgreSQL int2 is -32768 to 32767, int4 is -2147483648 to 2147483647
+		if v, ok := value.(int64); ok {
+			return int32(v) //nolint:gosec // G115: Safe conversion, PostgreSQL int4 fits in int32
+		}
+	case "int8":
+		// Keep as int64
+		return value
+	case "float4":
+		// PostgreSQL driver returns float64, convert to float32
+		if v, ok := value.(float64); ok {
+			return float32(v)
+		}
+	case "float8", "numeric", "decimal":
+		// Keep as float64
+		return value
+	case "bool":
+		// Keep as bool
+		return value
+	case "timestamp", "timestamptz", "date":
+		// Keep as time.Time
+		return value
+	case "bytea":
+		// Keep as []byte
+		return value
+	default:
+		// For strings and other types, keep as-is
+		return value
+	}
+
+	return value
+}
+
 // extractPartitionDataStreaming extracts partition data using streaming architecture
 // This streams data in chunks to a temp file, avoiding loading everything into memory
 //
@@ -2008,10 +2051,11 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 			return
 		}
 
-		// Convert to map[string]interface{}
+		// Convert to map[string]interface{} with type conversion
 		rowData := make(map[string]interface{}, len(columns))
 		for i, col := range columns {
-			rowData[col.GetName()] = scanValues[i]
+			// Convert PostgreSQL driver types to appropriate Go types for formatters
+			rowData[col.GetName()] = convertPostgreSQLValue(scanValues[i], col.GetType())
 		}
 
 		chunk = append(chunk, rowData)
