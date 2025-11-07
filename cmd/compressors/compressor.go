@@ -3,6 +3,7 @@ package compressors
 import (
 	"errors"
 	"fmt"
+	"io"
 )
 
 // ErrUnsupportedCompression is returned when an unsupported compression type is requested
@@ -12,6 +13,9 @@ var ErrUnsupportedCompression = errors.New("unsupported compression type")
 type Compressor interface {
 	// Compress compresses the input data
 	Compress(data []byte, level int) ([]byte, error)
+
+	// NewWriter creates a streaming compression writer
+	NewWriter(w io.Writer, level int) io.WriteCloser
 
 	// Extension returns the file extension for this compression (e.g., ".zst", ".lz4", ".gz")
 	Extension() string
@@ -35,3 +39,10 @@ func GetCompressor(compression string) (Compressor, error) {
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedCompression, compression)
 	}
 }
+
+// nopWriteCloser wraps a Writer to add a no-op Close method
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (nopWriteCloser) Close() error { return nil }

@@ -55,6 +55,7 @@ var (
 	skipCount          bool
 	cacheViewer        bool
 	viewerPort         int
+	chunkSize          int
 	pathTemplate       string
 	outputDuration     string
 	outputFormat       string
@@ -198,6 +199,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&skipCount, "skip-count", false, "skip counting rows (faster startup, no progress bars)")
 	rootCmd.Flags().BoolVar(&cacheViewer, "cache-viewer", false, "start embedded cache viewer web server")
 	rootCmd.Flags().IntVar(&viewerPort, "viewer-port", 8080, "port for cache viewer web server")
+	rootCmd.Flags().IntVar(&chunkSize, "chunk-size", 10000, "number of rows to process in each chunk (streaming mode, 0 = auto)")
 
 	// Output configuration flags
 	rootCmd.Flags().StringVar(&pathTemplate, "path-template", "", "S3 path template with placeholders: {table}, {YYYY}, {MM}, {DD}, {HH} (required)")
@@ -217,6 +219,7 @@ func init() {
 	_ = viper.BindPFlag("db.user", rootCmd.Flags().Lookup("db-user"))
 	_ = viper.BindPFlag("cache_viewer", rootCmd.Flags().Lookup("cache-viewer"))
 	_ = viper.BindPFlag("viewer_port", rootCmd.Flags().Lookup("viewer-port"))
+	_ = viper.BindPFlag("chunk_size", rootCmd.Flags().Lookup("chunk-size"))
 	_ = viper.BindPFlag("db.password", rootCmd.Flags().Lookup("db-password"))
 	_ = viper.BindPFlag("db.name", rootCmd.Flags().Lookup("db-name"))
 	_ = viper.BindPFlag("db.sslmode", rootCmd.Flags().Lookup("db-sslmode"))
@@ -283,6 +286,7 @@ func runArchive() {
 		SkipCount:   viper.GetBool("skip_count"),
 		CacheViewer: viper.GetBool("cache_viewer"),
 		ViewerPort:  viper.GetInt("viewer_port"),
+		ChunkSize:   viper.GetInt("chunk_size"),
 		Database: DatabaseConfig{
 			Host:             viper.GetString("db.host"),
 			Port:             viper.GetInt("db.port"),

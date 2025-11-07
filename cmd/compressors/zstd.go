@@ -3,6 +3,7 @@ package compressors
 import (
 	"bytes"
 	"fmt"
+	"io"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -64,6 +65,32 @@ func (c *ZstdCompressor) Compress(data []byte, level int) ([]byte, error) {
 // Extension returns the file extension for Zstandard compression
 func (c *ZstdCompressor) Extension() string {
 	return ".zst"
+}
+
+// NewWriter creates a streaming zstd compression writer
+func (c *ZstdCompressor) NewWriter(w io.Writer, level int) io.WriteCloser {
+	// Map level to zstd encoder level
+	var encoderLevel zstd.EncoderLevel
+	switch {
+	case level <= 0:
+		encoderLevel = zstd.SpeedFastest
+	case level <= 3:
+		encoderLevel = zstd.SpeedDefault
+	case level <= 7:
+		encoderLevel = zstd.SpeedBetterCompression
+	default:
+		encoderLevel = zstd.SpeedBestCompression
+	}
+
+	encoder, err := zstd.NewWriter(w,
+		zstd.WithEncoderLevel(encoderLevel),
+		zstd.WithEncoderConcurrency(c.workers))
+	if err != nil {
+		// Return a no-op writer if we can't create the encoder
+		// This shouldn't happen in practice, but provides a fallback
+		return &nopWriteCloser{w}
+	}
+	return encoder
 }
 
 // DefaultLevel returns the default compression level for Zstandard

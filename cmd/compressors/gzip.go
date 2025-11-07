@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"io"
 )
 
 // GzipCompressor handles Gzip compression
@@ -43,6 +44,21 @@ func (c *GzipCompressor) Compress(data []byte, level int) ([]byte, error) {
 // Extension returns the file extension for Gzip compression
 func (c *GzipCompressor) Extension() string {
 	return ".gz"
+}
+
+// NewWriter creates a streaming gzip compression writer
+func (c *GzipCompressor) NewWriter(w io.Writer, level int) io.WriteCloser {
+	// Validate and normalize level (1-9, or -1 for default)
+	if level < 1 || level > 9 {
+		level = gzip.DefaultCompression
+	}
+
+	writer, err := gzip.NewWriterLevel(w, level)
+	if err != nil {
+		// Fallback to default level if custom level fails
+		writer, _ = gzip.NewWriterLevel(w, gzip.DefaultCompression)
+	}
+	return writer
 }
 
 // DefaultLevel returns the default compression level for Gzip

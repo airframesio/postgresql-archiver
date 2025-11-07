@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -102,6 +104,26 @@ func isRetryableError(err error) bool {
 	}
 
 	return false
+}
+
+// getTempDir returns the directory to use for temporary files
+// Falls back to os.TempDir() if no specific directory is configured
+func getTempDir() string {
+	// TODO: Make this configurable via Config.TempDir if needed
+	return os.TempDir()
+}
+
+// createTempFile creates a temporary file with the archiver prefix
+// The caller is responsible for closing and removing the file
+func createTempFile() (*os.File, error) {
+	return os.CreateTemp(getTempDir(), "data-archiver-*.tmp")
+}
+
+// cleanupTempFile removes a temporary file, ignoring errors if it doesn't exist
+func cleanupTempFile(path string) {
+	if path != "" {
+		_ = os.Remove(path) // Ignore error - file might already be removed
+	}
 }
 
 type Archiver struct {
@@ -1089,41 +1111,19 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	default:
 	}
 
-	// Extract data
-	data, uncompressedSize, err := a.extractPartitionData(partition, program, cache, updateTaskStage)
+	// Extract data with streaming (includes compression and MD5 calculation)
+	tempFilePath, fileSize, md5Hash, uncompressedSize, err := a.extractPartitionDataWithRetry(partition, program, cache, updateTaskStage)
 	if err != nil {
 		result.Error = err
 		result.Stage = "Extracting"
 		result.Duration = time.Since(startTime)
 		return result
 	}
+	// Ensure temp file cleanup on error
+	defer cleanupTempFile(tempFilePath)
 
-	// Check for cancellation after extraction
-	select {
-	case <-a.ctx.Done():
-		result.Error = a.ctx.Err()
-		result.Stage = StageCancelled
-		result.Duration = time.Since(startTime)
-		return result
-	default:
-	}
-
-	// Compress data
-	compressed, localMD5, err := a.compressPartitionData(data, partition, program, cache, updateTaskStage)
-	if err != nil {
-		result.Error = err
-		result.Stage = "Compressing"
-		result.Duration = time.Since(startTime)
-		return result
-	}
 	result.Compressed = true
-	result.BytesWritten = int64(len(compressed))
-
-	// Check if we can skip upload
-	if shouldSkip, skipResult := a.checkExistingFile(partition, objectKey, compressed, localMD5, int64(len(compressed)), uncompressedSize, cache, updateTaskStage); shouldSkip {
-		skipResult.Duration = time.Since(startTime)
-		return skipResult
-	}
+	result.BytesWritten = fileSize
 
 	// Check for cancellation before upload
 	select {
@@ -1142,7 +1142,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 			program.Send(updateProgress("Uploading to S3...", 0, 100))
 		}
 		result.Stage = "Uploading"
-		if err := a.uploadToS3(objectKey, compressed); err != nil {
+		if err := a.uploadTempFileToS3(tempFilePath, objectKey); err != nil {
 			result.Error = fmt.Errorf("upload failed: %w", err)
 			result.Duration = time.Since(startTime)
 			return result
@@ -1153,9 +1153,9 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 		}
 
 		// Save metadata to cache after successful upload
-		cache.setFileMetadata(partition.TableName, objectKey, int64(len(compressed)), uncompressedSize, localMD5, true)
+		cache.setFileMetadata(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, true)
 		_ = cache.save(a.config.Table)
-		a.logger.Debug(fmt.Sprintf("  💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s", len(compressed), uncompressedSize, localMD5))
+		a.logger.Debug(fmt.Sprintf("  💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s", fileSize, uncompressedSize, md5Hash))
 	}
 
 	result.Stage = "Complete"
@@ -1384,6 +1384,9 @@ func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string
 }
 
 // extractPartitionData extracts data from the partition and formats it
+// Deprecated: Replaced by extractPartitionDataStreaming. Kept for potential rollback.
+//
+//nolint:unused // Kept for rollback capability
 func (a *Archiver) extractPartitionData(partition PartitionInfo, program *tea.Program, cache *PartitionCache, updateTaskStage func(string)) ([]byte, int64, error) {
 	extractStart := time.Now()
 	updateTaskStage("Extracting data...")
@@ -1678,8 +1681,9 @@ func (a *Archiver) printSummary(results []ProcessResult) {
 }
 
 // extractRowsWithProgress extracts rows from partition as maps for formatting
+// Deprecated: Replaced by extractPartitionDataStreaming. Kept for potential rollback.
 //
-//nolint:gocognit // complex row extraction with progress tracking
+//nolint:gocognit,unused // complex row extraction with progress tracking, kept for rollback capability
 func (a *Archiver) extractRowsWithProgress(partition PartitionInfo, program *tea.Program) ([]map[string]interface{}, error) {
 	quotedTable := pq.QuoteIdentifier(partition.TableName)
 	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable)
@@ -1846,4 +1850,367 @@ func (a *Archiver) extractRowsWithDateFilter(partition PartitionInfo, startTime,
 	}
 
 	return result, nil
+}
+
+// extractPartitionDataStreaming extracts partition data using streaming architecture
+// This streams data in chunks to a temp file, avoiding loading everything into memory
+func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, program *tea.Program, cache *PartitionCache, updateTaskStage func(string)) (tempFilePath string, fileSize int64, md5Hash string, uncompressedSize int64, err error) {
+	extractStart := time.Now()
+	updateTaskStage("Getting table schema...")
+
+	// Get table schema for streaming formatters
+	schema, schemaErr := a.getTableSchema(a.ctx, partition.TableName)
+	if schemaErr != nil {
+		cache.setError(partition.TableName, fmt.Sprintf("Schema query failed: %v", schemaErr))
+		_ = cache.save(a.config.Table)
+		err = fmt.Errorf("schema query failed: %w", schemaErr)
+		return
+	}
+
+	// Determine chunk size (use config or default)
+	chunkSize := a.config.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = 10000 // Default chunk size
+	}
+
+	// Create temp file for output
+	tempFile, tempErr := createTempFile()
+	if tempErr != nil {
+		err = fmt.Errorf("failed to create temp file: %w", tempErr)
+		return
+	}
+	tempFilePath = tempFile.Name()
+
+	// Ensure cleanup on error
+	defer func() {
+		if err != nil {
+			tempFile.Close()
+			cleanupTempFile(tempFilePath)
+			tempFilePath = ""
+		}
+	}()
+
+	updateTaskStage("Setting up streaming pipeline...")
+
+	// Get streaming formatter
+	formatter := formatters.GetStreamingFormatter(a.config.OutputFormat)
+
+	// Set up streaming pipeline based on format's compression handling
+	var streamWriter formatters.StreamWriter
+	var compressorWriter io.WriteCloser
+	var hasher hash.Hash
+	var multiWriter io.Writer
+
+	if formatters.UsesInternalCompression(a.config.OutputFormat) {
+		// Parquet handles compression internally
+		// Pipeline: formatter → hasher → tempFile
+		hasher = md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
+		multiWriter = io.MultiWriter(tempFile, hasher)
+		streamWriter, err = formatter.NewWriter(multiWriter, schema)
+		if err != nil {
+			err = fmt.Errorf("failed to create streaming formatter: %w", err)
+			return
+		}
+	} else {
+		// External compression needed (JSONL, CSV)
+		// Pipeline: formatter → compressor → hasher → tempFile
+		compressor, compErr := compressors.GetCompressor(a.config.Compression)
+		if compErr != nil {
+			err = fmt.Errorf("failed to get compressor: %w", compErr)
+			return
+		}
+
+		hasher = md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
+		multiWriter = io.MultiWriter(tempFile, hasher)
+		compressorWriter = compressor.NewWriter(multiWriter, a.config.CompressionLevel)
+
+		streamWriter, err = formatter.NewWriter(compressorWriter, schema)
+		if err != nil {
+			if compressorWriter != nil {
+				compressorWriter.Close()
+			}
+			err = fmt.Errorf("failed to create streaming formatter: %w", err)
+			return
+		}
+	}
+
+	// Stream data in chunks
+	updateTaskStage("Extracting data...")
+	if program != nil && partition.RowCount > 0 {
+		program.Send(updateProgress("Extracting data...", 0, partition.RowCount))
+	}
+
+	quotedTable := pq.QuoteIdentifier(partition.TableName)
+	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable)
+
+	rows, queryErr := a.db.QueryContext(a.ctx, query)
+	if queryErr != nil {
+		streamWriter.Close()
+		if compressorWriter != nil {
+			compressorWriter.Close()
+		}
+		err = fmt.Errorf("query failed: %w", queryErr)
+		return
+	}
+	defer rows.Close()
+
+	// Process rows in chunks
+	chunk := make([]map[string]interface{}, 0, chunkSize)
+	rowCount := int64(0)
+	updateInterval := int64(1000)
+
+	if partition.RowCount > 0 {
+		updateInterval = partition.RowCount / 100
+		if updateInterval < 1000 {
+			updateInterval = 1000
+		}
+	}
+
+	for rows.Next() {
+		// Check for cancellation
+		if rowCount%100 == 0 {
+			select {
+			case <-a.ctx.Done():
+				streamWriter.Close()
+				if compressorWriter != nil {
+					compressorWriter.Close()
+				}
+				err = a.ctx.Err()
+				return
+			default:
+			}
+		}
+
+		var jsonData json.RawMessage
+		if scanErr := rows.Scan(&jsonData); scanErr != nil {
+			streamWriter.Close()
+			if compressorWriter != nil {
+				compressorWriter.Close()
+			}
+			err = fmt.Errorf("failed to scan row: %w", scanErr)
+			return
+		}
+
+		var rowData map[string]interface{}
+		if unmarshalErr := json.Unmarshal(jsonData, &rowData); unmarshalErr != nil {
+			streamWriter.Close()
+			if compressorWriter != nil {
+				compressorWriter.Close()
+			}
+			err = fmt.Errorf("failed to unmarshal row: %w", unmarshalErr)
+			return
+		}
+
+		chunk = append(chunk, rowData)
+		rowCount++
+
+		// Write chunk when full
+		if len(chunk) >= chunkSize {
+			if writeErr := streamWriter.WriteChunk(chunk); writeErr != nil {
+				streamWriter.Close()
+				if compressorWriter != nil {
+					compressorWriter.Close()
+				}
+				err = fmt.Errorf("failed to write chunk: %w", writeErr)
+				return
+			}
+
+			// Track uncompressed size (approximate - JSON size of chunk)
+			for _, row := range chunk {
+				jsonBytes, _ := json.Marshal(row)
+				uncompressedSize += int64(len(jsonBytes)) + 1 // +1 for newline
+			}
+
+			chunk = chunk[:0] // Reset slice, keeping capacity
+
+			// Update progress
+			if program != nil && partition.RowCount > 0 && rowCount%updateInterval == 0 {
+				program.Send(updateProgress("Extracting data...", rowCount, partition.RowCount))
+			}
+		}
+	}
+
+	// Check for errors during iteration
+	if rowsErr := rows.Err(); rowsErr != nil {
+		streamWriter.Close()
+		if compressorWriter != nil {
+			compressorWriter.Close()
+		}
+		err = fmt.Errorf("error iterating rows: %w", rowsErr)
+		return
+	}
+
+	// Write final chunk
+	if len(chunk) > 0 {
+		if writeErr := streamWriter.WriteChunk(chunk); writeErr != nil {
+			streamWriter.Close()
+			if compressorWriter != nil {
+				compressorWriter.Close()
+			}
+			err = fmt.Errorf("failed to write final chunk: %w", writeErr)
+			return
+		}
+
+		// Track uncompressed size of final chunk
+		for _, row := range chunk {
+			jsonBytes, _ := json.Marshal(row)
+			uncompressedSize += int64(len(jsonBytes)) + 1
+		}
+	}
+
+	// Close stream writer (this flushes formatters and writes footers)
+	if closeErr := streamWriter.Close(); closeErr != nil {
+		if compressorWriter != nil {
+			compressorWriter.Close()
+		}
+		err = fmt.Errorf("failed to close stream writer: %w", closeErr)
+		return
+	}
+
+	// Close compressor (if used)
+	if compressorWriter != nil {
+		if closeErr := compressorWriter.Close(); closeErr != nil {
+			err = fmt.Errorf("failed to close compressor: %w", closeErr)
+			return
+		}
+	}
+
+	// Close temp file to flush all writes
+	if closeErr := tempFile.Close(); closeErr != nil {
+		err = fmt.Errorf("failed to close temp file: %w", closeErr)
+		return
+	}
+
+	// Get file size
+	fileInfo, statErr := os.Stat(tempFilePath)
+	if statErr != nil {
+		err = fmt.Errorf("failed to stat temp file: %w", statErr)
+		return
+	}
+	fileSize = fileInfo.Size()
+
+	// Get MD5 hash
+	md5Hash = hex.EncodeToString(hasher.Sum(nil))
+
+	extractDuration := time.Since(extractStart)
+	a.logger.Debug(fmt.Sprintf("  ⏱️  Streaming extraction took %v for %s (%d rows, %d bytes)",
+		extractDuration, partition.TableName, rowCount, fileSize))
+
+	// Update progress
+	if program != nil {
+		if partition.RowCount > 0 {
+			program.Send(updateProgress("Extraction complete", partition.RowCount, partition.RowCount))
+		} else {
+			program.Send(updateProgress(fmt.Sprintf("Extraction complete (%d rows)", rowCount), 0, 0))
+		}
+	}
+
+	// Save row count to cache if it was unknown
+	if partition.RowCount <= 0 && rowCount > 0 {
+		cache.setRowCount(partition.TableName, rowCount)
+		_ = cache.save(a.config.Table)
+	}
+
+	return tempFilePath, fileSize, md5Hash, uncompressedSize, nil
+}
+
+// extractPartitionDataWithRetry wraps extractPartitionDataStreaming with retry logic
+func (a *Archiver) extractPartitionDataWithRetry(partition PartitionInfo, program *tea.Program, cache *PartitionCache, updateTaskStage func(string)) (tempFilePath string, fileSize int64, md5Hash string, uncompressedSize int64, err error) {
+	maxRetries := a.config.Database.MaxRetries
+	retryDelay := time.Duration(a.config.Database.RetryDelay) * time.Second
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		tempPath, size, hash, uncompSize, extractErr := a.extractPartitionDataStreaming(partition, program, cache, updateTaskStage)
+
+		if extractErr == nil {
+			return tempPath, size, hash, uncompSize, nil
+		}
+
+		lastErr = extractErr
+
+		// Clean up failed temp file if it exists
+		if tempPath != "" {
+			cleanupTempFile(tempPath)
+		}
+
+		// Check if error is retryable
+		if !isRetryableError(extractErr) {
+			return "", 0, "", 0, extractErr
+		}
+
+		// If we've exhausted retries, return the error
+		if attempt >= maxRetries {
+			break
+		}
+
+		// Log retry attempt
+		a.logger.Warn(fmt.Sprintf("Extraction failed for %s (attempt %d/%d): %v. Retrying in %v...",
+			partition.TableName, attempt+1, maxRetries+1, extractErr, retryDelay))
+
+		// Wait before retrying, respecting context cancellation
+		select {
+		case <-time.After(retryDelay):
+			continue
+		case <-a.ctx.Done():
+			return "", 0, "", 0, a.ctx.Err()
+		}
+	}
+
+	return "", 0, "", 0, fmt.Errorf("extraction failed after %d attempts: %w", maxRetries+1, lastErr)
+}
+
+// uploadTempFileToS3 uploads a temp file to S3, using multipart upload for large files
+func (a *Archiver) uploadTempFileToS3(tempFilePath, objectKey string) error {
+	// Open temp file for reading
+	file, err := os.Open(tempFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to open temp file: %w", err)
+	}
+	defer file.Close()
+
+	// Get file size
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat temp file: %w", err)
+	}
+	fileSize := fileInfo.Size()
+
+	a.logger.Debug(fmt.Sprintf("  ☁️  Uploading to s3://%s/%s (size: %d bytes)",
+		a.config.S3.Bucket, objectKey, fileSize))
+
+	// Use multipart upload for files larger than 100MB
+	if fileSize > 100*1024*1024 {
+		// Check if S3 uploader is initialized
+		if a.s3Uploader == nil {
+			return ErrS3UploaderNotInitialized
+		}
+
+		// Use S3 manager for automatic multipart upload handling
+		uploadInput := &s3manager.UploadInput{
+			Bucket:      aws.String(a.config.S3.Bucket),
+			Key:         aws.String(objectKey),
+			Body:        file,
+			ContentType: aws.String("application/octet-stream"),
+		}
+
+		_, err := a.s3Uploader.Upload(uploadInput)
+		return err
+	}
+
+	// Check if S3 client is initialized
+	if a.s3Client == nil {
+		return ErrS3ClientNotInitialized
+	}
+
+	// Use simple PutObject for smaller files
+	putInput := &s3.PutObjectInput{
+		Bucket:      aws.String(a.config.S3.Bucket),
+		Key:         aws.String(objectKey),
+		Body:        file,
+		ContentType: aws.String("application/octet-stream"),
+	}
+
+	_, err = a.s3Client.PutObject(putInput)
+	return err
 }

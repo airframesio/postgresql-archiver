@@ -26,6 +26,8 @@ var (
 	ErrEndDateFormatInvalid    = errors.New("invalid end date format")
 	ErrWorkersMinimum          = errors.New("workers must be at least 1")
 	ErrWorkersMaximum          = errors.New("workers must not exceed 1000")
+	ErrChunkSizeMinimum        = errors.New("chunk size must be at least 100")
+	ErrChunkSizeMaximum        = errors.New("chunk size must not exceed 1000000")
 	ErrPathTemplateRequired    = errors.New("path template is required")
 	ErrPathTemplateInvalid     = errors.New("path template must contain {table} placeholder")
 	ErrOutputDurationInvalid   = errors.New("output duration must be one of: hourly, daily, weekly, monthly, yearly")
@@ -45,6 +47,7 @@ type Config struct {
 	SkipCount        bool
 	CacheViewer      bool
 	ViewerPort       int
+	ChunkSize        int // Number of rows to process in each chunk (streaming mode)
 	Database         DatabaseConfig
 	S3               S3Config
 	Table            string
@@ -244,6 +247,16 @@ func (c *Config) Validate() error {
 	// More than 1000 workers is unreasonable and could cause issues
 	if c.Workers > 1000 {
 		return fmt.Errorf("%w, got %d", ErrWorkersMaximum, c.Workers)
+	}
+
+	// Validate chunk size (if set)
+	if c.ChunkSize > 0 {
+		if c.ChunkSize < 100 {
+			return fmt.Errorf("%w, got %d", ErrChunkSizeMinimum, c.ChunkSize)
+		}
+		if c.ChunkSize > 1000000 {
+			return fmt.Errorf("%w, got %d", ErrChunkSizeMaximum, c.ChunkSize)
+		}
 	}
 
 	// Validate path template
