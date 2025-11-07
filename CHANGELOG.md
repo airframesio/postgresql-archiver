@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.4] - 2025-01-06
+
+### Fixed
+- **Docker Workflow Permissions:**
+  - Added `attestations: write` permission to Docker workflow
+  - Fixes build provenance attestation error: "Resource not accessible by integration"
+  - Enables proper SBOM and provenance generation for Docker images
+
 ## [1.2.3] - 2025-01-06
 
 ### Fixed
