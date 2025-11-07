@@ -431,11 +431,11 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, _ *tea.Program, _ *Ta
 		results = append(results, result)
 
 		if result.Error != nil {
-			a.logger.Error(fmt.Sprintf("  ❌ Failed: %v", result.Error))
+			a.logger.Error(fmt.Sprintf("   ❌ Failed: %v", result.Error))
 		} else if result.Skipped {
-			a.logger.Info(fmt.Sprintf("  ⏭️  Skipped: %s", result.SkipReason))
+			a.logger.Info(fmt.Sprintf("   ⏭️  Skipped: %s", result.SkipReason))
 		} else {
-			a.logger.Info(fmt.Sprintf("  ✅ Success: %d bytes", result.BytesWritten))
+			a.logger.Info(fmt.Sprintf("   ✅ Success: %d bytes", result.BytesWritten))
 		}
 	}
 
@@ -1171,17 +1171,17 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 		if fileSize > 100*1024*1024 {
 			etag, err := a.calculateMultipartETagFromFile(tempFilePath)
 			if err != nil {
-				a.logger.Warn(fmt.Sprintf("  ⚠️  Failed to calculate multipart ETag: %v", err))
+				a.logger.Warn(fmt.Sprintf("   ⚠️  Failed to calculate multipart ETag: %v", err))
 			} else {
 				multipartETag = etag
-				a.logger.Debug(fmt.Sprintf("  🔐 Calculated multipart ETag: %s", multipartETag))
+				a.logger.Debug(fmt.Sprintf("   🔐 Calculated multipart ETag: %s", multipartETag))
 			}
 		}
 
 		// Save metadata to cache after successful upload
 		cache.setFileMetadataWithETag(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, multipartETag, true)
 		_ = cache.save(a.config.Table)
-		a.logger.Debug(fmt.Sprintf("  💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s, multipartETag=%s", fileSize, uncompressedSize, md5Hash, multipartETag))
+		a.logger.Debug(fmt.Sprintf("   💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s, multipartETag=%s", fileSize, uncompressedSize, md5Hash, multipartETag))
 	}
 
 	result.Stage = "Complete"
@@ -1387,7 +1387,7 @@ func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string
 	s3ETag = strings.Trim(s3ETag, "\"")
 	isMultipart := strings.Contains(s3ETag, "-")
 
-	a.logger.Debug(fmt.Sprintf("💾 Using cached metadata for %s:", partition.TableName))
+	a.logger.Debug(fmt.Sprintf("   💾 Using cached metadata for %s:", partition.TableName))
 	a.logger.Debug(fmt.Sprintf("   Cached: size=%d, md5=%s, multipartETag=%s", cachedSize, cachedMD5, cachedMultipartETag))
 	a.logger.Debug(fmt.Sprintf("   S3:     size=%d, etag=%s (multipart=%v)", s3Size, s3ETag, isMultipart))
 
@@ -1694,7 +1694,7 @@ func (a *Archiver) calculateMultipartETagFromFile(filePath string) (string, erro
 }
 
 func (a *Archiver) uploadToS3(key string, data []byte) error {
-	a.logger.Debug(fmt.Sprintf("  ☁️  Uploading to s3://%s/%s (size: %d bytes)",
+	a.logger.Debug(fmt.Sprintf("   ☁️  Uploading to s3://%s/%s (size: %d bytes)",
 		a.config.S3.Bucket, key, len(data)))
 
 	// Use multipart upload for files larger than 100MB
@@ -1783,12 +1783,12 @@ func (a *Archiver) printSummary(results []ProcessResult, startTime time.Time, to
 	a.logger.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	a.logger.Info("📈 Summary")
 	a.logger.Info(fmt.Sprintf("   Total Partitions: %d", totalPartitions))
-	a.logger.Info(fmt.Sprintf("✅ Successful: %d", successful))
+	a.logger.Info(fmt.Sprintf("   ✅ Successful: %d", successful))
 	if skipped > 0 {
-		a.logger.Info(fmt.Sprintf("⏭️  Skipped: %d", skipped))
+		a.logger.Info(fmt.Sprintf("   ⏭️  Skipped: %d", skipped))
 	}
 	if failed > 0 {
-		a.logger.Info(fmt.Sprintf("❌ Failed: %d", failed))
+		a.logger.Info(fmt.Sprintf("   ❌ Failed: %d", failed))
 	}
 
 	// Show archive rate
@@ -2388,7 +2388,7 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 	md5Hash = hex.EncodeToString(hasher.Sum(nil))
 
 	extractDuration := time.Since(extractStart)
-	a.logger.Debug(fmt.Sprintf("  ⏱️  Streaming extraction took %v for %s (%d rows, %d bytes)",
+	a.logger.Debug(fmt.Sprintf("   ⏱️  Streaming extraction took %v for %s (%d rows, %d bytes)",
 		extractDuration, partition.TableName, rowCount, fileSize))
 
 	// Update progress
@@ -2471,7 +2471,7 @@ func (a *Archiver) uploadTempFileToS3(tempFilePath, objectKey string) error {
 	}
 	fileSize := fileInfo.Size()
 
-	a.logger.Debug(fmt.Sprintf("  ☁️  Uploading to s3://%s/%s (size: %d bytes)",
+	a.logger.Debug(fmt.Sprintf("   ☁️  Uploading to s3://%s/%s (size: %d bytes)",
 		a.config.S3.Bucket, objectKey, fileSize))
 
 	// Use multipart upload for files larger than 100MB
