@@ -1388,8 +1388,8 @@ func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string
 	isMultipart := strings.Contains(s3ETag, "-")
 
 	a.logger.Debug(fmt.Sprintf("   💾 Using cached metadata for %s:", partition.TableName))
-	a.logger.Debug(fmt.Sprintf("   Cached: size=%d, md5=%s, multipartETag=%s", cachedSize, cachedMD5, cachedMultipartETag))
-	a.logger.Debug(fmt.Sprintf("   S3:     size=%d, etag=%s (multipart=%v)", s3Size, s3ETag, isMultipart))
+	a.logger.Debug(fmt.Sprintf("      Cached: size=%d, md5=%s, multipartETag=%s", cachedSize, cachedMD5, cachedMultipartETag))
+	a.logger.Debug(fmt.Sprintf("      S3:     size=%d, etag=%s (multipart=%v)", s3Size, s3ETag, isMultipart))
 
 	// Check if cached metadata matches S3
 	if s3Size == cachedSize {

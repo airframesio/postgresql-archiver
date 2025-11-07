@@ -24,6 +24,10 @@ type TaskInfo struct {
 	TotalItems       int       `json:"total_items"`
 	CompletedItems   int       `json:"completed_items"`
 	LastUpdate       time.Time `json:"last_update"`
+	// Slice tracking fields
+	CurrentSliceIndex int    `json:"current_slice_index,omitempty"`
+	TotalSlices       int    `json:"total_slices,omitempty"`
+	CurrentSliceDate  string `json:"current_slice_date,omitempty"`
 }
 
 // GetPIDFilePath returns the path to the PID file

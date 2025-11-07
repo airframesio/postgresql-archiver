@@ -56,9 +56,19 @@
             <div class="task-progress-bar" id="task-progress-bar" style="display: none;" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Archiving progress">
                 <div class="task-progress-fill" id="task-progress-fill"></div>
             </div>
+            <div class="task-slice-progress-bar" id="task-slice-progress-bar" style="display: none;" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Slice progress">
+                <div class="task-slice-progress-fill" id="task-slice-progress-fill"></div>
+            </div>
             <div class="task-details">
                 <span id="task-status-text" aria-live="polite">No active task</span>
                 <span id="task-stats" aria-live="polite"></span>
+            </div>
+        </div>
+
+        <div class="completion-summary" id="completion-summary" style="display: none;" aria-live="polite">
+            <h2 class="summary-title">Completion Summary</h2>
+            <div class="summary-grid" id="summary-grid">
+                <!-- Summary statistics will be inserted here -->
             </div>
         </div>
 

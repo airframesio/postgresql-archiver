@@ -63,6 +63,7 @@ type CacheEntry struct {
 	FileSize         int64     `json:"fileSize"`
 	UncompressedSize int64     `json:"uncompressedSize"`
 	FileMD5          string    `json:"fileMD5"`
+	MultipartETag    string    `json:"multipartETag,omitempty"` // S3 multipart ETag for files >100MB
 	FileTime         time.Time `json:"fileTime"`
 	S3Key            string    `json:"s3Key"`
 	S3Uploaded       bool      `json:"s3Uploaded"`
@@ -79,6 +80,11 @@ type StatusResponse struct {
 	UpdateAvailable bool      `json:"updateAvailable"`
 	LatestVersion   string    `json:"latestVersion,omitempty"`
 	ReleaseURL      string    `json:"releaseUrl,omitempty"`
+	// Slice tracking fields
+	CurrentSliceIndex int    `json:"currentSliceIndex,omitempty"`
+	TotalSlices       int    `json:"totalSlices,omitempty"`
+	CurrentSliceDate  string `json:"currentSliceDate,omitempty"`
+	IsSlicing         bool   `json:"isSlicing"`
 }
 
 // WebSocket message types
@@ -193,6 +199,7 @@ func serveCacheData(w http.ResponseWriter, _ *http.Request) {
 					FileSize:         entry.FileSize,
 					UncompressedSize: entry.UncompressedSize,
 					FileMD5:          entry.FileMD5,
+					MultipartETag:    entry.MultipartETag,
 					FileTime:         entry.FileTime,
 					S3Key:            entry.S3Key,
 					S3Uploaded:       entry.S3Uploaded,
@@ -257,6 +264,13 @@ func serveStatusData(w http.ResponseWriter, _ *http.Request) {
 		taskInfo, err := ReadTaskInfo()
 		if err == nil {
 			response.CurrentTask = taskInfo
+			// Populate slice tracking fields from TaskInfo
+			if taskInfo.TotalSlices > 0 {
+				response.CurrentSliceIndex = taskInfo.CurrentSliceIndex
+				response.TotalSlices = taskInfo.TotalSlices
+				response.CurrentSliceDate = taskInfo.CurrentSliceDate
+				response.IsSlicing = true
+			}
 		}
 	}
 
@@ -525,6 +539,7 @@ func getCacheDataForWS() CacheResponse {
 					FileSize:         entry.FileSize,
 					UncompressedSize: entry.UncompressedSize,
 					FileMD5:          entry.FileMD5,
+					MultipartETag:    entry.MultipartETag,
 					FileTime:         entry.FileTime,
 					S3Key:            entry.S3Key,
 					S3Uploaded:       entry.S3Uploaded,
@@ -564,6 +579,13 @@ func getStatusDataForWS() StatusResponse {
 		taskInfo, err := ReadTaskInfo()
 		if err == nil {
 			response.CurrentTask = taskInfo
+			// Populate slice tracking fields from TaskInfo
+			if taskInfo.TotalSlices > 0 {
+				response.CurrentSliceIndex = taskInfo.CurrentSliceIndex
+				response.TotalSlices = taskInfo.TotalSlices
+				response.CurrentSliceDate = taskInfo.CurrentSliceDate
+				response.IsSlicing = true
+			}
 		}
 	}
 

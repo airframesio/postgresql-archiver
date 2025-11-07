@@ -139,6 +139,14 @@ function formatBytes(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+// Format number with comma separators
+function formatNumber(n) {
+    if (n < 1000) {
+        return n.toString();
+    }
+    return n.toLocaleString();
+}
+
 // Calculate compression ratio
 function calculateRatio(uncompressed, compressed) {
     if (!uncompressed || !compressed) return '—';
@@ -317,14 +325,14 @@ function updateTaskPanel(status) {
                 // Show as "Table: partition - operation" using safe DOM manipulation
                 statusElement.textContent = ''; // Clear existing content
                 statusElement.appendChild(document.createTextNode('Table: '));
-                
+
                 const link = document.createElement('a');
                 link.href = '#';
                 link.className = 'partition-link';
                 link.setAttribute('data-partition', task.current_partition);
                 link.textContent = task.current_partition;
                 statusElement.appendChild(link);
-                
+
                 statusElement.appendChild(document.createTextNode(' - ' + currentTaskText));
             } else {
                 statusElement.textContent = currentTaskText;
@@ -339,14 +347,14 @@ function updateTaskPanel(status) {
                 // Show as "Table: partition - operation" using safe DOM manipulation
                 statusElement.textContent = ''; // Clear existing content
                 statusElement.appendChild(document.createTextNode('Table: '));
-                
+
                 const link = document.createElement('a');
                 link.href = '#';
                 link.className = 'partition-link';
                 link.setAttribute('data-partition', task.current_partition);
                 link.textContent = task.current_partition;
                 statusElement.appendChild(link);
-                
+
                 statusElement.appendChild(document.createTextNode(' - ' + currentTaskText));
             } else {
                 statusElement.textContent = currentTaskText;
@@ -382,16 +390,43 @@ function updateTaskPanel(status) {
             const seconds = elapsed % 60;
             document.getElementById('task-time').textContent = minutes + 'm ' + seconds + 's';
         }
+
+        // Show slice progress if slicing is active
+        if (status.isSlicing && status.totalSlices > 0) {
+            const sliceProgressBar = document.getElementById('task-slice-progress-bar');
+            const sliceProgressFill = document.getElementById('task-slice-progress-fill');
+            sliceProgressBar.style.display = 'block';
+
+            const slicePercent = ((status.currentSliceIndex + 1) / status.totalSlices) * 100;
+            sliceProgressFill.style.width = slicePercent + '%';
+            sliceProgressBar.setAttribute('aria-valuenow', Math.round(slicePercent));
+
+            // Update task stats to include slice info
+            const currentStats = document.getElementById('task-stats').textContent;
+            if (currentStats) {
+                document.getElementById('task-stats').textContent = currentStats + 
+                    ' | Slice: ' + (status.currentSliceIndex + 1) + '/' + status.totalSlices +
+                    (status.currentSliceDate ? ' (' + status.currentSliceDate + ')' : '');
+            }
+        } else {
+            document.getElementById('task-slice-progress-bar').style.display = 'none';
+        }
     } else {
         panel.classList.add('idle');
         document.getElementById('task-title').textContent = 'Archiver Idle';
         document.getElementById('task-pid').textContent = '';
         document.getElementById('task-status-text').textContent = 'No active archiving process';
         document.getElementById('task-progress-bar').style.display = 'none';
+        document.getElementById('task-slice-progress-bar').style.display = 'none';
         document.getElementById('task-stats').textContent = '';
         document.getElementById('task-time').textContent = '';
         // Clear last task state when idle
         lastTaskState = null;
+    }
+
+    // Update completion summary when archiver is idle
+    if (!status.archiverRunning) {
+        updateCompletionSummary();
     }
 }
 
@@ -468,11 +503,54 @@ function updateStats() {
     const totalPartitions = allData.length;
     const cachedFiles = allData.filter(d => d.fileSize > 0).length;
     const withErrors = allData.filter(d => d.lastError).length;
+    const successful = allData.filter(d => d.s3Uploaded && !d.lastError).length;
+    const skipped = allData.filter(d => !d.fileSize && d.rowCount > 0).length;
+    const failed = allData.filter(d => d.lastError).length;
     const totalCompressed = allData.reduce((sum, d) => sum + (d.fileSize || 0), 0);
     const totalUncompressed = allData.reduce((sum, d) => sum + (d.uncompressedSize || 0), 0);
     const totalRows = allData.reduce((sum, d) => sum + (d.rowCount || 0), 0);
 
     const avgRatio = calculateRatio(totalUncompressed, totalCompressed);
+
+    // Calculate success rate
+    const totalProcessed = successful + skipped + failed;
+    let successRate = 0;
+    if (totalProcessed > 0) {
+        successRate = (successful / totalProcessed) * 100;
+    }
+
+    // Calculate date range
+    const dates = allData
+        .map(d => {
+            // Try to extract date from partition name or use fileTime
+            if (d.fileTime && d.fileTime !== '0001-01-01T00:00:00Z') {
+                return new Date(d.fileTime);
+            }
+            return null;
+        })
+        .filter(d => d !== null)
+        .sort((a, b) => a - b);
+
+    let dateRangeText = 'N/A';
+    if (dates.length > 0) {
+        const minDate = dates[0];
+        const maxDate = dates[dates.length - 1];
+        if (minDate.getTime() === maxDate.getTime()) {
+            dateRangeText = minDate.toLocaleDateString();
+        } else {
+            dateRangeText = minDate.toLocaleDateString() + ' to ' + maxDate.toLocaleDateString();
+        }
+    }
+
+    // Calculate throughput (rows/sec) - approximate from file times
+    let throughputText = 'N/A';
+    if (dates.length > 1 && totalRows > 0) {
+        const timeSpan = (dates[dates.length - 1] - dates[0]) / 1000; // seconds
+        if (timeSpan > 0) {
+            const rowsPerSec = totalRows / timeSpan;
+            throughputText = formatNumber(Math.round(rowsPerSec)) + ' rows/sec';
+        }
+    }
 
     // Store old values
     const statsGrid = document.getElementById('stats-grid');
@@ -480,8 +558,18 @@ function updateStats() {
         partitions: statsGrid.querySelector('.stat-card:nth-child(1) .value')?.textContent,
         size: statsGrid.querySelector('.stat-card:nth-child(2) .value')?.textContent,
         ratio: statsGrid.querySelector('.stat-card:nth-child(3) .value')?.textContent,
-        rows: statsGrid.querySelector('.stat-card:nth-child(4) .value')?.textContent
+        rows: statsGrid.querySelector('.stat-card:nth-child(4) .value')?.textContent,
+        successRate: statsGrid.querySelector('.stat-card:nth-child(5) .value')?.textContent,
+        throughput: statsGrid.querySelector('.stat-card:nth-child(6) .value')?.textContent
     };
+
+    // Determine success rate color
+    let successRateClass = 'success-rate-high';
+    if (successRate < 50) {
+        successRateClass = 'success-rate-low';
+    } else if (successRate < 90) {
+        successRateClass = 'success-rate-medium';
+    }
 
     statsGrid.innerHTML = '<div class="stat-card">' +
         '<div class="label">Total Partitions</div>' +
@@ -502,6 +590,16 @@ function updateStats() {
         '<div class="label">Total Rows</div>' +
         '<div class="value">' + totalRows.toLocaleString() + '</div>' +
         '<div class="detail">Across all partitions</div>' +
+        '</div>' +
+        '<div class="stat-card">' +
+        '<div class="label">Success Rate</div>' +
+        '<div class="value ' + successRateClass + '">' + (totalProcessed > 0 ? successRate.toFixed(1) + '%' : 'N/A') + '</div>' +
+        '<div class="detail">' + successful + ' success, ' + skipped + ' skipped, ' + failed + ' failed</div>' +
+        '</div>' +
+        '<div class="stat-card">' +
+        '<div class="label">Throughput</div>' +
+        '<div class="value">' + throughputText + '</div>' +
+        '<div class="detail">' + dateRangeText + '</div>' +
         '</div>';
 
     // Animate changed stats
@@ -509,7 +607,9 @@ function updateStats() {
         partitions: totalPartitions.toLocaleString(),
         size: formatBytes(totalCompressed),
         ratio: avgRatio,
-        rows: totalRows.toLocaleString()
+        rows: totalRows.toLocaleString(),
+        successRate: (totalProcessed > 0 ? successRate.toFixed(1) + '%' : 'N/A'),
+        throughput: throughputText
     };
 
     setTimeout(() => {
@@ -524,6 +624,12 @@ function updateStats() {
         }
         if (oldValues.rows && oldValues.rows !== newValues.rows) {
             animateCell(statsGrid.querySelector('.stat-card:nth-child(4) .value'));
+        }
+        if (oldValues.successRate && oldValues.successRate !== newValues.successRate) {
+            animateCell(statsGrid.querySelector('.stat-card:nth-child(5) .value'));
+        }
+        if (oldValues.throughput && oldValues.throughput !== newValues.throughput) {
+            animateCell(statsGrid.querySelector('.stat-card:nth-child(6) .value'));
         }
     }, 10);
 }

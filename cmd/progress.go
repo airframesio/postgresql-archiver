@@ -265,6 +265,19 @@ func (m *progressModel) updateTaskInfo() {
 			m.taskInfo.CompletedItems = m.currentIndex
 			m.taskInfo.Progress = float64(m.currentIndex) / float64(len(m.partitions))
 		}
+
+		// Update slice tracking fields if slicing is active
+		if m.totalSlices > 0 {
+			m.taskInfo.CurrentSliceIndex = m.currentSliceIndex
+			m.taskInfo.TotalSlices = m.totalSlices
+			m.taskInfo.CurrentSliceDate = m.currentSliceDate
+		} else {
+			// Clear slice fields when not slicing
+			m.taskInfo.CurrentSliceIndex = 0
+			m.taskInfo.TotalSlices = 0
+			m.taskInfo.CurrentSliceDate = ""
+		}
+
 		_ = WriteTaskInfo(m.taskInfo)
 	}
 }
