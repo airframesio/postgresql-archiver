@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.7] - 2025-11-07
+
+### Improved
+- **Summary Output Terminology:**
+  - Renamed "Success Rate" to "Archive Rate" in summary output for better clarity
+  - The previous label was misleading as skipped partitions are acceptable outcomes, not failures
+  - Archive Rate now better reflects the actual completion status of archival operations
+
+- **Log Output Alignment:**
+  - Standardized all debug and info log messages to use consistent 3-space indentation
+  - Fixed summary output alignment for Successful/Skipped/Failed lines
+  - Improved visual consistency across all log levels and output sections
+
 ## [1.4.6] - 2025-01-08
 
 ### Improved
