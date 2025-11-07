@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.5] - 2025-01-06
+
+### Changed
+- **CI/CD Workflow Improvements:**
+  - Docker builds now only proceed after CI passes successfully
+  - Releases now only proceed after CI passes successfully
+  - CI workflow now runs on tag pushes in addition to branches
+  - Removed duplicate test/lint jobs from release workflow (rely on CI)
+  - Docker and release workflows use `workflow_run` to depend on CI completion
+  - Emergency manual override still available via `workflow_dispatch`
+
+### Removed
+- Duplicate test and lint jobs from release workflow (consolidated in CI)
+
 ## [1.2.4] - 2025-01-06
 
 ### Fixed
