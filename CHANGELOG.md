@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2025-01-06
+
+### Added
+- **Configurable PostgreSQL Statement Timeout:**
+  - New `statement_timeout` configuration option (default: 300 seconds = 5 minutes)
+  - Set to 0 to disable timeout, increase for very large partitions
+  - Automatically added to PostgreSQL connection string in milliseconds
+  - CLI flag: `--db-statement-timeout` with 300 second default
+  - YAML config: `db.statement_timeout`
+  - Helps prevent query timeouts on large partition extractions
+
+- **Automatic Retry Logic:**
+  - Automatic retry mechanism for transient database failures
+  - New `max_retries` configuration option (default: 3 attempts)
+  - New `retry_delay` configuration option (default: 5 seconds between attempts)
+  - CLI flags: `--db-max-retries` and `--db-retry-delay`
+  - YAML config: `db.max_retries` and `db.retry_delay`
+  - Retries only on transient errors:
+    - Statement timeouts
+    - Connection errors and resets
+    - Context deadline exceeded
+    - Broken pipe errors
+  - Respects context cancellation during retry delays for graceful shutdown
+  - Warning logs display retry attempt count and next retry delay
+
+### Changed
+- **Database Query Execution:**
+  - All partition queries now use new `queryWithRetry()` method
+  - Queries automatically retry on transient failures with exponential backoff
+  - Both `extractRowsWithProgress()` and `extractRowsWithDateFilter()` benefit from retry logic
+
+### Improved
+- **Error Handling:**
+  - New `isRetryableError()` function classifies errors for retry eligibility
+  - Better error messages showing total retry attempts on final failure
+  - Debug logging shows configured statement timeout on database connection
+
 ## [1.2.6] - 2025-01-06
 
 ### Fixed

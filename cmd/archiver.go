@@ -69,6 +69,41 @@ func isConnectionError(err error) bool {
 		strings.Contains(errStr, "sql: database is closed")
 }
 
+// isRetryableError determines if an error should be retried
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Context deadline exceeded is retryable
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	// Connection errors are retryable
+	if isConnectionError(err) {
+		return true
+	}
+
+	// PostgreSQL specific retryable errors
+	errStr := strings.ToLower(err.Error())
+	retryablePatterns := []string{
+		"timeout",
+		"canceling statement due to statement timeout",
+		"deadline exceeded",
+		"connection reset",
+		"broken pipe",
+	}
+
+	for _, pattern := range retryablePatterns {
+		if strings.Contains(errStr, pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
 type Archiver struct {
 	config       *Config
 	db           *sql.DB
@@ -377,6 +412,8 @@ func (a *Archiver) connect(ctx context.Context) error {
 	if sslMode == "" {
 		sslMode = "disable"
 	}
+
+	// Build connection string with optional statement timeout
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 		a.config.Database.Host,
 		a.config.Database.Port,
@@ -385,6 +422,14 @@ func (a *Archiver) connect(ctx context.Context) error {
 		a.config.Database.Name,
 		sslMode,
 	)
+
+	// Add statement timeout if configured (convert seconds to milliseconds for PostgreSQL)
+	if a.config.Database.StatementTimeout > 0 {
+		timeoutMs := a.config.Database.StatementTimeout * 1000
+		connStr += fmt.Sprintf(" statement_timeout=%d", timeoutMs)
+		a.logger.Debug(fmt.Sprintf("  📝 Configured statement timeout: %d seconds (%d ms)",
+			a.config.Database.StatementTimeout, timeoutMs))
+	}
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
@@ -414,6 +459,50 @@ func (a *Archiver) connect(ctx context.Context) error {
 	a.s3Uploader = s3manager.NewUploader(sess)
 
 	return nil
+}
+
+// queryWithRetry executes a query with retry logic for transient failures
+func (a *Archiver) queryWithRetry(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	maxRetries := a.config.Database.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 3 // Default to 3 retries
+	}
+
+	retryDelay := time.Duration(a.config.Database.RetryDelay) * time.Second
+	if retryDelay <= 0 {
+		retryDelay = 5 * time.Second // Default to 5 seconds
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		rows, err := a.db.QueryContext(ctx, query, args...)
+		if err == nil {
+			return rows, nil
+		}
+
+		lastErr = err
+
+		// Check if error is retryable
+		if !isRetryableError(err) {
+			return nil, err
+		}
+
+		// Don't retry on the last attempt
+		if attempt < maxRetries {
+			a.logger.Warn(fmt.Sprintf("  ⚠️  Query failed (attempt %d/%d): %v. Retrying in %v...",
+				attempt+1, maxRetries+1, err, retryDelay))
+
+			// Wait before retrying, respecting context cancellation
+			select {
+			case <-time.After(retryDelay):
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("query failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 
 func (a *Archiver) checkTablePermissions(ctx context.Context) error {
@@ -1593,9 +1682,10 @@ func (a *Archiver) printSummary(results []ProcessResult) {
 //nolint:gocognit // complex row extraction with progress tracking
 func (a *Archiver) extractRowsWithProgress(partition PartitionInfo, program *tea.Program) ([]map[string]interface{}, error) {
 	quotedTable := pq.QuoteIdentifier(partition.TableName)
-	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable) //nolint:gosec // Table name is quoted with pq.QuoteIdentifier
+	query := fmt.Sprintf("SELECT row_to_json(t) FROM %s t", quotedTable)
 
-	rows, err := a.db.QueryContext(a.ctx, query)
+	// Use queryWithRetry for automatic retry on timeout/connection errors
+	rows, err := a.queryWithRetry(a.ctx, query)
 	if err != nil {
 		// Check if error is due to cancellation or closed connection
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isConnectionError(err) {
@@ -1697,7 +1787,6 @@ func (a *Archiver) extractRowsWithDateFilter(partition PartitionInfo, startTime,
 	quotedDateColumn := pq.QuoteIdentifier(a.config.DateColumn)
 
 	// Build query with date range filter
-	//nolint:gosec // Table and column names are quoted with pq.QuoteIdentifier
 	query := fmt.Sprintf(
 		"SELECT row_to_json(t) FROM %s t WHERE %s >= $1 AND %s < $2",
 		quotedTable,
@@ -1705,7 +1794,8 @@ func (a *Archiver) extractRowsWithDateFilter(partition PartitionInfo, startTime,
 		quotedDateColumn,
 	)
 
-	rows, err := a.db.QueryContext(a.ctx, query, startTime, endTime)
+	// Use queryWithRetry for automatic retry on timeout/connection errors
+	rows, err := a.queryWithRetry(a.ctx, query, startTime, endTime)
 	if err != nil {
 		// Check if error is due to cancellation or closed connection
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isConnectionError(err) {

@@ -9,6 +9,17 @@ db:
   password: your_db_password
   name: your_database_name
 
+  # Optional: PostgreSQL statement timeout in seconds (default: 300 = 5 minutes)
+  # Set to 0 to disable timeout. Increase for very large partitions.
+  # statement_timeout: 300
+
+  # Optional: Maximum number of retry attempts for failed queries (default: 3)
+  # Retries are only attempted for transient errors like timeouts or connection issues.
+  # max_retries: 3
+
+  # Optional: Delay in seconds between retry attempts (default: 5)
+  # retry_delay: 5
+
 # S3-compatible object storage settings
 s3:
   # For Hetzner Object Storage, use your cluster endpoint

@@ -52,6 +52,21 @@ db:
   # Use 'require' or higher for production
   sslmode: disable
 
+  # Statement timeout in seconds (default: 300 = 5 minutes)
+  # Set to 0 to disable timeout
+  # Increase for very large partitions or slow queries
+  # Example: 1800 (30 minutes) for large data extractions
+  statement_timeout: 300
+
+  # Maximum number of retry attempts for failed queries (default: 3)
+  # Queries are retried on transient failures (timeouts, connection errors)
+  # Set to 0 to disable retries
+  max_retries: 3
+
+  # Delay in seconds between retry attempts (default: 5)
+  # Time to wait before retrying a failed query
+  retry_delay: 5
+
 # S3-compatible storage configuration
 s3:
   # S3 endpoint URL

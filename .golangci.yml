@@ -107,6 +107,13 @@ issues:
         - gocognit
         - dupl
 
+    # Allow high complexity in validation function
+    - path: cmd/config\.go
+      text: "complexity.*of func.*Validate"
+      linters:
+        - gocognit
+        - gocyclo
+
 output:
   # Format output
   formats:

@@ -12,6 +12,9 @@ var (
 	ErrDatabaseUserRequired    = errors.New("database user is required")
 	ErrDatabaseNameRequired    = errors.New("database name is required")
 	ErrDatabasePortInvalid     = errors.New("database port must be between 1 and 65535")
+	ErrStatementTimeoutInvalid = errors.New("database statement timeout must be >= 0")
+	ErrMaxRetriesInvalid       = errors.New("database max retries must be >= 0")
+	ErrRetryDelayInvalid       = errors.New("database retry delay must be >= 0")
 	ErrS3EndpointRequired      = errors.New("S3 endpoint is required")
 	ErrS3BucketRequired        = errors.New("S3 bucket is required")
 	ErrS3AccessKeyRequired     = errors.New("S3 access key is required")
@@ -55,12 +58,15 @@ type Config struct {
 }
 
 type DatabaseConfig struct {
-	Host     string
-	Port     int
-	User     string
-	Password string
-	Name     string
-	SSLMode  string
+	Host             string
+	Port             int
+	User             string
+	Password         string
+	Name             string
+	SSLMode          string
+	StatementTimeout int // Statement timeout in seconds (0 = no timeout, default 300)
+	MaxRetries       int // Maximum number of retry attempts for failed queries (default 3)
+	RetryDelay       int // Delay in seconds between retry attempts (default 5)
 }
 
 type S3Config struct {
@@ -172,6 +178,21 @@ func (c *Config) Validate() error {
 	// Validate database port
 	if c.Database.Port < 1 || c.Database.Port > 65535 {
 		return fmt.Errorf("%w, got %d", ErrDatabasePortInvalid, c.Database.Port)
+	}
+
+	// Validate database statement timeout (if set, must be positive)
+	if c.Database.StatementTimeout < 0 {
+		return fmt.Errorf("%w, got %d", ErrStatementTimeoutInvalid, c.Database.StatementTimeout)
+	}
+
+	// Validate database max retries (if set, must be >= 0)
+	if c.Database.MaxRetries < 0 {
+		return fmt.Errorf("%w, got %d", ErrMaxRetriesInvalid, c.Database.MaxRetries)
+	}
+
+	// Validate database retry delay (if set, must be positive)
+	if c.Database.RetryDelay < 0 {
+		return fmt.Errorf("%w, got %d", ErrRetryDelayInvalid, c.Database.RetryDelay)
 	}
 
 	// Validate S3 configuration

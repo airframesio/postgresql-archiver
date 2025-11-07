@@ -30,34 +30,37 @@ var (
 	// This is shared between the startup check and TUI display
 	versionCheckResult *VersionCheckResult
 
-	cfgFile          string
-	debug            bool
-	logFormat        string
-	dbHost           string
-	dbPort           int
-	dbUser           string
-	dbPassword       string
-	dbName           string
-	dbSSLMode        string
-	s3Endpoint       string
-	s3Bucket         string
-	s3AccessKey      string
-	s3SecretKey      string
-	s3Region         string
-	baseTable        string
-	startDate        string
-	endDate          string
-	workers          int
-	dryRun           bool
-	skipCount        bool
-	cacheViewer      bool
-	viewerPort       int
-	pathTemplate     string
-	outputDuration   string
-	outputFormat     string
-	compression      string
-	compressionLevel int
-	dateColumn       string
+	cfgFile            string
+	debug              bool
+	logFormat          string
+	dbHost             string
+	dbPort             int
+	dbUser             string
+	dbPassword         string
+	dbName             string
+	dbSSLMode          string
+	dbStatementTimeout int
+	dbMaxRetries       int
+	dbRetryDelay       int
+	s3Endpoint         string
+	s3Bucket           string
+	s3AccessKey        string
+	s3SecretKey        string
+	s3Region           string
+	baseTable          string
+	startDate          string
+	endDate            string
+	workers            int
+	dryRun             bool
+	skipCount          bool
+	cacheViewer        bool
+	viewerPort         int
+	pathTemplate       string
+	outputDuration     string
+	outputFormat       string
+	compression        string
+	compressionLevel   int
+	dateColumn         string
 
 	titleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#7D56F4")).
@@ -178,6 +181,9 @@ func init() {
 	rootCmd.Flags().StringVar(&dbPassword, "db-password", "", "PostgreSQL password")
 	rootCmd.Flags().StringVar(&dbName, "db-name", "", "PostgreSQL database name")
 	rootCmd.Flags().StringVar(&dbSSLMode, "db-sslmode", "disable", "PostgreSQL SSL mode (disable, require, verify-ca, verify-full)")
+	rootCmd.Flags().IntVar(&dbStatementTimeout, "db-statement-timeout", 300, "PostgreSQL statement timeout in seconds (0 = no timeout)")
+	rootCmd.Flags().IntVar(&dbMaxRetries, "db-max-retries", 3, "Maximum number of retry attempts for failed queries")
+	rootCmd.Flags().IntVar(&dbRetryDelay, "db-retry-delay", 5, "Delay in seconds between retry attempts")
 
 	rootCmd.Flags().StringVar(&s3Endpoint, "s3-endpoint", "", "S3-compatible endpoint URL")
 	rootCmd.Flags().StringVar(&s3Bucket, "s3-bucket", "", "S3 bucket name")
@@ -214,6 +220,9 @@ func init() {
 	_ = viper.BindPFlag("db.password", rootCmd.Flags().Lookup("db-password"))
 	_ = viper.BindPFlag("db.name", rootCmd.Flags().Lookup("db-name"))
 	_ = viper.BindPFlag("db.sslmode", rootCmd.Flags().Lookup("db-sslmode"))
+	_ = viper.BindPFlag("db.statement_timeout", rootCmd.Flags().Lookup("db-statement-timeout"))
+	_ = viper.BindPFlag("db.max_retries", rootCmd.Flags().Lookup("db-max-retries"))
+	_ = viper.BindPFlag("db.retry_delay", rootCmd.Flags().Lookup("db-retry-delay"))
 	_ = viper.BindPFlag("s3.endpoint", rootCmd.Flags().Lookup("s3-endpoint"))
 	_ = viper.BindPFlag("s3.bucket", rootCmd.Flags().Lookup("s3-bucket"))
 	_ = viper.BindPFlag("s3.access_key", rootCmd.Flags().Lookup("s3-access-key"))
@@ -275,12 +284,15 @@ func runArchive() {
 		CacheViewer: viper.GetBool("cache_viewer"),
 		ViewerPort:  viper.GetInt("viewer_port"),
 		Database: DatabaseConfig{
-			Host:     viper.GetString("db.host"),
-			Port:     viper.GetInt("db.port"),
-			User:     viper.GetString("db.user"),
-			Password: viper.GetString("db.password"),
-			Name:     viper.GetString("db.name"),
-			SSLMode:  viper.GetString("db.sslmode"),
+			Host:             viper.GetString("db.host"),
+			Port:             viper.GetInt("db.port"),
+			User:             viper.GetString("db.user"),
+			Password:         viper.GetString("db.password"),
+			Name:             viper.GetString("db.name"),
+			SSLMode:          viper.GetString("db.sslmode"),
+			StatementTimeout: viper.GetInt("db.statement_timeout"),
+			MaxRetries:       viper.GetInt("db.max_retries"),
+			RetryDelay:       viper.GetInt("db.retry_delay"),
 		},
 		S3: S3Config{
 			Endpoint:     viper.GetString("s3.endpoint"),
