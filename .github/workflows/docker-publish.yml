@@ -1,15 +1,16 @@
 name: Docker Build and Publish
 
 on:
-  push:
-    branches:
-      - main
-      - develop
-    tags:
-      - 'v*'
+  # Trigger after CI workflow completes successfully (branches and tags)
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+  # Allow PR builds (build but don't push)
   pull_request:
     branches:
       - main
+  # Emergency manual override
   workflow_dispatch:
 
 env:
@@ -19,6 +20,8 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # Only run if CI succeeded (for workflow_run) or if manually triggered or PR
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name != 'workflow_run' }}
     permissions:
       contents: read
       packages: write
@@ -28,6 +31,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # For workflow_run, checkout the commit that triggered CI
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -74,7 +80,15 @@ jobs:
       - name: Extract version from tag
         id: version
         run: |
-          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+          # For workflow_run events, check the head_branch
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+            if [[ $HEAD_BRANCH == v* ]]; then
+              VERSION=${HEAD_BRANCH#v}
+            else
+              VERSION=dev
+            fi
+          elif [[ $GITHUB_REF == refs/tags/v* ]]; then
             VERSION=${GITHUB_REF#refs/tags/v}
           else
             VERSION=dev
@@ -144,7 +158,19 @@ jobs:
       - name: Extract tag for testing
         id: tag
         run: |
-          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+          # For workflow_run events, check the head_branch
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+            if [[ $HEAD_BRANCH == v* ]]; then
+              TAG=${HEAD_BRANCH#v}
+            elif [[ $HEAD_BRANCH == "main" ]]; then
+              TAG=latest
+            elif [[ $HEAD_BRANCH == "develop" ]]; then
+              TAG=edge
+            else
+              TAG=$HEAD_BRANCH
+            fi
+          elif [[ $GITHUB_REF == refs/tags/v* ]]; then
             TAG=${GITHUB_REF#refs/tags/v}
           elif [[ $GITHUB_REF == refs/heads/main ]]; then
             TAG=latest
