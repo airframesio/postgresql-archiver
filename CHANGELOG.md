@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.6] - 2025-01-08
+
+### Improved
+- **Debug Output Formatting:**
+  - Removed leading spaces from debug log messages for better alignment
+  - Improved readability of debug output in cache checking and file comparison operations
+  - Cleaner visual presentation of debug information
+
+- **Summary Output Formatting:**
+  - Removed unnecessary empty lines from summary statistics output
+  - More compact and readable summary display
+  - Better visual flow in completion summary
+
 ## [1.4.5] - 2025-11-07
 
 ### Improved
