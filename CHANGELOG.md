@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.5] - 2025-11-07
+
+### Improved
+- **Enhanced Summary Statistics:**
+  - Added total partitions count display
+  - Added success rate percentage calculation
+  - Added total rows transferred with comma-formatted numbers
+  - Added human-readable byte formatting (B, KB, MB, GB, etc.)
+  - Added human-readable duration formatting (ms, seconds, minutes, hours)
+  - Added throughput metrics (rows/sec and MB/sec) with smart precision
+  - Added average time per partition calculation
+  - Added date range tracking for processed partitions
+  - Improved failure reporting with truncated error messages for better readability
+  - Enhanced summary display formatting with better spacing and organization
+
+### Technical Details
+- Refactored `printSummary()` to accept `startTime` and `totalPartitions` parameters for accurate timing
+- Added helper functions: `formatNumberForSummary()`, `formatBytesForSummary()`, `formatDurationForSummary()`, `formatFloatForSummary()`
+- Summary now tracks total elapsed time from process start
+- Better handling of skipped partitions in statistics
+- Improved error message display with 80-character truncation for long errors
+
 ## [1.4.4] - 2025-11-07
 
 ### Improved
