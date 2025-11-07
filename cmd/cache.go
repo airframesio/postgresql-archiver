@@ -22,6 +22,7 @@ type PartitionCacheEntry struct {
 	FileSize         int64     `json:"file_size,omitempty"`         // Compressed size
 	UncompressedSize int64     `json:"uncompressed_size,omitempty"` // Original size
 	FileMD5          string    `json:"file_md5,omitempty"`
+	MultipartETag    string    `json:"multipart_etag,omitempty"` // S3 multipart ETag for files >100MB
 	FileTime         time.Time `json:"file_time,omitempty"`
 
 	// S3 information
@@ -216,12 +217,59 @@ func (c *PartitionCache) getFileMetadata(tablePartition string, s3Key string, pa
 	return entry.FileSize, entry.FileMD5, true
 }
 
+// getFileMetadataWithETag gets file metadata including multipart ETag from cache
+func (c *PartitionCache) getFileMetadataWithETag(tablePartition string, s3Key string, partitionDate time.Time) (size int64, md5 string, multipartETag string, found bool) {
+	entry, exists := c.Entries[tablePartition]
+	if !exists {
+		return 0, "", "", false
+	}
+
+	// Check if we have file metadata
+	if entry.FileSize == 0 || entry.FileMD5 == "" {
+		return 0, "", "", false
+	}
+
+	// File metadata is cached permanently (not expired)
+	// Only today's partition needs recalculation
+
+	// Always recalculate today's partition
+	today := time.Now().Truncate(24 * time.Hour)
+	if partitionDate.Equal(today) || partitionDate.After(today) {
+		// Clear file metadata for today's partition
+		entry.FileSize = 0
+		entry.FileMD5 = ""
+		entry.MultipartETag = ""
+		entry.FileTime = time.Time{}
+		c.Entries[tablePartition] = entry
+		return 0, "", "", false
+	}
+
+	// Verify S3 key matches (in case path structure changed)
+	if entry.S3Key != "" && entry.S3Key != s3Key {
+		// Path changed, invalidate file metadata
+		entry.FileSize = 0
+		entry.FileMD5 = ""
+		entry.MultipartETag = ""
+		entry.FileTime = time.Time{}
+		entry.S3Key = s3Key
+		c.Entries[tablePartition] = entry
+		return 0, "", "", false
+	}
+
+	return entry.FileSize, entry.FileMD5, entry.MultipartETag, true
+}
+
 // Set file metadata in cache (with S3 upload status)
 func (c *PartitionCache) setFileMetadata(tablePartition string, s3Key string, compressedSize int64, uncompressedSize int64, md5 string, s3Uploaded bool) {
+	c.setFileMetadataWithETag(tablePartition, s3Key, compressedSize, uncompressedSize, md5, "", s3Uploaded)
+}
+
+func (c *PartitionCache) setFileMetadataWithETag(tablePartition string, s3Key string, compressedSize int64, uncompressedSize int64, md5 string, multipartETag string, s3Uploaded bool) {
 	entry := c.Entries[tablePartition]
 	entry.FileSize = compressedSize
 	entry.UncompressedSize = uncompressedSize
 	entry.FileMD5 = md5
+	entry.MultipartETag = multipartETag
 	entry.FileTime = time.Now()
 	entry.S3Key = s3Key
 	entry.S3Uploaded = s3Uploaded

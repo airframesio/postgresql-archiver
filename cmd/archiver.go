@@ -1157,10 +1157,22 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 			program.Send(updateProgress("Uploading to S3...", 100, 100))
 		}
 
+		// Calculate multipart ETag if file is large enough for multipart upload
+		multipartETag := ""
+		if fileSize > 100*1024*1024 {
+			etag, err := a.calculateMultipartETagFromFile(tempFilePath)
+			if err != nil {
+				a.logger.Warn(fmt.Sprintf("  ⚠️  Failed to calculate multipart ETag: %v", err))
+			} else {
+				multipartETag = etag
+				a.logger.Debug(fmt.Sprintf("  🔐 Calculated multipart ETag: %s", multipartETag))
+			}
+		}
+
 		// Save metadata to cache after successful upload
-		cache.setFileMetadata(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, true)
+		cache.setFileMetadataWithETag(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, multipartETag, true)
 		_ = cache.save(a.config.Table)
-		a.logger.Debug(fmt.Sprintf("  💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s", fileSize, uncompressedSize, md5Hash))
+		a.logger.Debug(fmt.Sprintf("  💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s, multipartETag=%s", fileSize, uncompressedSize, md5Hash, multipartETag))
 	}
 
 	result.Stage = "Complete"
@@ -1349,7 +1361,7 @@ func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string
 		Partition: partition,
 	}
 
-	cachedSize, cachedMD5, hasCached := cache.getFileMetadata(partition.TableName, objectKey, partition.Date)
+	cachedSize, cachedMD5, cachedMultipartETag, hasCached := cache.getFileMetadataWithETag(partition.TableName, objectKey, partition.Date)
 	if !hasCached {
 		return false, result
 	}
@@ -1367,7 +1379,7 @@ func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string
 	isMultipart := strings.Contains(s3ETag, "-")
 
 	a.logger.Debug(fmt.Sprintf("  💾 Using cached metadata for %s:", partition.TableName))
-	a.logger.Debug(fmt.Sprintf("     Cached: size=%d, md5=%s", cachedSize, cachedMD5))
+	a.logger.Debug(fmt.Sprintf("     Cached: size=%d, md5=%s, multipartETag=%s", cachedSize, cachedMD5, cachedMultipartETag))
 	a.logger.Debug(fmt.Sprintf("     S3: size=%d, etag=%s (multipart=%v)", s3Size, s3ETag, isMultipart))
 
 	// Check if cached metadata matches S3
@@ -1381,7 +1393,16 @@ func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string
 			a.logger.Debug("     ✅ Skipping based on cache: Size and MD5 match")
 			return true, result
 		} else if isMultipart {
-			a.logger.Debug("     ℹ️  Multipart upload with matching size, proceeding with extraction to verify")
+			// For multipart uploads, compare cached multipart ETag with S3 ETag
+			if cachedMultipartETag != "" && cachedMultipartETag == s3ETag {
+				result.Skipped = true
+				result.SkipReason = fmt.Sprintf("Cached metadata matches S3 (size=%d, multipartETag=%s)", cachedSize, cachedMultipartETag)
+				result.Stage = StageSkipped
+				result.BytesWritten = cachedSize
+				a.logger.Debug("     ✅ Skipping based on cache: Size and multipart ETag match")
+				return true, result
+			}
+			a.logger.Debug("     ℹ️  Multipart upload with matching size but no cached ETag or ETag mismatch, proceeding with extraction to verify")
 		}
 	}
 
@@ -1605,6 +1626,62 @@ func (a *Archiver) calculateMultipartETag(data []byte) string {
 
 	// Return in S3 multipart format: MD5-numParts
 	return fmt.Sprintf("%s-%d", finalMD5, numParts)
+}
+
+// calculateMultipartETagFromFile calculates multipart ETag from a file
+func (a *Archiver) calculateMultipartETagFromFile(filePath string) (string, error) {
+	const partSize = 5 * 1024 * 1024 // 5MB part size (s3manager default)
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// Get file size
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("failed to stat file: %w", err)
+	}
+	fileSize := fileInfo.Size()
+
+	// Calculate number of parts
+	numParts := int((fileSize + partSize - 1) / partSize)
+
+	// If it would be a single part, just return regular MD5
+	if numParts == 1 {
+		hasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
+		if _, err := io.Copy(hasher, file); err != nil {
+			return "", fmt.Errorf("failed to hash file: %w", err)
+		}
+		return hex.EncodeToString(hasher.Sum(nil)), nil
+	}
+
+	// Calculate MD5 of each part
+	var partMD5s []byte
+	buffer := make([]byte, partSize)
+
+	for i := 0; i < numParts; i++ {
+		partHasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
+
+		// Read one part
+		n, err := io.ReadFull(file, buffer)
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return "", fmt.Errorf("failed to read part %d: %w", i, err)
+		}
+
+		// Hash the part data
+		partHasher.Write(buffer[:n])
+		partMD5s = append(partMD5s, partHasher.Sum(nil)...)
+	}
+
+	// Calculate MD5 of concatenated MD5s
+	finalHasher := md5.New() //nolint:gosec // MD5 used for checksums, not cryptography
+	finalHasher.Write(partMD5s)
+	finalMD5 := hex.EncodeToString(finalHasher.Sum(nil))
+
+	// Return in S3 multipart format: MD5-numParts
+	return fmt.Sprintf("%s-%d", finalMD5, numParts), nil
 }
 
 func (a *Archiver) uploadToS3(key string, data []byte) error {
