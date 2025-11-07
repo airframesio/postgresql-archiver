@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.3] - 2025-01-06
+
+### Fixed
+- **Minify Script:**
+  - Fixed minify.sh to gracefully skip design system files when not present
+  - Design system is excluded from Docker builds via .dockerignore
+  - Prevents ENOENT error during Docker image build
+
 ## [1.2.2] - 2025-01-06
 
 ### Fixed
