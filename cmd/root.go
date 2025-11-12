@@ -210,6 +210,16 @@ var rootCmd = &cobra.Command{
 A CLI tool to efficiently archive database data to object storage.
 Currently supports PostgreSQL input (partitioned tables) and S3-compatible storage output.
 Extracts data by day, converts to JSONL/CSV/Parquet, compresses with zstd/lz4/gzip, and uploads.`,
+	Run: func(cmd *cobra.Command, _ []string) {
+		// Show help when no subcommand is specified
+		cmd.Help()
+	},
+}
+
+var archiveCmd = &cobra.Command{
+	Use:   "archive",
+	Short: "Archive database data to object storage",
+	Long:  `Archive database data to object storage. Extracts data from PostgreSQL partitions, converts to JSONL/CSV/Parquet, compresses, and uploads to S3.`,
 	Run: func(_ *cobra.Command, _ []string) {
 		runArchive()
 	},
@@ -222,78 +232,86 @@ func Execute() error {
 func init() {
 	cobra.OnInitialize(initConfig)
 
+	// Register archive subcommand
+	rootCmd.AddCommand(archiveCmd)
+
+	// Persistent flags (available to all subcommands)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.data-archiver.yaml)")
 	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "enable debug output")
 	rootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "text", "log format (text, logfmt, json)")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "perform a dry run without uploading")
 
-	rootCmd.Flags().StringVar(&dbHost, "db-host", "localhost", "PostgreSQL host")
-	rootCmd.Flags().IntVar(&dbPort, "db-port", 5432, "PostgreSQL port")
-	rootCmd.Flags().StringVar(&dbUser, "db-user", "", "PostgreSQL user")
-	rootCmd.Flags().StringVar(&dbPassword, "db-password", "", "PostgreSQL password")
-	rootCmd.Flags().StringVar(&dbName, "db-name", "", "PostgreSQL database name")
-	rootCmd.Flags().StringVar(&dbSSLMode, "db-sslmode", "disable", "PostgreSQL SSL mode (disable, require, verify-ca, verify-full)")
-	rootCmd.Flags().IntVar(&dbStatementTimeout, "db-statement-timeout", 300, "PostgreSQL statement timeout in seconds (0 = no timeout)")
-	rootCmd.Flags().IntVar(&dbMaxRetries, "db-max-retries", 3, "Maximum number of retry attempts for failed queries")
-	rootCmd.Flags().IntVar(&dbRetryDelay, "db-retry-delay", 5, "Delay in seconds between retry attempts")
+	// Archive-specific flags
+	archiveCmd.Flags().StringVar(&dbHost, "db-host", "localhost", "PostgreSQL host")
+	archiveCmd.Flags().IntVar(&dbPort, "db-port", 5432, "PostgreSQL port")
+	archiveCmd.Flags().StringVar(&dbUser, "db-user", "", "PostgreSQL user")
+	archiveCmd.Flags().StringVar(&dbPassword, "db-password", "", "PostgreSQL password")
+	archiveCmd.Flags().StringVar(&dbName, "db-name", "", "PostgreSQL database name")
+	archiveCmd.Flags().StringVar(&dbSSLMode, "db-sslmode", "disable", "PostgreSQL SSL mode (disable, require, verify-ca, verify-full)")
+	archiveCmd.Flags().IntVar(&dbStatementTimeout, "db-statement-timeout", 300, "PostgreSQL statement timeout in seconds (0 = no timeout)")
+	archiveCmd.Flags().IntVar(&dbMaxRetries, "db-max-retries", 3, "Maximum number of retry attempts for failed queries")
+	archiveCmd.Flags().IntVar(&dbRetryDelay, "db-retry-delay", 5, "Delay in seconds between retry attempts")
 
-	rootCmd.Flags().StringVar(&s3Endpoint, "s3-endpoint", "", "S3-compatible endpoint URL")
-	rootCmd.Flags().StringVar(&s3Bucket, "s3-bucket", "", "S3 bucket name")
-	rootCmd.Flags().StringVar(&s3AccessKey, "s3-access-key", "", "S3 access key")
-	rootCmd.Flags().StringVar(&s3SecretKey, "s3-secret-key", "", "S3 secret key")
-	rootCmd.Flags().StringVar(&s3Region, "s3-region", "auto", "S3 region")
+	archiveCmd.Flags().StringVar(&s3Endpoint, "s3-endpoint", "", "S3-compatible endpoint URL")
+	archiveCmd.Flags().StringVar(&s3Bucket, "s3-bucket", "", "S3 bucket name")
+	archiveCmd.Flags().StringVar(&s3AccessKey, "s3-access-key", "", "S3 access key")
+	archiveCmd.Flags().StringVar(&s3SecretKey, "s3-secret-key", "", "S3 secret key")
+	archiveCmd.Flags().StringVar(&s3Region, "s3-region", "auto", "S3 region")
 
-	rootCmd.Flags().StringVar(&baseTable, "table", "", "base table name (required)")
-	rootCmd.Flags().StringVar(&startDate, "start-date", "", "start date (YYYY-MM-DD)")
-	rootCmd.Flags().StringVar(&endDate, "end-date", time.Now().Format("2006-01-02"), "end date (YYYY-MM-DD)")
-	rootCmd.Flags().IntVar(&workers, "workers", 4, "number of parallel workers")
-	rootCmd.Flags().BoolVar(&skipCount, "skip-count", false, "skip counting rows (faster startup, no progress bars)")
-	rootCmd.Flags().BoolVar(&cacheViewer, "viewer", false, "start embedded cache viewer web server")
-	rootCmd.Flags().IntVar(&viewerPort, "viewer-port", 8080, "port for cache viewer web server")
-	rootCmd.Flags().IntVar(&chunkSize, "chunk-size", 10000, "number of rows to process in each chunk (streaming mode, 0 = auto)")
+	archiveCmd.Flags().StringVar(&baseTable, "table", "", "base table name (required)")
+	archiveCmd.Flags().StringVar(&startDate, "start-date", "", "start date (YYYY-MM-DD)")
+	archiveCmd.Flags().StringVar(&endDate, "end-date", time.Now().Format("2006-01-02"), "end date (YYYY-MM-DD)")
+	archiveCmd.Flags().IntVar(&workers, "workers", 4, "number of parallel workers")
+	archiveCmd.Flags().BoolVar(&skipCount, "skip-count", false, "skip counting rows (faster startup, no progress bars)")
+	archiveCmd.Flags().BoolVar(&cacheViewer, "viewer", false, "start embedded cache viewer web server")
+	archiveCmd.Flags().IntVar(&viewerPort, "viewer-port", 8080, "port for cache viewer web server")
+	archiveCmd.Flags().IntVar(&chunkSize, "chunk-size", 10000, "number of rows to process in each chunk (streaming mode, 0 = auto)")
 
 	// Output configuration flags
-	rootCmd.Flags().StringVar(&pathTemplate, "path-template", "", "S3 path template with placeholders: {table}, {YYYY}, {MM}, {DD}, {HH} (required)")
-	rootCmd.Flags().StringVar(&outputDuration, "output-duration", "daily", "output file duration: hourly, daily, weekly, monthly, yearly")
-	rootCmd.Flags().StringVar(&outputFormat, "output-format", "jsonl", "output format: jsonl, csv, parquet")
-	rootCmd.Flags().StringVar(&compression, "compression", "zstd", "compression type: zstd, lz4, gzip, none")
-	rootCmd.Flags().IntVar(&compressionLevel, "compression-level", 3, "compression level (zstd: 1-22, lz4/gzip: 1-9, none: 0)")
-	rootCmd.Flags().StringVar(&dateColumn, "date-column", "", "timestamp column name for duration-based splitting (optional)")
+	archiveCmd.Flags().StringVar(&pathTemplate, "path-template", "", "S3 path template with placeholders: {table}, {YYYY}, {MM}, {DD}, {HH} (required)")
+	archiveCmd.Flags().StringVar(&outputDuration, "output-duration", "daily", "output file duration: hourly, daily, weekly, monthly, yearly")
+	archiveCmd.Flags().StringVar(&outputFormat, "output-format", "jsonl", "output format: jsonl, csv, parquet")
+	archiveCmd.Flags().StringVar(&compression, "compression", "zstd", "compression type: zstd, lz4, gzip, none")
+	archiveCmd.Flags().IntVar(&compressionLevel, "compression-level", 3, "compression level (zstd: 1-22, lz4/gzip: 1-9, none: 0)")
+	archiveCmd.Flags().StringVar(&dateColumn, "date-column", "", "timestamp column name for duration-based splitting (optional)")
 
 	// Note: We don't use MarkFlagRequired because it checks before viper loads the config file.
 	// Instead, validation happens in config.Validate() which runs after all config sources are loaded.
 
+	// Bind persistent flags
 	_ = viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
 	_ = viper.BindPFlag("log_format", rootCmd.PersistentFlags().Lookup("log-format"))
-	_ = viper.BindPFlag("db.host", rootCmd.Flags().Lookup("db-host"))
-	_ = viper.BindPFlag("db.port", rootCmd.Flags().Lookup("db-port"))
-	_ = viper.BindPFlag("db.user", rootCmd.Flags().Lookup("db-user"))
-	_ = viper.BindPFlag("viewer", rootCmd.Flags().Lookup("viewer"))
-	_ = viper.BindPFlag("viewer_port", rootCmd.Flags().Lookup("viewer-port"))
-	_ = viper.BindPFlag("chunk_size", rootCmd.Flags().Lookup("chunk-size"))
-	_ = viper.BindPFlag("db.password", rootCmd.Flags().Lookup("db-password"))
-	_ = viper.BindPFlag("db.name", rootCmd.Flags().Lookup("db-name"))
-	_ = viper.BindPFlag("db.sslmode", rootCmd.Flags().Lookup("db-sslmode"))
-	_ = viper.BindPFlag("db.statement_timeout", rootCmd.Flags().Lookup("db-statement-timeout"))
-	_ = viper.BindPFlag("db.max_retries", rootCmd.Flags().Lookup("db-max-retries"))
-	_ = viper.BindPFlag("db.retry_delay", rootCmd.Flags().Lookup("db-retry-delay"))
-	_ = viper.BindPFlag("s3.endpoint", rootCmd.Flags().Lookup("s3-endpoint"))
-	_ = viper.BindPFlag("s3.bucket", rootCmd.Flags().Lookup("s3-bucket"))
-	_ = viper.BindPFlag("s3.access_key", rootCmd.Flags().Lookup("s3-access-key"))
-	_ = viper.BindPFlag("s3.secret_key", rootCmd.Flags().Lookup("s3-secret-key"))
-	_ = viper.BindPFlag("s3.region", rootCmd.Flags().Lookup("s3-region"))
-	_ = viper.BindPFlag("table", rootCmd.Flags().Lookup("table"))
-	_ = viper.BindPFlag("start_date", rootCmd.Flags().Lookup("start-date"))
-	_ = viper.BindPFlag("end_date", rootCmd.Flags().Lookup("end-date"))
-	_ = viper.BindPFlag("workers", rootCmd.Flags().Lookup("workers"))
-	_ = viper.BindPFlag("dry_run", rootCmd.Flags().Lookup("dry-run"))
-	_ = viper.BindPFlag("skip_count", rootCmd.Flags().Lookup("skip-count"))
-	_ = viper.BindPFlag("s3.path_template", rootCmd.Flags().Lookup("path-template"))
-	_ = viper.BindPFlag("output_duration", rootCmd.Flags().Lookup("output-duration"))
-	_ = viper.BindPFlag("output_format", rootCmd.Flags().Lookup("output-format"))
-	_ = viper.BindPFlag("compression", rootCmd.Flags().Lookup("compression"))
-	_ = viper.BindPFlag("compression_level", rootCmd.Flags().Lookup("compression-level"))
-	_ = viper.BindPFlag("date_column", rootCmd.Flags().Lookup("date-column"))
+	_ = viper.BindPFlag("dry_run", rootCmd.PersistentFlags().Lookup("dry-run"))
+
+	// Bind archive flags
+	_ = viper.BindPFlag("db.host", archiveCmd.Flags().Lookup("db-host"))
+	_ = viper.BindPFlag("db.port", archiveCmd.Flags().Lookup("db-port"))
+	_ = viper.BindPFlag("db.user", archiveCmd.Flags().Lookup("db-user"))
+	_ = viper.BindPFlag("viewer", archiveCmd.Flags().Lookup("viewer"))
+	_ = viper.BindPFlag("viewer_port", archiveCmd.Flags().Lookup("viewer-port"))
+	_ = viper.BindPFlag("chunk_size", archiveCmd.Flags().Lookup("chunk-size"))
+	_ = viper.BindPFlag("db.password", archiveCmd.Flags().Lookup("db-password"))
+	_ = viper.BindPFlag("db.name", archiveCmd.Flags().Lookup("db-name"))
+	_ = viper.BindPFlag("db.sslmode", archiveCmd.Flags().Lookup("db-sslmode"))
+	_ = viper.BindPFlag("db.statement_timeout", archiveCmd.Flags().Lookup("db-statement-timeout"))
+	_ = viper.BindPFlag("db.max_retries", archiveCmd.Flags().Lookup("db-max-retries"))
+	_ = viper.BindPFlag("db.retry_delay", archiveCmd.Flags().Lookup("db-retry-delay"))
+	_ = viper.BindPFlag("s3.endpoint", archiveCmd.Flags().Lookup("s3-endpoint"))
+	_ = viper.BindPFlag("s3.bucket", archiveCmd.Flags().Lookup("s3-bucket"))
+	_ = viper.BindPFlag("s3.access_key", archiveCmd.Flags().Lookup("s3-access-key"))
+	_ = viper.BindPFlag("s3.secret_key", archiveCmd.Flags().Lookup("s3-secret-key"))
+	_ = viper.BindPFlag("s3.region", archiveCmd.Flags().Lookup("s3-region"))
+	_ = viper.BindPFlag("table", archiveCmd.Flags().Lookup("table"))
+	_ = viper.BindPFlag("start_date", archiveCmd.Flags().Lookup("start-date"))
+	_ = viper.BindPFlag("end_date", archiveCmd.Flags().Lookup("end-date"))
+	_ = viper.BindPFlag("workers", archiveCmd.Flags().Lookup("workers"))
+	_ = viper.BindPFlag("skip_count", archiveCmd.Flags().Lookup("skip-count"))
+	_ = viper.BindPFlag("s3.path_template", archiveCmd.Flags().Lookup("path-template"))
+	_ = viper.BindPFlag("output_duration", archiveCmd.Flags().Lookup("output-duration"))
+	_ = viper.BindPFlag("output_format", archiveCmd.Flags().Lookup("output-format"))
+	_ = viper.BindPFlag("compression", archiveCmd.Flags().Lookup("compression"))
+	_ = viper.BindPFlag("compression_level", archiveCmd.Flags().Lookup("compression-level"))
+	_ = viper.BindPFlag("date_column", archiveCmd.Flags().Lookup("date-column"))
 }
 
 func initConfig() {

@@ -29,3 +29,8 @@ func (c *NoneCompressor) NewWriter(w io.Writer, _ int) io.WriteCloser {
 func (c *NoneCompressor) DefaultLevel() int {
 	return 0
 }
+
+// NewReader creates a no-op reader (passes through without decompression)
+func (c *NoneCompressor) NewReader(r io.Reader) (io.ReadCloser, error) {
+	return io.NopCloser(r), nil
+}

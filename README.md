@@ -127,7 +127,11 @@ data-archiver \
 ### Basic Command Structure
 
 ```bash
+# Archive data to S3
 data-archiver [flags]
+
+# Restore data from S3
+data-archiver restore [flags]
 ```
 
 ### Help Output
@@ -533,6 +537,91 @@ data-archiver \
   --table orders \
   --dry-run \
   --debug
+```
+
+## 🔄 Restore Command
+
+The `restore` subcommand reverses the archive process: downloads files from S3, decompresses them, parses formats (JSONL/CSV/Parquet), and inserts data into PostgreSQL tables with automatic table/partition creation.
+
+### Restore Basic Usage
+
+```bash
+data-archiver restore \
+  --table flights \
+  --path-template "archives/{table}/{YYYY}/{MM}" \
+  --start-date 2024-01-01 \
+  --end-date 2024-01-31
+```
+
+### Restore with Partitioning
+
+```bash
+data-archiver restore \
+  --table flights \
+  --path-template "archives/{table}/{YYYY}/{MM}" \
+  --table-partition-range daily \
+  --start-date 2024-01-01 \
+  --end-date 2024-01-31
+```
+
+### Restore Flags
+
+- `--table` - Base table name (required)
+- `--path-template` - S3 path template matching archive configuration (required)
+- `--start-date` - Start date filter (YYYY-MM-DD, optional)
+- `--end-date` - End date filter (YYYY-MM-DD, optional)
+- `--table-partition-range` - Partition range: `hourly`, `daily`, `monthly`, `quarterly`, `yearly` (optional)
+- `--output-format` - Override format detection: `jsonl`, `csv`, `parquet` (optional, auto-detected from file extensions)
+- `--compression` - Override compression detection: `zstd`, `lz4`, `gzip`, `none` (optional, auto-detected from file extensions)
+
+### Restore Features
+
+- **Automatic Format Detection**: Detects format and compression from file extensions (`.jsonl.zst`, `.csv.lz4`, `.parquet.gz`, etc.)
+- **Automatic Table Creation**: Creates tables automatically if they don't exist, inferring schema from data
+- **Partition Support**: Automatically creates partitions based on `--table-partition-range`:
+  - `hourly`: Creates partitions like `table_2024010115`
+  - `daily`: Creates partitions like `table_20240101`
+  - `monthly`: Creates partitions like `table_202401`
+  - `quarterly`: Creates partitions like `table_2024Q1`
+  - `yearly`: Creates partitions like `table_2024`
+- **Conflict Handling**: Uses `ON CONFLICT DO NOTHING` to skip existing rows
+- **Date Range Filtering**: Only restores files matching the specified date range
+- **Sequential Processing**: Processes files one at a time (parallel support may be added later)
+
+### Restore Examples
+
+**Restore all files for a table:**
+```bash
+data-archiver restore \
+  --table flights \
+  --path-template "archives/{table}/{YYYY}/{MM}"
+```
+
+**Restore specific date range with daily partitions:**
+```bash
+data-archiver restore \
+  --table flights \
+  --path-template "archives/{table}/{YYYY}/{MM}" \
+  --table-partition-range daily \
+  --start-date 2024-01-01 \
+  --end-date 2024-01-31
+```
+
+**Restore with format override:**
+```bash
+data-archiver restore \
+  --table flights \
+  --path-template "archives/{table}/{YYYY}/{MM}" \
+  --output-format parquet \
+  --compression zstd
+```
+
+**Dry run restore (validate without inserting):**
+```bash
+data-archiver restore \
+  --table flights \
+  --path-template "archives/{table}/{YYYY}/{MM}" \
+  --dry-run
 ```
 
 ## 🚨 Error Handling

@@ -97,3 +97,12 @@ func (c *ZstdCompressor) NewWriter(w io.Writer, level int) io.WriteCloser {
 func (c *ZstdCompressor) DefaultLevel() int {
 	return 3 // SpeedDefault
 }
+
+// NewReader creates a streaming zstd decompression reader
+func (c *ZstdCompressor) NewReader(r io.Reader) (io.ReadCloser, error) {
+	decoder, err := zstd.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create zstd decoder: %w", err)
+	}
+	return decoder.IOReadCloser(), nil
+}

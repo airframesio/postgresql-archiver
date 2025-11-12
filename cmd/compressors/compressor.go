@@ -17,6 +17,9 @@ type Compressor interface {
 	// NewWriter creates a streaming compression writer
 	NewWriter(w io.Writer, level int) io.WriteCloser
 
+	// NewReader creates a streaming decompression reader
+	NewReader(r io.Reader) (io.ReadCloser, error)
+
 	// Extension returns the file extension for this compression (e.g., ".zst", ".lz4", ".gz")
 	Extension() string
 

@@ -61,3 +61,9 @@ func (c *LZ4Compressor) NewWriter(w io.Writer, level int) io.WriteCloser {
 func (c *LZ4Compressor) DefaultLevel() int {
 	return 1 // Fast compression
 }
+
+// NewReader creates a streaming lz4 decompression reader
+func (c *LZ4Compressor) NewReader(r io.Reader) (io.ReadCloser, error) {
+	reader := lz4.NewReader(r)
+	return io.NopCloser(reader), nil
+}

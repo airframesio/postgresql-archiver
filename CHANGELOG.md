@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.3] - 2025-11-12
+
+### Added
+- **Restore Command:**
+  - New `restore` subcommand to restore tables from S3 archives back to PostgreSQL
+  - Automatic format detection from file extensions (JSONL, CSV, Parquet)
+  - Automatic compression detection from file extensions (zstd, lz4, gzip, none)
+  - Automatic table creation with schema inference from data
+  - Partition support with configurable ranges (hourly, daily, monthly, quarterly, yearly)
+  - Custom partition naming via `--table-partition-template` flag with placeholders: `{table}`, `{YYYY}`, `{MM}`, `{DD}`, `{HH}`, `{Q}`
+  - Date range filtering via `--start-date` and `--end-date` flags
+  - Conflict handling with `ON CONFLICT DO NOTHING` to skip existing rows
+  - S3 file discovery based on path template matching archive configuration
+  - Sequential file processing (parallel support may be added later)
+  - Format/compression override flags for manual control
+  - Dry-run mode support for validation without data insertion
+  - Hourly partitioning with `--date-column` flag for splitting daily files into hourly partitions based on row timestamps
+  - Debug configuration table showing all settings when `--debug` is enabled
+
+### Changed
+- Root command now shows help when no subcommand is specified (previous default behavior moved to `archive` subcommand)
+- Command-line flags now properly override config file values in restore command
+
+### Technical Details
+- Added `Restorer` struct similar to `Archiver` for restore operations
+- Implemented format readers: `JSONLReader`, `CSVReader`, `ParquetReader`
+- Added decompression reader support to all compressors (`NewReader` method)
+- Schema inference from sample rows with PostgreSQL type mapping
+- Table and partition creation with proper SQL type conversion
+- Batch insert processing for performance
+- S3 file discovery with date extraction from filename patterns
+- Parquet file reading using file schema instead of type inference
+- Row splitting by timestamp for hourly partitioning of daily files
+
 ## [1.5.2] - 2025-01-12
 
 ### Fixed

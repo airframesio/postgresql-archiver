@@ -65,3 +65,12 @@ func (c *GzipCompressor) NewWriter(w io.Writer, level int) io.WriteCloser {
 func (c *GzipCompressor) DefaultLevel() int {
 	return 6 // gzip.DefaultCompression
 }
+
+// NewReader creates a streaming gzip decompression reader
+func (c *GzipCompressor) NewReader(r io.Reader) (io.ReadCloser, error) {
+	reader, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	return reader, nil
+}
