@@ -842,19 +842,8 @@ func (r *Restorer) ensurePartitionExists(ctx context.Context, baseTable string, 
 	}
 
 	// Get base table schema
-	schema, err := r.getTableSchema(ctx, baseTable)
-	if err != nil {
-		return fmt.Errorf("failed to get base table schema: %w", err)
-	}
-
 	// Create partition table
 	r.logger.Info(fmt.Sprintf("Creating partition %s", partitionName))
-
-	var columnDefs []string
-	for _, col := range schema.Columns {
-		colDef := fmt.Sprintf("%s %s", pq.QuoteIdentifier(col.Name), mapPostgreSQLTypeToSQLType(col.UDTName))
-		columnDefs = append(columnDefs, colDef)
-	}
 
 	// Use PostgreSQL inheritance for partitions
 	createQuery := fmt.Sprintf(

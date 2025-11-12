@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **pg_dump Command:**
+  - New `dump` subcommand to use `pg_dump` output directly to S3
+  - Custom format (`-Fc`) with heavy compression (`-Z 9`)
+  - Parallel processing support using `--workers` flag (honors parallel count)
+  - Three dump modes: `schema-only`, `data-only`, or `schema-and-data` (default)
+  - Streaming output directly to S3 without intermediate files
+  - Optional table-specific dumps via `--table` flag
+  - Automatic filename generation with timestamp and dump mode suffix
+  - Dry-run mode support for validation without upload
+  - **Schema-Only Optimization**: Automatically discovers and dumps only top-level tables (excludes partitions) since partitions share the same schema as their parent table
+
 ## [1.5.3] - 2025-11-12
 
 ### Added

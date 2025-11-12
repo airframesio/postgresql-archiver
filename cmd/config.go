@@ -35,6 +35,7 @@ var (
 	ErrCompressionInvalid      = errors.New("compression must be one of: zstd, lz4, gzip, none")
 	ErrCompressionLevelInvalid = errors.New("compression level must be between 1 and 22 (zstd), 1-9 (lz4/gzip)")
 	ErrDateColumnInvalid       = errors.New("date column is invalid: must start with a letter or underscore, and contain only letters, numbers, and underscores")
+	ErrDumpModeInvalid         = errors.New("dump mode must be one of: schema-only, data-only, schema-and-data")
 )
 
 const regionAuto = "auto"
@@ -58,6 +59,7 @@ type Config struct {
 	Compression      string
 	CompressionLevel int
 	DateColumn       string
+	DumpMode         string // pg_dump mode: schema-only, data-only, schema-and-data
 }
 
 type DatabaseConfig struct {
@@ -169,6 +171,16 @@ func isValidCompressionLevel(compression string, level int) bool {
 	}
 }
 
+// isValidDumpMode validates the dump mode
+func isValidDumpMode(mode string) bool {
+	validModes := map[string]bool{
+		"schema-only":       true,
+		"data-only":         true,
+		"schema-and-data":   true,
+	}
+	return validModes[mode]
+}
+
 func (c *Config) Validate() error {
 	// Validate database configuration
 	if c.Database.User == "" {
@@ -219,26 +231,73 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Check if we're in dump mode
+	isDumpMode := c.DumpMode != ""
+
 	// Validate and sanitize table name to prevent SQL injection
-	if c.Table == "" {
-		return ErrTableNameRequired
+	// For dump mode, table is optional (can dump all top-level tables)
+	// For archive mode, table is required
+	if !isDumpMode {
+		if c.Table == "" {
+			return ErrTableNameRequired
+		}
 	}
-	if !isValidTableName(c.Table) {
+	// If table is provided (in either mode), validate it
+	if c.Table != "" && !isValidTableName(c.Table) {
 		return fmt.Errorf("%w: '%s'", ErrTableNameInvalid, c.Table)
 	}
 
-	// Validate date formats
-	if c.StartDate != "" {
-		if _, err := time.Parse("2006-01-02", c.StartDate); err != nil {
-			return fmt.Errorf("%w: %w", ErrStartDateFormatInvalid, err)
+	// Archive-specific validations (skip for dump mode)
+	if !isDumpMode {
+		// Validate date formats
+		if c.StartDate != "" {
+			if _, err := time.Parse("2006-01-02", c.StartDate); err != nil {
+				return fmt.Errorf("%w: %w", ErrStartDateFormatInvalid, err)
+			}
 		}
-	}
-	if c.EndDate != "" {
-		if _, err := time.Parse("2006-01-02", c.EndDate); err != nil {
-			return fmt.Errorf("%w: %w", ErrEndDateFormatInvalid, err)
+		if c.EndDate != "" {
+			if _, err := time.Parse("2006-01-02", c.EndDate); err != nil {
+				return fmt.Errorf("%w: %w", ErrEndDateFormatInvalid, err)
+			}
+		}
+
+		// Validate chunk size (if set)
+		if c.ChunkSize > 0 {
+			if c.ChunkSize < 100 {
+				return fmt.Errorf("%w, got %d", ErrChunkSizeMinimum, c.ChunkSize)
+			}
+			if c.ChunkSize > 1000000 {
+				return fmt.Errorf("%w, got %d", ErrChunkSizeMaximum, c.ChunkSize)
+			}
+		}
+
+		// Validate output duration
+		if !isValidOutputDuration(c.OutputDuration) {
+			return fmt.Errorf("%w: '%s'", ErrOutputDurationInvalid, c.OutputDuration)
+		}
+
+		// Validate output format
+		if !isValidOutputFormat(c.OutputFormat) {
+			return fmt.Errorf("%w: '%s'", ErrOutputFormatInvalid, c.OutputFormat)
+		}
+
+		// Validate compression
+		if !isValidCompression(c.Compression) {
+			return fmt.Errorf("%w: '%s'", ErrCompressionInvalid, c.Compression)
+		}
+
+		// Validate compression level
+		if !isValidCompressionLevel(c.Compression, c.CompressionLevel) {
+			return fmt.Errorf("%w for compression %s: got %d", ErrCompressionLevelInvalid, c.Compression, c.CompressionLevel)
+		}
+
+		// Validate date column (if provided, must be valid identifier)
+		if c.DateColumn != "" && !validPostgreSQLIdentifier.MatchString(c.DateColumn) {
+			return fmt.Errorf("%w: '%s'", ErrDateColumnInvalid, c.DateColumn)
 		}
 	}
 
+	// Common validations for both modes
 	// Validate workers count
 	if c.Workers < 1 {
 		return ErrWorkersMinimum
@@ -249,47 +308,21 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("%w, got %d", ErrWorkersMaximum, c.Workers)
 	}
 
-	// Validate chunk size (if set)
-	if c.ChunkSize > 0 {
-		if c.ChunkSize < 100 {
-			return fmt.Errorf("%w, got %d", ErrChunkSizeMinimum, c.ChunkSize)
-		}
-		if c.ChunkSize > 1000000 {
-			return fmt.Errorf("%w, got %d", ErrChunkSizeMaximum, c.ChunkSize)
-		}
-	}
-
-	// Validate path template
+	// Validate path template (required for both modes)
 	if c.S3.PathTemplate == "" {
 		return ErrPathTemplateRequired
 	}
-	if !isValidPathTemplate(c.S3.PathTemplate) {
-		return fmt.Errorf("%w: '%s'", ErrPathTemplateInvalid, c.S3.PathTemplate)
+	// For schema-only mode, {table} placeholder is optional (table name goes in filename)
+	// For other modes, {table} placeholder is required
+	if c.DumpMode != "schema-only" {
+		if !isValidPathTemplate(c.S3.PathTemplate) {
+			return fmt.Errorf("%w: '%s'", ErrPathTemplateInvalid, c.S3.PathTemplate)
+		}
 	}
 
-	// Validate output duration
-	if !isValidOutputDuration(c.OutputDuration) {
-		return fmt.Errorf("%w: '%s'", ErrOutputDurationInvalid, c.OutputDuration)
-	}
-
-	// Validate output format
-	if !isValidOutputFormat(c.OutputFormat) {
-		return fmt.Errorf("%w: '%s'", ErrOutputFormatInvalid, c.OutputFormat)
-	}
-
-	// Validate compression
-	if !isValidCompression(c.Compression) {
-		return fmt.Errorf("%w: '%s'", ErrCompressionInvalid, c.Compression)
-	}
-
-	// Validate compression level
-	if !isValidCompressionLevel(c.Compression, c.CompressionLevel) {
-		return fmt.Errorf("%w for compression %s: got %d", ErrCompressionLevelInvalid, c.Compression, c.CompressionLevel)
-	}
-
-	// Validate date column (if provided, must be valid identifier)
-	if c.DateColumn != "" && !validPostgreSQLIdentifier.MatchString(c.DateColumn) {
-		return fmt.Errorf("%w: '%s'", ErrDateColumnInvalid, c.DateColumn)
+	// Validate dump mode (if provided)
+	if c.DumpMode != "" && !isValidDumpMode(c.DumpMode) {
+		return fmt.Errorf("%w: '%s'", ErrDumpModeInvalid, c.DumpMode)
 	}
 
 	return nil

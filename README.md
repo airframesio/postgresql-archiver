@@ -128,7 +128,10 @@ data-archiver \
 
 ```bash
 # Archive data to S3
-data-archiver [flags]
+data-archiver archive [flags]
+
+# Dump database using pg_dump to S3
+data-archiver dump [flags]
 
 # Restore data from S3
 data-archiver restore [flags]
@@ -537,6 +540,136 @@ data-archiver \
   --table orders \
   --dry-run \
   --debug
+```
+
+## 💾 Dump Command
+
+The `dump` subcommand uses PostgreSQL's `pg_dump` utility to create database dumps with custom format and heavy compression, streaming directly to S3.
+
+### Dump Basic Usage
+
+```bash
+data-archiver dump \
+  --db-user myuser \
+  --db-password mypass \
+  --db-name mydb \
+  --s3-endpoint https://fsn1.your-objectstorage.com \
+  --s3-bucket my-archive-bucket \
+  --s3-access-key YOUR_ACCESS_KEY \
+  --s3-secret-key YOUR_SECRET_KEY \
+  --path-template "dumps/{table}/{YYYY}/{MM}"
+```
+
+### Dump with Schema Only
+
+```bash
+data-archiver dump \
+  --db-user myuser \
+  --db-password mypass \
+  --db-name mydb \
+  --dump-mode schema-only \
+  --s3-endpoint https://fsn1.your-objectstorage.com \
+  --s3-bucket my-archive-bucket \
+  --s3-access-key YOUR_ACCESS_KEY \
+  --s3-secret-key YOUR_SECRET_KEY \
+  --path-template "dumps/{table}/{YYYY}/{MM}"
+```
+
+### Dump with Data Only
+
+```bash
+data-archiver dump \
+  --db-user myuser \
+  --db-password mypass \
+  --db-name mydb \
+  --dump-mode data-only \
+  --workers 8 \
+  --s3-endpoint https://fsn1.your-objectstorage.com \
+  --s3-bucket my-archive-bucket \
+  --s3-access-key YOUR_ACCESS_KEY \
+  --s3-secret-key YOUR_SECRET_KEY \
+  --path-template "dumps/{table}/{YYYY}/{MM}"
+```
+
+### Dump Specific Table
+
+```bash
+data-archiver dump \
+  --db-user myuser \
+  --db-password mypass \
+  --db-name mydb \
+  --table flights \
+  --workers 4 \
+  --s3-endpoint https://fsn1.your-objectstorage.com \
+  --s3-bucket my-archive-bucket \
+  --s3-access-key YOUR_ACCESS_KEY \
+  --s3-secret-key YOUR_SECRET_KEY \
+  --path-template "dumps/{table}/{YYYY}/{MM}"
+```
+
+### Dump Flags
+
+- `--db-host` - PostgreSQL host (default: localhost)
+- `--db-port` - PostgreSQL port (default: 5432)
+- `--db-user` - PostgreSQL user (required)
+- `--db-password` - PostgreSQL password (required)
+- `--db-name` - PostgreSQL database name (required)
+- `--db-sslmode` - PostgreSQL SSL mode (disable, require, verify-ca, verify-full)
+- `--s3-endpoint` - S3-compatible endpoint URL (required)
+- `--s3-bucket` - S3 bucket name (required)
+- `--s3-access-key` - S3 access key (required)
+- `--s3-secret-key` - S3 secret key (required)
+- `--s3-region` - S3 region (default: auto)
+- `--path-template` - S3 path template with placeholders (required)
+- `--table` - Table name to dump (optional, dumps entire database if not specified)
+- `--workers` - Number of parallel jobs for pg_dump (default: 4)
+- `--dump-mode` - Dump mode: `schema-only`, `data-only`, or `schema-and-data` (default: schema-and-data)
+
+### Dump Features
+
+- **Custom Format**: Uses PostgreSQL's custom format (`-Fc`) which supports parallel dumps and compression
+- **Heavy Compression**: Uses maximum compression level (`-Z 9`) for optimal file size
+- **Parallel Processing**: Honors the `--workers` flag to run multiple parallel jobs
+- **Streaming Upload**: Streams output directly to S3 without creating intermediate files
+- **Flexible Modes**: Supports schema-only, data-only, or both schema and data
+- **Table-Specific**: Can dump individual tables or entire databases
+- **Schema-Only Optimization**: For schema-only dumps:
+  - Automatically discovers and dumps only top-level tables (excludes partitions)
+  - Partitions share the same schema as their parent table, so scanning them is unnecessary
+  - Use `--table` flag to dump a specific table's schema
+  - Without `--table`, dumps schemas for all top-level tables
+- **Automatic Naming**: Generates filenames with timestamp and mode suffix (e.g., `flights-schema-20240115-120000.dump`)
+
+### Dump Examples
+
+**Dump entire database:**
+```bash
+data-archiver dump \
+  --db-user myuser \
+  --db-password mypass \
+  --db-name mydb \
+  --path-template "dumps/{table}/{YYYY}/{MM}"
+```
+
+**Dump specific table with parallel processing:**
+```bash
+data-archiver dump \
+  --db-user myuser \
+  --db-password mypass \
+  --db-name mydb \
+  --table flights \
+  --workers 8 \
+  --path-template "dumps/{table}/{YYYY}/{MM}"
+```
+
+**Dry run dump (validate without uploading):**
+```bash
+data-archiver dump \
+  --db-user myuser \
+  --db-password mypass \
+  --db-name mydb \
+  --dry-run \
+  --path-template "dumps/{table}/{YYYY}/{MM}"
 ```
 
 ## 🔄 Restore Command

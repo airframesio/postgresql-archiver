@@ -62,6 +62,7 @@ var (
 	compression        string
 	compressionLevel   int
 	dateColumn         string
+	dumpMode           string
 
 	titleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#7D56F4")).
@@ -209,7 +210,8 @@ var rootCmd = &cobra.Command{
 
 A CLI tool to efficiently archive database data to object storage.
 Currently supports PostgreSQL input (partitioned tables) and S3-compatible storage output.
-Extracts data by day, converts to JSONL/CSV/Parquet, compresses with zstd/lz4/gzip, and uploads.`,
+Extracts data by day, converts to JSONL/CSV/Parquet, compresses with zstd/lz4/gzip, and uploads.
+Also supports pg_dump for full database dumps with custom format and heavy compression.`,
 	Run: func(cmd *cobra.Command, _ []string) {
 		// Show help when no subcommand is specified
 		cmd.Help()
@@ -225,6 +227,15 @@ var archiveCmd = &cobra.Command{
 	},
 }
 
+var dumpCmd = &cobra.Command{
+	Use:   "dump",
+	Short: "Dump database using pg_dump to S3",
+	Long:  `Dump database using pg_dump with custom format and heavy compression, streaming directly to S3. Supports schema-only, data-only, or schema-and-data modes.`,
+	Run: func(_ *cobra.Command, _ []string) {
+		runDump()
+	},
+}
+
 func Execute() error {
 	return rootCmd.Execute()
 }
@@ -234,6 +245,7 @@ func init() {
 
 	// Register archive subcommand
 	rootCmd.AddCommand(archiveCmd)
+	rootCmd.AddCommand(dumpCmd)
 
 	// Persistent flags (available to all subcommands)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.data-archiver.yaml)")
@@ -275,6 +287,23 @@ func init() {
 	archiveCmd.Flags().IntVar(&compressionLevel, "compression-level", 3, "compression level (zstd: 1-22, lz4/gzip: 1-9, none: 0)")
 	archiveCmd.Flags().StringVar(&dateColumn, "date-column", "", "timestamp column name for duration-based splitting (optional)")
 
+	// Dump-specific flags
+	dumpCmd.Flags().StringVar(&dbHost, "db-host", "localhost", "PostgreSQL host")
+	dumpCmd.Flags().IntVar(&dbPort, "db-port", 5432, "PostgreSQL port")
+	dumpCmd.Flags().StringVar(&dbUser, "db-user", "", "PostgreSQL user")
+	dumpCmd.Flags().StringVar(&dbPassword, "db-password", "", "PostgreSQL password")
+	dumpCmd.Flags().StringVar(&dbName, "db-name", "", "PostgreSQL database name")
+	dumpCmd.Flags().StringVar(&dbSSLMode, "db-sslmode", "disable", "PostgreSQL SSL mode (disable, require, verify-ca, verify-full)")
+	dumpCmd.Flags().StringVar(&s3Endpoint, "s3-endpoint", "", "S3-compatible endpoint URL")
+	dumpCmd.Flags().StringVar(&s3Bucket, "s3-bucket", "", "S3 bucket name")
+	dumpCmd.Flags().StringVar(&s3AccessKey, "s3-access-key", "", "S3 access key")
+	dumpCmd.Flags().StringVar(&s3SecretKey, "s3-secret-key", "", "S3 secret key")
+	dumpCmd.Flags().StringVar(&s3Region, "s3-region", "auto", "S3 region")
+	dumpCmd.Flags().StringVar(&pathTemplate, "path-template", "", "S3 path template with placeholders: {table}, {YYYY}, {MM}, {DD}, {HH} (required)")
+	dumpCmd.Flags().StringVar(&baseTable, "table", "", "table name to dump (optional, dumps entire database if not specified)")
+	dumpCmd.Flags().IntVar(&workers, "workers", 4, "number of parallel jobs for pg_dump")
+	dumpCmd.Flags().StringVar(&dumpMode, "dump-mode", "schema-and-data", "dump mode: schema-only, data-only, schema-and-data")
+
 	// Note: We don't use MarkFlagRequired because it checks before viper loads the config file.
 	// Instead, validation happens in config.Validate() which runs after all config sources are loaded.
 
@@ -312,6 +341,23 @@ func init() {
 	_ = viper.BindPFlag("compression", archiveCmd.Flags().Lookup("compression"))
 	_ = viper.BindPFlag("compression_level", archiveCmd.Flags().Lookup("compression-level"))
 	_ = viper.BindPFlag("date_column", archiveCmd.Flags().Lookup("date-column"))
+
+	// Bind dump flags
+	_ = viper.BindPFlag("db.host", dumpCmd.Flags().Lookup("db-host"))
+	_ = viper.BindPFlag("db.port", dumpCmd.Flags().Lookup("db-port"))
+	_ = viper.BindPFlag("db.user", dumpCmd.Flags().Lookup("db-user"))
+	_ = viper.BindPFlag("db.password", dumpCmd.Flags().Lookup("db-password"))
+	_ = viper.BindPFlag("db.name", dumpCmd.Flags().Lookup("db-name"))
+	_ = viper.BindPFlag("db.sslmode", dumpCmd.Flags().Lookup("db-sslmode"))
+	_ = viper.BindPFlag("s3.endpoint", dumpCmd.Flags().Lookup("s3-endpoint"))
+	_ = viper.BindPFlag("s3.bucket", dumpCmd.Flags().Lookup("s3-bucket"))
+	_ = viper.BindPFlag("s3.access_key", dumpCmd.Flags().Lookup("s3-access-key"))
+	_ = viper.BindPFlag("s3.secret_key", dumpCmd.Flags().Lookup("s3-secret-key"))
+	_ = viper.BindPFlag("s3.region", dumpCmd.Flags().Lookup("s3-region"))
+	_ = viper.BindPFlag("s3.path_template", dumpCmd.Flags().Lookup("path-template"))
+	_ = viper.BindPFlag("table", dumpCmd.Flags().Lookup("table"))
+	_ = viper.BindPFlag("workers", dumpCmd.Flags().Lookup("workers"))
+	_ = viper.BindPFlag("dump_mode", dumpCmd.Flags().Lookup("dump-mode"))
 }
 
 func initConfig() {
@@ -479,4 +525,82 @@ func runArchive() {
 
 	logger.Info("")
 	logger.Info("✅ Archive completed successfully!")
+}
+
+func runDump() {
+	// Add panic recovery to catch any unexpected crashes
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "\n❌ PANIC: %v\n", r)
+			os.Exit(1)
+		}
+	}()
+
+	config := &Config{
+		Debug:       viper.GetBool("debug"),
+		LogFormat:   viper.GetString("log_format"),
+		DryRun:      viper.GetBool("dry_run"),
+		Workers:     viper.GetInt("workers"),
+		Database: DatabaseConfig{
+			Host:    viper.GetString("db.host"),
+			Port:    viper.GetInt("db.port"),
+			User:    viper.GetString("db.user"),
+			Password: viper.GetString("db.password"),
+			Name:    viper.GetString("db.name"),
+			SSLMode: viper.GetString("db.sslmode"),
+		},
+		S3: S3Config{
+			Endpoint:     viper.GetString("s3.endpoint"),
+			Bucket:       viper.GetString("s3.bucket"),
+			AccessKey:    viper.GetString("s3.access_key"),
+			SecretKey:    viper.GetString("s3.secret_key"),
+			Region:       viper.GetString("s3.region"),
+			PathTemplate: viper.GetString("s3.path_template"),
+		},
+		Table:    viper.GetString("table"),
+		DumpMode: viper.GetString("dump_mode"),
+	}
+
+	// Initialize logger
+	initLogger(config.Debug, config.LogFormat)
+
+	// Log startup banner
+	logger.Info("")
+	logger.Info(fmt.Sprintf("🚀 Data Archiver v%s - pg_dump Mode", Version))
+	logger.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	logger.Debug("Validating configuration...")
+	if err := config.Validate(); err != nil {
+		logger.Error(fmt.Sprintf("❌ Configuration error: %s", err.Error()))
+		os.Exit(1)
+	}
+	logger.Debug("Configuration validated successfully")
+
+	// Use the signal context created in main() before Cobra initialization
+	ctx := signalContext
+	if ctx == nil {
+		// Fallback if SetSignalContext wasn't called (shouldn't happen)
+		logger.Warn("Signal context not set, creating fallback...")
+		var stop context.CancelFunc
+		ctx, stop = signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+	}
+
+	logger.Debug("Creating pg_dump executor...")
+	executor := NewPgDumpExecutor(config, logger)
+	logger.Debug("Starting pg_dump process...")
+
+	err := executor.Run(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			logger.Info("")
+			logger.Info("⚠️  Dump cancelled by user")
+			os.Exit(130)
+		}
+		logger.Error(fmt.Sprintf("❌ Dump failed: %s", err.Error()))
+		os.Exit(1)
+	}
+
+	logger.Info("")
+	logger.Info("✅ Dump completed successfully!")
 }
