@@ -550,22 +550,32 @@ func (a *Archiver) checkTablePermissions(ctx context.Context) error {
 	// This checks SELECT permission without actually running a query
 
 	// Check if we have permission to SELECT from the base table (if it exists)
-	var hasPermission bool
-	checkPermissionQuery := `
-		SELECT has_table_privilege($1, 'SELECT')
-		FROM pg_tables
-		WHERE schemaname = 'public'
-		AND tablename = $2
+	// First check if the table exists
+	var tableExists bool
+	existsQuery := `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_tables
+			WHERE schemaname = 'public'
+			AND tablename = $1
+		)
 	`
-
-	err := a.db.QueryRowContext(ctx, checkPermissionQuery, a.config.Table, a.config.Table).Scan(&hasPermission)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("failed to check table permissions: %w", err)
+	err := a.db.QueryRowContext(ctx, existsQuery, a.config.Table).Scan(&tableExists)
+	if err != nil {
+		return fmt.Errorf("failed to check if table exists: %w", err)
 	}
 
-	// If the base table exists and we don't have permission, fail
-	if !errors.Is(err, sql.ErrNoRows) && !hasPermission {
-		return fmt.Errorf("%w: %s", ErrInsufficientPermissions, a.config.Table)
+	// If table exists, check permissions
+	if tableExists {
+		var hasPermission bool
+		checkPermissionQuery := `SELECT has_table_privilege('public.' || $1, 'SELECT')`
+		err = a.db.QueryRowContext(ctx, checkPermissionQuery, a.config.Table).Scan(&hasPermission)
+		if err != nil {
+			return fmt.Errorf("failed to check table permissions: %w", err)
+		}
+
+		if !hasPermission {
+			return fmt.Errorf("%w: %s", ErrInsufficientPermissions, a.config.Table)
+		}
 	}
 
 	// Check if we can see and access partition tables
@@ -575,7 +585,7 @@ func (a *Archiver) checkTablePermissions(ctx context.Context) error {
 		FROM pg_tables
 		WHERE schemaname = 'public'
 		AND tablename LIKE $1
-		AND has_table_privilege(tablename, 'SELECT')
+		AND has_table_privilege('public.' || tablename, 'SELECT')
 		LIMIT 1
 	`
 

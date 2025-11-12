@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2025-01-12
+
+### Fixed
+- Fixed partition table permissions check error: `has_table_privilege` now correctly uses schema-qualified table names (`'public.' || tablename`)
+- Fixed base table permissions check: restructured query to avoid "unnamed prepared statement does not exist" error by separating table existence check from permission check
+
 ## [1.5.0] - 2025-01-09
 
 ### Added
