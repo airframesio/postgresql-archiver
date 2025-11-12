@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2025-01-12
+
+### Fixed
+- Fixed concurrent write panic in WebSocket connections: "concurrent write to websocket connection"
+- Added per-connection write mutex to serialize websocket writes and prevent race conditions
+- WebSocket connections now thread-safe for both cache updates and log streaming
+
+### Technical Details
+- Introduced `clientWrapper` struct with mutex protection for each websocket connection
+- All websocket writes now go through thread-safe `writeJSON()` method
+- Prevents panic when multiple goroutines attempt to write to the same connection simultaneously
+- Affects both `/ws` (cache updates) and `/ws/logs` (log streaming) endpoints
+
 ## [1.5.1] - 2025-01-12
 
 ### Fixed

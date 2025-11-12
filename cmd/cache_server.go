@@ -25,18 +25,31 @@ var (
 	}
 
 	// WebSocket client manager
-	clients   = make(map[*websocket.Conn]bool)
+	clients   = make(map[*websocket.Conn]*clientWrapper)
 	clientsMu sync.RWMutex
 	broadcast = make(chan interface{}, 100)
 
 	// Log streaming clients
-	logClients   = make(map[*websocket.Conn]bool)
+	logClients   = make(map[*websocket.Conn]*clientWrapper)
 	logClientsMu sync.RWMutex
 	logBroadcast = make(chan LogMessage, 1000)
 
 	// Ensure background goroutines are started only once
 	startOnce sync.Once
 )
+
+// clientWrapper wraps a websocket connection with a write mutex to ensure thread-safe writes
+type clientWrapper struct {
+	conn *websocket.Conn
+	mu   sync.Mutex
+}
+
+// writeJSON safely writes JSON to the websocket connection with mutex protection
+func (cw *clientWrapper) writeJSON(v interface{}) error {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	return cw.conn.WriteJSON(v)
+}
 
 var cacheServerCmd = &cobra.Command{
 	Use:   "viewer",
@@ -121,11 +134,11 @@ func logBroadcastManager() {
 		logClientsMu.RLock()
 		clientCount := len(logClients)
 		var failedClients []*websocket.Conn
-		for client := range logClients {
-			err := client.WriteJSON(logMsg)
+		for conn, wrapper := range logClients {
+			err := wrapper.writeJSON(logMsg)
 			if err != nil {
 				log.Printf("DEBUG: Failed to send log to client: %v", err)
-				failedClients = append(failedClients, client)
+				failedClients = append(failedClients, conn)
 			}
 		}
 		logClientsMu.RUnlock()
@@ -138,9 +151,11 @@ func logBroadcastManager() {
 		// Clean up failed clients
 		if len(failedClients) > 0 {
 			logClientsMu.Lock()
-			for _, client := range failedClients {
-				delete(logClients, client)
-				client.Close()
+			for _, conn := range failedClients {
+				if wrapper, exists := logClients[conn]; exists {
+					wrapper.conn.Close()
+					delete(logClients, conn)
+				}
 			}
 			logClientsMu.Unlock()
 		}
@@ -161,9 +176,9 @@ func handleLogsWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Logs WebSocket connection established from %s", r.RemoteAddr)
 
-	// Register log client
+	// Register log client with wrapper
 	logClientsMu.Lock()
-	logClients[conn] = true
+	logClients[conn] = &clientWrapper{conn: conn}
 	logClientsMu.Unlock()
 
 	// Send a test log message to verify the connection works
@@ -422,14 +437,15 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Register client
+	// Register client with wrapper
+	wrapper := &clientWrapper{conn: conn}
 	clientsMu.Lock()
-	clients[conn] = true
+	clients[conn] = wrapper
 	clientsMu.Unlock()
 
 	// Send initial data
-	sendCacheData(conn)
-	sendStatusData(conn)
+	sendCacheData(wrapper)
+	sendStatusData(wrapper)
 
 	// Clean up on disconnect
 	defer func() {
@@ -454,10 +470,10 @@ func broadcastManager() {
 		clientsMu.RLock()
 		// Collect failed clients while holding read lock
 		var failedClients []*websocket.Conn
-		for client := range clients {
-			err := client.WriteJSON(msg)
+		for conn, wrapper := range clients {
+			err := wrapper.writeJSON(msg)
 			if err != nil {
-				failedClients = append(failedClients, client)
+				failedClients = append(failedClients, conn)
 			}
 		}
 		clientsMu.RUnlock()
@@ -465,9 +481,11 @@ func broadcastManager() {
 		// Clean up failed clients with write lock
 		if len(failedClients) > 0 {
 			clientsMu.Lock()
-			for _, client := range failedClients {
-				delete(clients, client)
-				client.Close()
+			for _, conn := range failedClients {
+				if wrapper, exists := clients[conn]; exists {
+					wrapper.conn.Close()
+					delete(clients, conn)
+				}
 			}
 			clientsMu.Unlock()
 		}
@@ -617,17 +635,17 @@ func broadcastStatusUpdate() {
 	}
 }
 
-func sendCacheData(conn *websocket.Conn) {
+func sendCacheData(wrapper *clientWrapper) {
 	cacheData := getCacheDataForWS()
-	_ = conn.WriteJSON(WSMessage{
+	_ = wrapper.writeJSON(WSMessage{
 		Type: "cache",
 		Data: cacheData,
 	})
 }
 
-func sendStatusData(conn *websocket.Conn) {
+func sendStatusData(wrapper *clientWrapper) {
 	statusData := getStatusDataForWS()
-	_ = conn.WriteJSON(WSMessage{
+	_ = wrapper.writeJSON(WSMessage{
 		Type: "status",
 		Data: statusData,
 	})
