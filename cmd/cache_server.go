@@ -29,12 +29,17 @@ var (
 	clientsMu sync.RWMutex
 	broadcast = make(chan interface{}, 100)
 
+	// Log streaming clients
+	logClients   = make(map[*websocket.Conn]bool)
+	logClientsMu sync.RWMutex
+	logBroadcast = make(chan LogMessage, 1000)
+
 	// Ensure background goroutines are started only once
 	startOnce sync.Once
 )
 
 var cacheServerCmd = &cobra.Command{
-	Use:   "cache-viewer",
+	Use:   "viewer",
 	Short: "Start a web server to view cache data",
 	Long:  `Starts a local web server that provides a beautiful interface for viewing and monitoring the archiver's cache data.`,
 	RunE:  runCacheServer,
@@ -70,6 +75,7 @@ type CacheEntry struct {
 	S3UploadTime     time.Time `json:"s3UploadTime"`
 	LastError        string    `json:"lastError"`
 	ErrorTime        time.Time `json:"errorTime"`
+	ProcessStartTime time.Time `json:"processStartTime,omitempty"` // When processing started for this job
 }
 
 type StatusResponse struct {
@@ -93,6 +99,12 @@ type WSMessage struct {
 	Data interface{} `json:"data"`
 }
 
+type LogMessage struct {
+	Timestamp string `json:"timestamp"`
+	Level     string `json:"level"`
+	Message   string `json:"message"`
+}
+
 // startBackgroundServices ensures broadcast manager and data monitor are started only once
 func startBackgroundServices() {
 	startOnce.Do(func() {
@@ -101,26 +113,145 @@ func startBackgroundServices() {
 	})
 }
 
+// logBroadcastManager sends log messages to all connected log clients
+func logBroadcastManager() {
+	log.Printf("DEBUG: logBroadcastManager started")
+	for {
+		logMsg := <-logBroadcast
+		logClientsMu.RLock()
+		clientCount := len(logClients)
+		var failedClients []*websocket.Conn
+		for client := range logClients {
+			err := client.WriteJSON(logMsg)
+			if err != nil {
+				log.Printf("DEBUG: Failed to send log to client: %v", err)
+				failedClients = append(failedClients, client)
+			}
+		}
+		logClientsMu.RUnlock()
+
+		// Debug: log when we send messages
+		if clientCount > 0 {
+			log.Printf("DEBUG: Sent log message to %d client(s): %s", clientCount, logMsg.Message)
+		}
+
+		// Clean up failed clients
+		if len(failedClients) > 0 {
+			logClientsMu.Lock()
+			for _, client := range failedClients {
+				delete(logClients, client)
+				client.Close()
+			}
+			logClientsMu.Unlock()
+		}
+	}
+}
+
+// handleLogsWebSocket handles WebSocket connections for log streaming
+func handleLogsWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Log the incoming request for debugging
+	log.Printf("Logs WebSocket connection attempt from %s", r.RemoteAddr)
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Logs WebSocket upgrade error: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	log.Printf("Logs WebSocket connection established from %s", r.RemoteAddr)
+
+	// Register log client
+	logClientsMu.Lock()
+	logClients[conn] = true
+	logClientsMu.Unlock()
+
+	// Send a test log message to verify the connection works
+	// Use a goroutine with a small delay to ensure the client is fully registered
+	go func() {
+		time.Sleep(100 * time.Millisecond) // Small delay to ensure client is registered
+		if logBroadcast != nil {
+			testMsg := LogMessage{
+				Timestamp: time.Now().Format("2006-01-02 15:04:05"),
+				Level:     "INFO",
+				Message:   "Log streaming connected successfully",
+			}
+			select {
+			case logBroadcast <- testMsg:
+				log.Printf("DEBUG: Sent test log message to channel")
+			default:
+				log.Printf("DEBUG: Failed to send test log message (channel full)")
+			}
+		}
+	}()
+
+	// Clean up on disconnect
+	defer func() {
+		logClientsMu.Lock()
+		delete(logClients, conn)
+		logClientsMu.Unlock()
+		log.Printf("Logs WebSocket client disconnected")
+	}()
+
+	// Keep connection alive
+	for {
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("Logs WebSocket error: %v", err)
+			}
+			break
+		}
+	}
+}
+
 func runCacheServer(_ *cobra.Command, _ []string) error {
 	// Set up HTTP routes
 	http.HandleFunc("/", serveCacheViewer)
 	http.HandleFunc("/api/cache", serveCacheData)
 	http.HandleFunc("/api/status", serveStatusData)
 	http.HandleFunc("/ws", handleWebSocket)
+	http.HandleFunc("/ws/logs", handleLogsWebSocket)
 
 	// Start background goroutines (only starts once even if called multiple times)
 	startBackgroundServices()
+	go logBroadcastManager()
 
 	addr := fmt.Sprintf(":%d", serverPort)
 	// Initialize logger if not already initialized
+	// IMPORTANT: logBroadcast must be initialized before calling initLogger
+	// so that the broadcastLogHandler can use it
 	if logger == nil {
-		initLogger(false, "text") // Default to text format for cache viewer
+		// Respect debug flag and log format from global flags
+		isDebug := false
+		logFormat := "text"
+		if val, err := rootCmd.PersistentFlags().GetBool("debug"); err == nil {
+			isDebug = val
+		}
+		if val, err := rootCmd.PersistentFlags().GetString("log-format"); err == nil && val != "" {
+			logFormat = val
+		}
+		initLogger(isDebug, logFormat)
 	}
+	// Wrap logger to broadcast logs to WebSocket clients
+	// This ensures logs from the cache viewer itself are also streamed
+	// Test that logBroadcast is working by sending a test log
+	if logBroadcast != nil {
+		log.Printf("DEBUG: logBroadcast channel is initialized, ready to broadcast logs")
+	}
+
+	// Generate some test logs to verify broadcasting works
 	logger.Info("")
-	logger.Info("🚀 PostgreSQL Archiver Cache Viewer")
+	logger.Info("🚀 Data Archiver Viewer")
 	logger.Info(fmt.Sprintf("📊 Starting web server on http://localhost%s", addr))
 	logger.Info("🌐 Open your browser to view cache data")
 	logger.Info("⌨️  Press Ctrl+C to stop the server\n")
+
+	// Send a test log after a brief delay to ensure the system is ready
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		logger.Info("✅ Log streaming system initialized and ready")
+	}()
 
 	server := &http.Server{
 		Addr:              addr,
@@ -206,6 +337,7 @@ func serveCacheData(w http.ResponseWriter, _ *http.Request) {
 					S3UploadTime:     entry.S3UploadTime,
 					LastError:        entry.LastError,
 					ErrorTime:        entry.ErrorTime,
+					ProcessStartTime: entry.ProcessStartTime,
 				})
 			}
 
@@ -366,10 +498,12 @@ func setupWatchDirs(watcher *fsnotify.Watcher) {
 // handleFileEvent processes file system events
 func handleFileEvent(event fsnotify.Event, debounceTimer **time.Timer, debounceDuration time.Duration) {
 	// Check if it's a cache or task file
-	isCacheFile := strings.HasSuffix(event.Name, ".json") && strings.Contains(event.Name, "cache")
+	// Cache files are named like {table}_metadata.json in the cache directory
+	isCacheFile := strings.HasSuffix(event.Name, "_metadata.json") || strings.HasSuffix(event.Name, "_counts.json")
 	isTaskFile := strings.HasSuffix(event.Name, "current_task.json")
 
-	if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) != 0 {
+	// Handle Write, Create, Rename (atomic writes), and Chmod events
+	if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename|fsnotify.Chmod) != 0 {
 		if isCacheFile || isTaskFile {
 			// Debounce updates to avoid flooding
 			if *debounceTimer != nil {
@@ -401,7 +535,11 @@ func dataMonitor() {
 
 	// Debounce timer to avoid too many updates
 	var debounceTimer *time.Timer
-	debounceDuration := 100 * time.Millisecond
+	debounceDuration := 200 * time.Millisecond // Increased from 100ms to ensure file writes complete
+
+	// Also add a periodic refresh to catch any missed updates (every 2 seconds)
+	refreshTicker := time.NewTicker(2 * time.Second)
+	defer refreshTicker.Stop()
 
 	for {
 		select {
@@ -416,6 +554,11 @@ func dataMonitor() {
 				return
 			}
 			log.Printf("File watcher error: %v", err)
+
+		case <-refreshTicker.C:
+			// Periodic refresh to catch any missed file updates
+			broadcastCacheUpdate()
+			broadcastStatusUpdate()
 		}
 	}
 }
@@ -546,6 +689,28 @@ func getCacheDataForWS() CacheResponse {
 					S3UploadTime:     entry.S3UploadTime,
 					LastError:        entry.LastError,
 					ErrorTime:        entry.ErrorTime,
+					ProcessStartTime: entry.ProcessStartTime,
+				})
+			}
+
+			response.Tables = append(response.Tables, tableCache)
+			continue
+		}
+
+		// Try to parse as old format
+		var oldCache RowCountCache
+		if err := json.Unmarshal(data, &oldCache); err == nil && oldCache.Counts != nil {
+			tableCache := TableCache{
+				TableName: tableName,
+				Entries:   []CacheEntry{},
+			}
+
+			for partition, entry := range oldCache.Counts {
+				tableCache.Entries = append(tableCache.Entries, CacheEntry{
+					Table:     tableName,
+					Partition: partition,
+					RowCount:  entry.Count,
+					CountTime: entry.Timestamp,
 				})
 			}
 

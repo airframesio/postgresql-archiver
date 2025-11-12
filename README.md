@@ -143,7 +143,7 @@ Usage:
   data-archiver [flags]
 
 Flags:
-      --cache-viewer                 start embedded cache viewer web server
+      --viewer                       start embedded cache viewer web server
       --compression string           compression type: zstd, lz4, gzip, none (default "zstd")
       --compression-level int        compression level (zstd: 1-22, lz4/gzip: 1-9, none: 0) (default 3)
       --config string                config file (default is $HOME/.data-archiver.yaml)
@@ -317,15 +317,15 @@ The archiver includes an embedded web server for monitoring cache and progress:
 
 ```bash
 # Start archiver with embedded cache viewer
-data-archiver --cache-viewer --viewer-port 8080 [other options]
+data-archiver --viewer --viewer-port 8080 [other options]
 
 # Or run standalone cache viewer
-data-archiver cache-viewer --port 8080
+data-archiver viewer --port 8080
 ```
 
 Features:
 - **WebSocket Real-time Updates**: Live data streaming with automatic reconnection
-- **Interactive Status Panel**: 
+- **Interactive Status Panel**:
   - Shows current partition being processed with clickable link
   - Displays specific operation (e.g., "Checking if exists", "Extracting", "Compressing", "Uploading")
   - Progress bar with completion percentage and partition count

@@ -33,6 +33,9 @@ type PartitionCacheEntry struct {
 	// Error tracking
 	LastError string    `json:"last_error,omitempty"`
 	ErrorTime time.Time `json:"error_time,omitempty"`
+
+	// Processing time tracking
+	ProcessStartTime time.Time `json:"process_start_time,omitempty"` // When processing started for this job
 }
 
 // Legacy support - keep old structure for backward compatibility
@@ -261,10 +264,10 @@ func (c *PartitionCache) getFileMetadataWithETag(tablePartition string, s3Key st
 
 // Set file metadata in cache (with S3 upload status)
 func (c *PartitionCache) setFileMetadata(tablePartition string, s3Key string, compressedSize int64, uncompressedSize int64, md5 string, s3Uploaded bool) {
-	c.setFileMetadataWithETag(tablePartition, s3Key, compressedSize, uncompressedSize, md5, "", s3Uploaded)
+	c.setFileMetadataWithETagAndStartTime(tablePartition, s3Key, compressedSize, uncompressedSize, md5, "", s3Uploaded, time.Time{})
 }
 
-func (c *PartitionCache) setFileMetadataWithETag(tablePartition string, s3Key string, compressedSize int64, uncompressedSize int64, md5 string, multipartETag string, s3Uploaded bool) {
+func (c *PartitionCache) setFileMetadataWithETagAndStartTime(tablePartition string, s3Key string, compressedSize int64, uncompressedSize int64, md5 string, multipartETag string, s3Uploaded bool, processStartTime time.Time) {
 	entry := c.Entries[tablePartition]
 	entry.FileSize = compressedSize
 	entry.UncompressedSize = uncompressedSize
@@ -275,6 +278,10 @@ func (c *PartitionCache) setFileMetadataWithETag(tablePartition string, s3Key st
 	entry.S3Uploaded = s3Uploaded
 	if s3Uploaded {
 		entry.S3UploadTime = time.Now()
+	}
+	// Set process start time if provided
+	if !processStartTime.IsZero() {
+		entry.ProcessStartTime = processStartTime
 	}
 	// Clear any previous error when successful
 	entry.LastError = ""

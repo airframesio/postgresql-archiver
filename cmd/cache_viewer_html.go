@@ -61,7 +61,7 @@ func fallbackHTML() string {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PostgreSQL Archiver - Cache Viewer</title>
+    <title>Data Archiver Viewer</title>
     <style>
         body {
             font-family: system-ui, -apple-system, sans-serif;
@@ -90,7 +90,7 @@ func fallbackHTML() string {
 </head>
 <body>
     <div class="error-container">
-        <h1>Cache Viewer Unavailable</h1>
+        <h1>Viewer Unavailable</h1>
         <p>The embedded web assets could not be loaded.</p>
         <p>Please ensure the web/ directory files are properly embedded.</p>
     </div>

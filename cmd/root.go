@@ -81,6 +81,51 @@ func SetSignalContext(ctx context.Context, stopFile string) {
 	stopFilePath = stopFile
 }
 
+// broadcastLogHandler wraps a slog handler and broadcasts logs to WebSocket clients
+type broadcastLogHandler struct {
+	handler slog.Handler
+}
+
+func newBroadcastLogHandler(handler slog.Handler) *broadcastLogHandler {
+	return &broadcastLogHandler{handler: handler}
+}
+
+func (h *broadcastLogHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.handler.Enabled(ctx, level)
+}
+
+func (h *broadcastLogHandler) Handle(ctx context.Context, r slog.Record) error {
+	// Broadcast log to WebSocket clients (non-blocking)
+	// Only broadcast if logBroadcast channel is available (cache viewer mode)
+	// Note: logBroadcast is initialized in cache_server.go at package level
+	// Since both files are in the same package, it's accessible here
+	if logBroadcast != nil {
+		logMsg := LogMessage{
+			Timestamp: r.Time.Format("2006-01-02 15:04:05"),
+			Level:     r.Level.String(),
+			Message:   r.Message,
+		}
+		select {
+		case logBroadcast <- logMsg:
+			// Successfully sent to broadcast channel
+		default:
+			// Channel full, skip broadcast to avoid blocking
+			// This shouldn't happen often with a 1000 buffer
+		}
+	}
+
+	// Always write to original handler (this ensures logs still appear in console)
+	return h.handler.Handle(ctx, r)
+}
+
+func (h *broadcastLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &broadcastLogHandler{handler: h.handler.WithAttrs(attrs)}
+}
+
+func (h *broadcastLogHandler) WithGroup(name string) slog.Handler {
+	return &broadcastLogHandler{handler: h.handler.WithGroup(name)}
+}
+
 // textOnlyHandler is a custom slog handler that outputs human-readable text
 // without key=value pairs, suitable for interactive terminal usage
 type textOnlyHandler struct {
@@ -147,6 +192,12 @@ func initLogger(isDebug bool, format string) {
 		// that formats messages more naturally without key=value pairs
 		handler = newTextOnlyHandler(os.Stdout, opts)
 	}
+
+	// Wrap handler to broadcast logs if logBroadcast channel exists (cache viewer mode)
+	// Note: logBroadcast is only initialized in cache viewer mode
+	// We'll check for it at runtime in the handler
+	handler = newBroadcastLogHandler(handler)
+
 	logger = slog.New(handler)
 }
 
@@ -197,7 +248,7 @@ func init() {
 	rootCmd.Flags().StringVar(&endDate, "end-date", time.Now().Format("2006-01-02"), "end date (YYYY-MM-DD)")
 	rootCmd.Flags().IntVar(&workers, "workers", 4, "number of parallel workers")
 	rootCmd.Flags().BoolVar(&skipCount, "skip-count", false, "skip counting rows (faster startup, no progress bars)")
-	rootCmd.Flags().BoolVar(&cacheViewer, "cache-viewer", false, "start embedded cache viewer web server")
+	rootCmd.Flags().BoolVar(&cacheViewer, "viewer", false, "start embedded cache viewer web server")
 	rootCmd.Flags().IntVar(&viewerPort, "viewer-port", 8080, "port for cache viewer web server")
 	rootCmd.Flags().IntVar(&chunkSize, "chunk-size", 10000, "number of rows to process in each chunk (streaming mode, 0 = auto)")
 
@@ -217,7 +268,7 @@ func init() {
 	_ = viper.BindPFlag("db.host", rootCmd.Flags().Lookup("db-host"))
 	_ = viper.BindPFlag("db.port", rootCmd.Flags().Lookup("db-port"))
 	_ = viper.BindPFlag("db.user", rootCmd.Flags().Lookup("db-user"))
-	_ = viper.BindPFlag("cache_viewer", rootCmd.Flags().Lookup("cache-viewer"))
+	_ = viper.BindPFlag("viewer", rootCmd.Flags().Lookup("viewer"))
 	_ = viper.BindPFlag("viewer_port", rootCmd.Flags().Lookup("viewer-port"))
 	_ = viper.BindPFlag("chunk_size", rootCmd.Flags().Lookup("chunk-size"))
 	_ = viper.BindPFlag("db.password", rootCmd.Flags().Lookup("db-password"))
@@ -284,7 +335,7 @@ func runArchive() {
 		DryRun:      viper.GetBool("dry_run"),
 		Workers:     viper.GetInt("workers"),
 		SkipCount:   viper.GetBool("skip_count"),
-		CacheViewer: viper.GetBool("cache_viewer"),
+		CacheViewer: viper.GetBool("viewer"),
 		ViewerPort:  viper.GetInt("viewer_port"),
 		ChunkSize:   viper.GetInt("chunk_size"),
 		Database: DatabaseConfig{

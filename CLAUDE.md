@@ -1,6 +1,7 @@
 *Development Process*
 - Always ensure that the design system (in docs/design-system) is applied to the design of the web UI.
 - If new design concepts are introduced, be sure the design system is updated to reflect.
+- Whenever updating the web UI, be sure to minify it so that it can be seen.
 
 *Release Process*
 - All lints must pass, no exceptions. Code must be fixed, don't just add a lint exception.

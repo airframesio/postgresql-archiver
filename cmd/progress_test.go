@@ -235,21 +235,10 @@ func TestFormatBytes(t *testing.T) {
 }
 
 func TestProcessResultWithDuration(t *testing.T) {
-	testDate := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
-	partition := PartitionInfo{
-		TableName: "test_table",
-		Date:      testDate,
-		RowCount:  1000,
-	}
-
 	duration := 5 * time.Second
 	result := ProcessResult{
-		Partition:    partition,
-		Compressed:   true,
-		Uploaded:     true,
-		BytesWritten: 2048,
-		Duration:     duration,
-		S3Key:        "test/path/file.parquet",
+		Duration: duration,
+		S3Key:    "test/path/file.parquet",
 	}
 
 	if result.Duration != duration {
@@ -266,13 +255,7 @@ func TestProcessResultWithDuration(t *testing.T) {
 }
 
 func TestProcessResultSkipped(t *testing.T) {
-	partition := PartitionInfo{
-		TableName: "test_table",
-		Date:      time.Now(),
-	}
-
 	result := ProcessResult{
-		Partition:  partition,
 		Skipped:    true,
 		SkipReason: "All slices skipped (no data in time ranges)",
 	}

@@ -145,11 +145,12 @@ type progressModel struct {
 	taskInfo            *TaskInfo
 	program             *tea.Program // Reference for sending messages from goroutines
 	// Slice progress tracking
-	currentSliceIndex int
-	totalSlices       int
-	currentSliceDate  string
-	sliceProgress     progress.Model
-	sliceResults      *safeSliceResults
+	currentSliceIndex    int
+	totalSlices          int
+	currentSliceDate     string
+	sliceProgress        progress.Model
+	sliceResults         *safeSliceResults
+	totalSlicesProcessed int // Track total slices processed across all partitions
 }
 
 type progressMsg struct {
@@ -260,10 +261,18 @@ func (m *progressModel) updateTaskInfo() {
 			m.taskInfo.CurrentStep = ""
 		}
 
+		// Update partition statistics
 		if len(m.partitions) > 0 {
 			m.taskInfo.TotalItems = len(m.partitions)
 			m.taskInfo.CompletedItems = m.currentIndex
 			m.taskInfo.Progress = float64(m.currentIndex) / float64(len(m.partitions))
+			m.taskInfo.TotalPartitions = len(m.partitions)
+			m.taskInfo.PartitionsProcessed = m.currentIndex
+		}
+
+		// Update counting statistics
+		if m.countTotal > 0 {
+			m.taskInfo.PartitionsCounted = m.countProgress
 		}
 
 		// Update slice tracking fields if slicing is active
@@ -277,6 +286,9 @@ func (m *progressModel) updateTaskInfo() {
 			m.taskInfo.TotalSlices = 0
 			m.taskInfo.CurrentSliceDate = ""
 		}
+
+		// Update total slices processed
+		m.taskInfo.SlicesProcessed = m.totalSlicesProcessed
 
 		_ = WriteTaskInfo(m.taskInfo)
 	}
@@ -816,6 +828,12 @@ func (m progressModel) handleDiscoveredTablesMsg(msg discoveredTablesMsg) (tea.M
 		m.messages = m.messages[len(m.messages)-10:]
 	}
 
+	// Update task info with total partitions discovered
+	if m.taskInfo != nil {
+		m.taskInfo.TotalPartitions = len(msg.tables)
+		_ = WriteTaskInfo(m.taskInfo)
+	}
+
 	if m.config.SkipCount {
 		partitions := make([]PartitionInfo, len(msg.tables))
 		for i, table := range msg.tables {
@@ -985,6 +1003,12 @@ func (m progressModel) handleSliceStartMsg(msg sliceStartMsg) (tea.Model, tea.Cm
 func (m progressModel) handleSliceCompleteMsg(msg sliceCompleteMsg) (tea.Model, tea.Cmd) {
 	// Store slice result for display in Recent Results
 	m.sliceResults.append(msg.sliceDate, msg.result)
+
+	// Increment total slices processed if slice was successfully processed
+	if msg.success {
+		m.totalSlicesProcessed++
+		m.updateTaskInfo()
+	}
 
 	return m, nil
 }

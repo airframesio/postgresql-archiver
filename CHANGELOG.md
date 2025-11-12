@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2025-01-09
+
+### Added
+- **Web UI - Completion Summary Panel:**
+  - New completion summary panel displays comprehensive statistics when archiver completes or stops
+  - Shows total partitions, success/skip/failed counts with color coding
+  - Displays success rate percentage with color-coded indicators (green ≥90%, orange 50-89%, red <50%)
+  - Total rows transferred with formatted numbers
+  - Total data uploaded (compressed and uncompressed sizes)
+  - Throughput metrics (rows/sec and MB/sec)
+  - Average time per partition
+  - Date range of processed partitions
+  - Configuration summary extracted from uploaded files (format, compression type, S3 bucket)
+  - Automatically shows when archiver completes or is cancelled/interrupted
+  - Hidden when archiver is actively running
+
+- **Web UI - Multipart ETag Display:**
+  - Multipart ETag now displayed in Cache Entries table for files >100MB
+  - Shows as `[MP]` badge with tooltip containing full ETag
+  - Displays full ETag if MD5 hash is not available
+  - Added `MultipartETag` field to `CacheEntry` API response
+  - Backend tracks and exposes multipart ETags for large file uploads
+
+- **Web UI - Enhanced Statistics Panel:**
+  - Success rate calculation with detailed breakdown (uploaded, skipped, pending, failed)
+  - Throughput metrics showing rows/sec
+  - Date range tracking for processed partitions
+  - Color-coded success rate indicators
+  - Real-time updates as partitions are processed
+
+- **Web UI - Configuration Information:**
+  - Configuration summary in completion panel shows output format, compression type, and S3 bucket
+  - Extracted automatically from uploaded file metadata
+  - Displays multiple formats/compressions if different configurations were used
+
+### Improved
+- **Web UI - Task Panel:**
+  - Enhanced progress metrics display
+  - Better handling of cancellation and interruption scenarios
+  - Improved real-time statistics updates
+
+- **Code Quality:**
+  - Removed unused deprecated methods (`extractPartitionData`, `extractRowsWithProgress`)
+  - Removed unused wrapper method (`setFileMetadataWithETag`)
+  - Fixed lint warnings for unused variables
+  - Added helper functions for extracting format, compression, and S3 bucket from file paths
+
+### Fixed
+- Fixed lint issues with unused variables and methods
+- Removed unnecessary lint ignore comments by fixing underlying issues
+- Improved code maintainability by removing deprecated code paths
+
+### Technical Details
+- Added `getCompressionType()` and `getS3Bucket()` helper functions in `script.js`
+- Enhanced `updateCompletionSummary()` to calculate and display comprehensive statistics
+- Added configuration extraction logic that analyzes uploaded file paths
+- Improved completion summary to handle partial progress scenarios
+- All web assets properly minified and optimized
+
 ## [1.4.7] - 2025-11-07
 
 ### Improved

@@ -28,6 +28,11 @@ type TaskInfo struct {
 	CurrentSliceIndex int    `json:"current_slice_index,omitempty"`
 	TotalSlices       int    `json:"total_slices,omitempty"`
 	CurrentSliceDate  string `json:"current_slice_date,omitempty"`
+	// Partition and slice statistics
+	TotalPartitions     int `json:"total_partitions,omitempty"`     // Total partitions discovered
+	PartitionsCounted   int `json:"partitions_counted,omitempty"`   // Partitions that have been counted
+	PartitionsProcessed int `json:"partitions_processed,omitempty"` // Partitions that have been processed
+	SlicesProcessed     int `json:"slices_processed,omitempty"`     // Total slices processed across all partitions
 }
 
 // GetPIDFilePath returns the path to the PID file

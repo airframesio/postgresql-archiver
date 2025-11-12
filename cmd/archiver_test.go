@@ -286,11 +286,7 @@ func TestProcessResultStruct(t *testing.T) {
 		Partition:    info,
 		Compressed:   true,
 		Uploaded:     true,
-		Skipped:      false,
-		SkipReason:   "",
-		Error:        nil,
 		BytesWritten: 1024,
-		Stage:        "upload",
 	}
 
 	if result.Partition != info {
