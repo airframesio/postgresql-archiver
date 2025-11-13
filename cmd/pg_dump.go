@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -145,7 +146,14 @@ func (e *PgDumpExecutor) Run(ctx context.Context) error {
 		return nil
 	}
 
-	// For non-schema-only modes, use the original single-dump approach
+	// For data dumps with date ranges OR output duration, discover and dump partitions separately
+	if (e.config.DumpMode == "data-only" || e.config.DumpMode == "schema-and-data") &&
+		e.config.Table != "" &&
+		(e.config.StartDate != "" || e.config.EndDate != "" || e.config.OutputDuration != "") {
+		return e.dumpPartitionsByDateRange(ctx)
+	}
+
+	// For non-schema-only modes without date ranges or output duration, use the original single-dump approach
 	return e.dumpTable(ctx, e.config.Table)
 }
 
@@ -375,7 +383,7 @@ func (e *PgDumpExecutor) dumpTableToFile(ctx context.Context, tableName string, 
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tempFilePath := tempFile.Name()
-	tempFile.Close() // Close immediately, pg_dump will create/write to it
+	tempFile.Close()              // Close immediately, pg_dump will create/write to it
 	defer os.Remove(tempFilePath) // Clean up temp file
 
 	// Build pg_dump command (similar to buildPgDumpCommand but without -f -)
@@ -450,6 +458,413 @@ func (e *PgDumpExecutor) dumpTableToFile(ctx context.Context, tableName string, 
 	}
 
 	return nil
+}
+
+// extractDateFromTableName extracts date from partition table name
+func (e *PgDumpExecutor) extractDateFromTableName(tableName string) (time.Time, bool) {
+	baseTableLen := len(e.config.Table)
+	if len(tableName) <= baseTableLen+1 {
+		return time.Time{}, false
+	}
+
+	// Remove base table name and underscore
+	suffix := tableName[baseTableLen+1:]
+
+	// Format 1: {base_table}_YYYYMMDD (8 digits)
+	if len(suffix) == 8 {
+		if date, err := time.Parse("20060102", suffix); err == nil {
+			return date, true
+		}
+	}
+
+	// Format 2: {base_table}_pYYYYMMDD (p + 8 digits)
+	if len(suffix) == 9 && suffix[0] == 'p' {
+		if date, err := time.Parse("20060102", suffix[1:]); err == nil {
+			return date, true
+		}
+	}
+
+	// Format 3: {base_table}_YYYY_MM (7 chars with underscore)
+	if len(suffix) == 7 && suffix[4] == '_' {
+		yearMonth := suffix[:4] + suffix[5:]
+		// Use first day of the month for monthly partitions
+		if date, err := time.Parse("200601", yearMonth); err == nil {
+			return date, true
+		}
+	}
+
+	// Format 4: {base_table}_YYYY_MM_DD (10 chars with underscores)
+	if len(suffix) == 10 && suffix[4] == '_' && suffix[7] == '_' {
+		dateStr := suffix[:4] + suffix[5:7] + suffix[8:]
+		if date, err := time.Parse("20060102", dateStr); err == nil {
+			return date, true
+		}
+	}
+
+	return time.Time{}, false
+}
+
+// dumpPartitionsByDateRange discovers partitions in date range and dumps each separately
+func (e *PgDumpExecutor) dumpPartitionsByDateRange(ctx context.Context) error {
+	if err := e.connect(ctx); err != nil {
+		return fmt.Errorf("failed to connect to database: %w", err)
+	}
+	defer e.db.Close()
+
+	// Parse date range
+	var startDate, endDate *time.Time
+	if e.config.StartDate != "" {
+		if t, err := time.Parse("2006-01-02", e.config.StartDate); err == nil {
+			startDate = &t
+		}
+	}
+	if e.config.EndDate != "" {
+		if t, err := time.Parse("2006-01-02", e.config.EndDate); err == nil {
+			endDate = &t
+		}
+	}
+
+	// Discover partitions matching the table pattern
+	pattern := e.config.Table + "_%"
+	query := `
+		SELECT tablename
+		FROM pg_tables
+		WHERE schemaname = 'public'
+			AND tablename LIKE $1
+		ORDER BY tablename
+	`
+
+	rows, err := e.db.QueryContext(ctx, query, pattern)
+	if err != nil {
+		return fmt.Errorf("failed to query partitions: %w", err)
+	}
+	defer rows.Close()
+
+	var partitionsToDump []struct {
+		name string
+		date time.Time
+	}
+
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			continue
+		}
+
+		// Extract date from partition name
+		date, ok := e.extractDateFromTableName(tableName)
+		if !ok {
+			e.logger.Debug(fmt.Sprintf("Skipping table %s: no valid date pattern", tableName))
+			continue
+		}
+
+		// Filter by date range
+		if startDate != nil && date.Before(*startDate) {
+			e.logger.Debug(fmt.Sprintf("Skipping partition %s: date %s is before start date", tableName, date.Format("2006-01-02")))
+			continue
+		}
+		if endDate != nil && date.After(*endDate) {
+			e.logger.Debug(fmt.Sprintf("Skipping partition %s: date %s is after end date", tableName, date.Format("2006-01-02")))
+			continue
+		}
+
+		partitionsToDump = append(partitionsToDump, struct {
+			name string
+			date time.Time
+		}{name: tableName, date: date})
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating partitions: %w", err)
+	}
+
+	if len(partitionsToDump) == 0 {
+		// If output duration is set but no partitions found, dump the parent table with date-based filename
+		if e.config.OutputDuration != "" {
+			e.logger.Info("No partitions found, dumping parent table with date-based filename")
+			now := time.Now()
+			objectKey := e.generateObjectKeyWithDuration(e.config.Table, now, e.config.OutputDuration)
+			return e.dumpMultiplePartitionsToFile(ctx, []string{e.config.Table}, objectKey, now)
+		}
+		e.logger.Info("No partitions found in date range")
+		return nil
+	}
+
+	e.logger.Info(fmt.Sprintf("Found %d partition(s) to dump in date range", len(partitionsToDump)))
+
+	// Group partitions by output duration
+	groups := e.groupPartitionsByDuration(partitionsToDump)
+	e.logger.Info(fmt.Sprintf("Grouped into %d file(s) based on output duration: %s", len(groups), e.config.OutputDuration))
+
+	// Sort groups by date (groupKey) for consistent ordering
+	type groupEntry struct {
+		key        string
+		partitions []struct {
+			name string
+			date time.Time
+		}
+		date time.Time
+	}
+
+	var sortedGroups []groupEntry
+	for groupKey, partitions := range groups {
+		// Use the first partition's date as the group date for sorting
+		groupDate := partitions[0].date
+		sortedGroups = append(sortedGroups, groupEntry{
+			key:        groupKey,
+			partitions: partitions,
+			date:       groupDate,
+		})
+	}
+
+	// Sort by date
+	sort.Slice(sortedGroups, func(i, j int) bool {
+		return sortedGroups[i].date.Before(sortedGroups[j].date)
+	})
+
+	// Dump each group in sorted order
+	for i, group := range sortedGroups {
+		e.logger.Info(fmt.Sprintf("Dumping group %d/%d: %s (%d partition(s))", i+1, len(sortedGroups), group.key, len(group.partitions)))
+		if err := e.dumpPartitionGroup(ctx, group.partitions, group.key); err != nil {
+			return fmt.Errorf("failed to dump group %s: %w", group.key, err)
+		}
+	}
+
+	e.logger.Info(fmt.Sprintf("✅ Successfully dumped %d group(s) (%d total partition(s))", len(groups), len(partitionsToDump)))
+	return nil
+}
+
+// groupPartitionsByDuration groups partitions by output duration
+func (e *PgDumpExecutor) groupPartitionsByDuration(partitions []struct {
+	name string
+	date time.Time
+}) map[string][]struct {
+	name string
+	date time.Time
+} {
+	groups := make(map[string][]struct {
+		name string
+		date time.Time
+	})
+
+	outputDuration := e.config.OutputDuration
+	if outputDuration == "" {
+		outputDuration = DurationDaily // Default to daily
+	}
+
+	for _, partition := range partitions {
+		groupKey := e.getGroupKeyForDuration(partition.date, outputDuration)
+		groups[groupKey] = append(groups[groupKey], partition)
+	}
+
+	return groups
+}
+
+// getGroupKeyForDuration returns a key for grouping partitions by duration
+func (e *PgDumpExecutor) getGroupKeyForDuration(date time.Time, duration string) string {
+	switch duration {
+	case DurationHourly:
+		return date.Format("2006-01-02-15")
+	case DurationDaily:
+		return date.Format("2006-01-02")
+	case DurationWeekly:
+		// Find Monday of the week
+		weekday := int(date.Weekday())
+		if weekday == 0 { // Sunday
+			weekday = 7
+		}
+		daysToMonday := weekday - 1
+		monday := date.AddDate(0, 0, -daysToMonday)
+		return monday.Format("2006-01-02")
+	case DurationMonthly:
+		return date.Format("2006-01")
+	case DurationYearly:
+		return date.Format("2006")
+	default:
+		return date.Format("2006-01-02")
+	}
+}
+
+// dumpPartitionGroup dumps a group of partitions together into a single file
+func (e *PgDumpExecutor) dumpPartitionGroup(ctx context.Context, partitions []struct {
+	name string
+	date time.Time
+}, groupKey string) error {
+	if len(partitions) == 0 {
+		return fmt.Errorf("no partitions in group")
+	}
+
+	// Use the first partition's date to generate the filename
+	// All partitions in the group should have the same group key, so we can use any date
+	groupDate := partitions[0].date
+
+	// Generate object key with date based on output duration
+	objectKey := e.generateObjectKeyWithDuration(e.config.Table, groupDate, e.config.OutputDuration)
+
+	// Extract partition names
+	partitionNames := make([]string, len(partitions))
+	for i, p := range partitions {
+		partitionNames[i] = p.name
+	}
+
+	// Dump all partitions in the group together
+	return e.dumpMultiplePartitionsToFile(ctx, partitionNames, objectKey, groupDate)
+}
+
+// dumpPartitionWithDate dumps a partition with date-based filename
+func (e *PgDumpExecutor) dumpPartitionWithDate(ctx context.Context, partitionName string, partitionDate time.Time) error {
+	// Generate object key with date
+	objectKey := e.generateObjectKeyWithDate(e.config.Table, partitionDate)
+
+	// Use dumpTableToFile for partitioned tables (works better than stdout)
+	return e.dumpTableToFileWithDate(ctx, partitionName, objectKey, partitionDate)
+}
+
+// dumpMultiplePartitionsToFile dumps multiple partitions together to a temp file, then uploads it to S3
+func (e *PgDumpExecutor) dumpMultiplePartitionsToFile(ctx context.Context, partitionNames []string, objectKey string, dumpDate time.Time) error {
+	// Create temp file
+	tempFile, err := os.CreateTemp("", "pg_dump-*.dump")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tempFilePath := tempFile.Name()
+	tempFile.Close()              // Close immediately, pg_dump will create/write to it
+	defer os.Remove(tempFilePath) // Clean up temp file
+
+	// Build pg_dump command
+	cmd := exec.CommandContext(ctx, "pg_dump")
+	env := os.Environ()
+	env = append(env, fmt.Sprintf("PGPASSWORD=%s", e.config.Database.Password))
+	if e.config.Database.SSLMode != "" {
+		env = append(env, fmt.Sprintf("PGSSLMODE=%s", e.config.Database.SSLMode))
+	}
+	cmd.Env = env
+
+	// Build command args based on dump mode
+	var formatFlags []string
+	switch e.config.DumpMode {
+	case "data-only":
+		formatFlags = []string{"-Fc", "-Z", "9", "--data-only"}
+	case "schema-and-data", "":
+		formatFlags = []string{"-Fc", "-Z", "9"}
+	default:
+		return fmt.Errorf("unsupported dump mode for date-based dumps: %s", e.config.DumpMode)
+	}
+
+	cmd.Args = append(cmd.Args,
+		"-h", e.config.Database.Host,
+		"-p", fmt.Sprintf("%d", e.config.Database.Port),
+		"-U", e.config.Database.User,
+		"-d", e.config.Database.Name,
+	)
+	cmd.Args = append(cmd.Args, formatFlags...)
+	cmd.Args = append(cmd.Args, "-w")
+
+	// Add -t flag for each partition
+	for _, partitionName := range partitionNames {
+		cmd.Args = append(cmd.Args, "-t", partitionName)
+	}
+
+	cmd.Args = append(cmd.Args, "-f", tempFilePath)
+
+	e.logger.Debug(fmt.Sprintf("Command: %s", strings.Join(cmd.Args, " ")))
+
+	// Run pg_dump
+	e.logger.Debug(fmt.Sprintf("Dumping %d partition(s) to temp file", len(partitionNames)))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pg_dump failed: %w\noutput: %s", err, string(output))
+	}
+
+	// Check file size
+	fileInfo, err := os.Stat(tempFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to stat temp file: %w", err)
+	}
+	if fileInfo.Size() == 0 {
+		return fmt.Errorf("pg_dump produced empty file (0 bytes)")
+	}
+	e.logger.Debug(fmt.Sprintf("Dumped %d bytes to temp file", fileInfo.Size()))
+
+	// Upload to S3
+	if e.config.DryRun {
+		e.logger.Info("Dry run mode: skipping upload")
+		return nil
+	}
+
+	e.logger.Info(fmt.Sprintf("Uploading to s3://%s/%s", e.config.S3.Bucket, objectKey))
+	file, err := os.Open(tempFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to open temp file for upload: %w", err)
+	}
+	defer file.Close()
+
+	uploadInput := &s3manager.UploadInput{
+		Bucket:      aws.String(e.config.S3.Bucket),
+		Key:         aws.String(objectKey),
+		Body:        file,
+		ContentType: aws.String("application/octet-stream"),
+	}
+
+	result, err := e.s3Uploader.UploadWithContext(ctx, uploadInput)
+	if err != nil {
+		return fmt.Errorf("S3 upload failed: %w", err)
+	}
+
+	if result != nil {
+		e.logger.Debug(fmt.Sprintf("Successfully uploaded to S3: %s", result.Location))
+	}
+
+	return nil
+}
+
+// dumpTableToFileWithDate dumps a table/partition to a temp file with date-based filename, then uploads it to S3
+func (e *PgDumpExecutor) dumpTableToFileWithDate(ctx context.Context, tableName string, objectKey string, dumpDate time.Time) error {
+	return e.dumpMultiplePartitionsToFile(ctx, []string{tableName}, objectKey, dumpDate)
+}
+
+// generateObjectKeyWithDuration generates the S3 object key with date placeholders filled in based on output duration
+func (e *PgDumpExecutor) generateObjectKeyWithDuration(tableName string, dumpDate time.Time, duration string) string {
+	pathTemplate := NewPathTemplate(e.config.S3.PathTemplate)
+
+	// Use provided table name, or database name if empty
+	if tableName == "" {
+		tableName = e.config.Database.Name
+	}
+
+	// Generate path with date placeholders filled in
+	basePath := pathTemplate.Generate(tableName, dumpDate)
+
+	// Generate filename based on output duration
+	var filename string
+	switch duration {
+	case DurationHourly:
+		filename = fmt.Sprintf("%s-%s.dump", tableName, dumpDate.Format("2006-01-02-15"))
+	case DurationDaily:
+		filename = fmt.Sprintf("%s-%s.dump", tableName, dumpDate.Format("2006-01-02"))
+	case DurationWeekly:
+		// Find Monday of the week
+		weekday := int(dumpDate.Weekday())
+		if weekday == 0 { // Sunday
+			weekday = 7
+		}
+		daysToMonday := weekday - 1
+		monday := dumpDate.AddDate(0, 0, -daysToMonday)
+		filename = fmt.Sprintf("%s-%s.dump", tableName, monday.Format("2006-01-02"))
+	case DurationMonthly:
+		filename = fmt.Sprintf("%s-%s.dump", tableName, dumpDate.Format("2006-01"))
+	case DurationYearly:
+		filename = fmt.Sprintf("%s-%s.dump", tableName, dumpDate.Format("2006"))
+	default:
+		filename = fmt.Sprintf("%s-%s.dump", tableName, dumpDate.Format("2006-01-02"))
+	}
+
+	return fmt.Sprintf("%s/%s", basePath, filename)
+}
+
+// generateObjectKeyWithDate generates the S3 object key with date placeholders filled in
+func (e *PgDumpExecutor) generateObjectKeyWithDate(tableName string, dumpDate time.Time) string {
+	return e.generateObjectKeyWithDuration(tableName, dumpDate, DurationDaily)
 }
 
 // buildPgDumpCommand builds the pg_dump command with appropriate flags for a specific table

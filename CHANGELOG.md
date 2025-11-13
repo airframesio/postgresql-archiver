@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.6] - 2025-11-12
+
+### Added
+- **pg_dump Command:**
+  - Date range filtering with `--start-date` and `--end-date` flags for data dumps
+  - Output duration grouping with `--output-duration` flag (hourly, daily, weekly, monthly, yearly)
+  - Partitions are automatically grouped by output duration and dumped together
+  - Date-based filename generation: `{table}-{YYYY}-{MM}.dump` for monthly, `{table}-{YYYY}-{MM}-{DD}.dump` for daily, etc.
+  - Path template support with date placeholders (`{YYYY}`, `{MM}`, `{DD}`, `{HH}`) for organized S3 storage
+
+### Changed
+- **pg_dump Command:**
+  - When `--output-duration` is specified, partitions are grouped and dumped together instead of individually
+  - Groups are processed in chronological order (oldest first)
+  - Filenames now use date-based format instead of timestamps when using output duration
+
 ## [1.5.5] - 2025-11-12
 
 ### Added

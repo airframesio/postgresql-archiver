@@ -303,6 +303,10 @@ func init() {
 	dumpCmd.Flags().StringVar(&baseTable, "table", "", "table name to dump (optional, dumps entire database if not specified)")
 	dumpCmd.Flags().IntVar(&workers, "workers", 4, "number of parallel jobs for pg_dump")
 	dumpCmd.Flags().StringVar(&dumpMode, "dump-mode", "schema-and-data", "dump mode: schema-only, data-only, schema-and-data")
+	dumpCmd.Flags().StringVar(&startDate, "start-date", "", "start date (YYYY-MM-DD) for filtering partitions/data")
+	dumpCmd.Flags().StringVar(&endDate, "end-date", "", "end date (YYYY-MM-DD) for filtering partitions/data")
+	dumpCmd.Flags().StringVar(&dateColumn, "date-column", "", "timestamp column name for date-based filtering (required for data dumps with date ranges)")
+	dumpCmd.Flags().StringVar(&outputDuration, "output-duration", "daily", "output file duration: hourly, daily, weekly, monthly, yearly (for data dumps)")
 
 	// Note: We don't use MarkFlagRequired because it checks before viper loads the config file.
 	// Instead, validation happens in config.Validate() which runs after all config sources are loaded.
@@ -358,6 +362,10 @@ func init() {
 	_ = viper.BindPFlag("table", dumpCmd.Flags().Lookup("table"))
 	_ = viper.BindPFlag("workers", dumpCmd.Flags().Lookup("workers"))
 	_ = viper.BindPFlag("dump_mode", dumpCmd.Flags().Lookup("dump-mode"))
+	_ = viper.BindPFlag("start_date", dumpCmd.Flags().Lookup("start-date"))
+	_ = viper.BindPFlag("end_date", dumpCmd.Flags().Lookup("end-date"))
+	_ = viper.BindPFlag("date_column", dumpCmd.Flags().Lookup("date-column"))
+	_ = viper.BindPFlag("output_duration", dumpCmd.Flags().Lookup("output-duration"))
 }
 
 func initConfig() {
@@ -537,17 +545,17 @@ func runDump() {
 	}()
 
 	config := &Config{
-		Debug:       viper.GetBool("debug"),
-		LogFormat:   viper.GetString("log_format"),
-		DryRun:      viper.GetBool("dry_run"),
-		Workers:     viper.GetInt("workers"),
+		Debug:     viper.GetBool("debug"),
+		LogFormat: viper.GetString("log_format"),
+		DryRun:    viper.GetBool("dry_run"),
+		Workers:   viper.GetInt("workers"),
 		Database: DatabaseConfig{
-			Host:    viper.GetString("db.host"),
-			Port:    viper.GetInt("db.port"),
-			User:    viper.GetString("db.user"),
+			Host:     viper.GetString("db.host"),
+			Port:     viper.GetInt("db.port"),
+			User:     viper.GetString("db.user"),
 			Password: viper.GetString("db.password"),
-			Name:    viper.GetString("db.name"),
-			SSLMode: viper.GetString("db.sslmode"),
+			Name:     viper.GetString("db.name"),
+			SSLMode:  viper.GetString("db.sslmode"),
 		},
 		S3: S3Config{
 			Endpoint:     viper.GetString("s3.endpoint"),
@@ -557,8 +565,12 @@ func runDump() {
 			Region:       viper.GetString("s3.region"),
 			PathTemplate: viper.GetString("s3.path_template"),
 		},
-		Table:    viper.GetString("table"),
-		DumpMode: viper.GetString("dump_mode"),
+		Table:          viper.GetString("table"),
+		DumpMode:       viper.GetString("dump_mode"),
+		StartDate:      viper.GetString("start_date"),
+		EndDate:        viper.GetString("end_date"),
+		DateColumn:     viper.GetString("date_column"),
+		OutputDuration: viper.GetString("output_duration"),
 	}
 
 	// Initialize logger
