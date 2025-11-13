@@ -11,6 +11,12 @@ import (
 // ErrTableNotFoundOrEmpty is returned when a table is not found or has no columns
 var ErrTableNotFoundOrEmpty = errors.New("table not found or has no columns")
 
+// ErrTableNotFound is returned when a table does not exist
+var ErrTableNotFound = errors.New("table not found")
+
+// ErrTableHasNoColumns is returned when a table exists but has no columns
+var ErrTableHasNoColumns = errors.New("table exists but has no columns")
+
 // ColumnInfo represents metadata about a database column
 type ColumnInfo struct {
 	Name     string

@@ -151,6 +151,73 @@ func (e *PgDumpExecutor) Run(ctx context.Context) error {
 
 // dumpTable dumps a single table and uploads to S3
 func (e *PgDumpExecutor) dumpTable(ctx context.Context, tableName string) error {
+	var hasPartitions bool
+
+	// Verify table exists before attempting dump
+	if e.db != nil {
+		var tableExists bool
+		checkQuery := `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_tables
+				WHERE schemaname = 'public' AND tablename = $1
+			)
+		`
+		err := e.db.QueryRowContext(ctx, checkQuery, tableName).Scan(&tableExists)
+		if err != nil {
+			e.logger.Warn(fmt.Sprintf("Could not verify table existence: %v", err))
+		} else if !tableExists {
+			return fmt.Errorf("table %s does not exist in public schema", tableName)
+		}
+
+		// Check if table is a partition (child) - if so, find its parent
+		var parentTableName string
+		findParentQuery := `
+			SELECT p.relname::text
+			FROM pg_inherits i
+			JOIN pg_class c ON c.oid = i.inhrelid
+			JOIN pg_class p ON p.oid = i.inhparent
+			JOIN pg_namespace n ON n.oid = p.relnamespace
+			WHERE n.nspname = 'public' AND c.relname = $1
+			LIMIT 1
+		`
+		err = e.db.QueryRowContext(ctx, findParentQuery, tableName).Scan(&parentTableName)
+		if err == nil && parentTableName != "" {
+			// Table is a partition (child), use parent table for schema dump
+			e.logger.Info(fmt.Sprintf("Table %s is a partition. Dumping parent table %s instead (partitions inherit schema from parent)", tableName, parentTableName))
+			tableName = parentTableName
+		}
+
+		// Check if it's a parent table with partitions (regardless of whether it's also a partition)
+		parentCheckQuery := `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_inherits i
+				JOIN pg_class c ON c.oid = i.inhrelid
+				JOIN pg_class p ON p.oid = i.inhparent
+				JOIN pg_namespace n ON n.oid = p.relnamespace
+				WHERE n.nspname = 'public' AND p.relname = $1
+			)
+		`
+		err = e.db.QueryRowContext(ctx, parentCheckQuery, tableName).Scan(&hasPartitions)
+		if err == nil && hasPartitions {
+			e.logger.Debug(fmt.Sprintf("Table %s is a partitioned table (parent with partitions)", tableName))
+			e.logger.Info(fmt.Sprintf("Using partition exclusion method for partitioned table %s", tableName))
+		}
+	}
+
+	// Warn if using a connection pooler port (common PgBouncer ports) with custom format
+	if e.config.Database.Port == 6432 || e.config.Database.Port == 6543 {
+		e.logger.Warn(fmt.Sprintf("Warning: Port %d is typically a connection pooler (PgBouncer). Custom format dumps (-Fc) require a direct PostgreSQL connection and may not work through connection poolers.", e.config.Database.Port))
+	}
+
+	// Generate S3 object key for this table
+	objectKey := e.generateObjectKey(tableName)
+
+	// For partitioned tables, pg_dump -t doesn't work well with stdout (-f -)
+	// Write to a temp file instead, then upload it
+	if hasPartitions && e.config.DumpMode == "schema-only" {
+		return e.dumpTableToFile(ctx, tableName, objectKey)
+	}
+
 	// Build pg_dump command for this specific table
 	cmd, err := e.buildPgDumpCommand(tableName)
 	if err != nil {
@@ -169,9 +236,6 @@ func (e *PgDumpExecutor) dumpTable(ctx context.Context, tableName string) error 
 		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
-	// Generate S3 object key for this table
-	objectKey := e.generateObjectKey(tableName)
-
 	// Stream output directly to S3
 	e.logger.Info(fmt.Sprintf("Uploading to s3://%s/%s", e.config.S3.Bucket, objectKey))
 
@@ -189,18 +253,18 @@ func (e *PgDumpExecutor) dumpTable(ctx context.Context, tableName string) error 
 		}()
 	} else {
 		go func() {
-			// Set content type based on dump format
-			contentType := "application/octet-stream" // Default for custom format
-			if e.config.DumpMode == "schema-only" {
-				contentType = "text/plain" // Plain SQL format
-			}
+			// Custom format (-Fc) is always binary, regardless of dump mode
+			contentType := "application/octet-stream"
 			uploadInput := &s3manager.UploadInput{
 				Bucket:      aws.String(e.config.S3.Bucket),
 				Key:         aws.String(objectKey),
 				Body:        pr,
 				ContentType: aws.String(contentType),
 			}
-			_, uploadErr := e.s3Uploader.UploadWithContext(ctx, uploadInput)
+			result, uploadErr := e.s3Uploader.UploadWithContext(ctx, uploadInput)
+			if uploadErr == nil && result != nil {
+				e.logger.Debug(fmt.Sprintf("Successfully uploaded to S3: %s", result.Location))
+			}
 			uploadDone <- uploadErr
 		}()
 	}
@@ -208,6 +272,7 @@ func (e *PgDumpExecutor) dumpTable(ctx context.Context, tableName string) error 
 	// Copy stdout to pipe in background
 	// This goroutine closes pw after copying is done
 	copyDone := make(chan error, 1)
+	bytesCopied := make(chan int64, 1)
 	go func() {
 		defer func() {
 			stdout.Close()
@@ -215,10 +280,12 @@ func (e *PgDumpExecutor) dumpTable(ctx context.Context, tableName string) error 
 		}()
 		if e.config.DryRun {
 			// In dry run, discard output
-			_, copyErr := io.Copy(io.Discard, stdout)
+			n, copyErr := io.Copy(io.Discard, stdout)
+			bytesCopied <- n
 			copyDone <- copyErr
 		} else {
-			_, copyErr := io.Copy(pw, stdout)
+			n, copyErr := io.Copy(pw, stdout)
+			bytesCopied <- n
 			copyDone <- copyErr
 		}
 	}()
@@ -238,14 +305,17 @@ func (e *PgDumpExecutor) dumpTable(ctx context.Context, tableName string) error 
 
 	// Wait for all operations to complete
 	var cmdErr, copyErr, uploadErr error
+	var bytesCopiedCount int64
 	doneCount := 0
-	for doneCount < 3 {
+	for doneCount < 4 {
 		select {
 		case cmdErr = <-cmdDone:
 			doneCount++
 		case copyErr = <-copyDone:
 			doneCount++
 		case uploadErr = <-uploadDone:
+			doneCount++
+		case bytesCopiedCount = <-bytesCopied:
 			doneCount++
 		case <-ctx.Done():
 			// Cancellation requested
@@ -257,9 +327,21 @@ func (e *PgDumpExecutor) dumpTable(ctx context.Context, tableName string) error 
 		}
 	}
 
+	// Log bytes copied
+	e.logger.Debug(fmt.Sprintf("Copied %d bytes from pg_dump output", bytesCopiedCount))
+
+	// Always log stderr output (might contain warnings even on success)
+	stderrOutput := stderrBuf.String()
+	if stderrOutput != "" {
+		if e.config.Debug {
+			e.logger.Debug(fmt.Sprintf("pg_dump stderr: %s", stderrOutput))
+		} else {
+			e.logger.Info(fmt.Sprintf("pg_dump stderr: %s", stderrOutput))
+		}
+	}
+
 	// Check for errors
 	if cmdErr != nil {
-		stderrOutput := stderrBuf.String()
 		if stderrOutput != "" {
 			return fmt.Errorf("pg_dump failed: %w\nstderr: %s", cmdErr, stderrOutput)
 		}
@@ -272,9 +354,99 @@ func (e *PgDumpExecutor) dumpTable(ctx context.Context, tableName string) error 
 		return fmt.Errorf("S3 upload failed: %w", uploadErr)
 	}
 
-	// Log stderr if there's any output (might contain warnings)
-	if stderrOutput := stderrBuf.String(); stderrOutput != "" && e.config.Debug {
-		e.logger.Debug(fmt.Sprintf("pg_dump stderr: %s", stderrOutput))
+	if bytesCopiedCount == 0 {
+		errorMsg := "pg_dump produced no output (0 bytes)"
+		if stderrOutput != "" {
+			errorMsg += fmt.Sprintf("\npg_dump stderr: %s", stderrOutput)
+		}
+		errorMsg += "\nPossible causes: table does not exist, table has no schema, or permissions issue"
+		return fmt.Errorf(errorMsg)
+	}
+
+	return nil
+}
+
+// dumpTableToFile dumps a partitioned table to a temp file, then uploads it to S3
+// This is needed because pg_dump -t on partitioned tables doesn't work with stdout (-f -)
+func (e *PgDumpExecutor) dumpTableToFile(ctx context.Context, tableName string, objectKey string) error {
+	// Create temp file
+	tempFile, err := os.CreateTemp("", "pg_dump-*.dump")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tempFilePath := tempFile.Name()
+	tempFile.Close() // Close immediately, pg_dump will create/write to it
+	defer os.Remove(tempFilePath) // Clean up temp file
+
+	// Build pg_dump command (similar to buildPgDumpCommand but without -f -)
+	cmd := exec.CommandContext(ctx, "pg_dump")
+	env := os.Environ()
+	env = append(env, fmt.Sprintf("PGPASSWORD=%s", e.config.Database.Password))
+	if e.config.Database.SSLMode != "" {
+		env = append(env, fmt.Sprintf("PGSSLMODE=%s", e.config.Database.SSLMode))
+	}
+	cmd.Env = env
+
+	cmd.Args = append(cmd.Args,
+		"-h", e.config.Database.Host,
+		"-p", fmt.Sprintf("%d", e.config.Database.Port),
+		"-U", e.config.Database.User,
+		"-d", e.config.Database.Name,
+		"-Fc", "--schema-only", "-w", "-t", tableName,
+		"-f", tempFilePath, // Write to file instead of stdout
+	)
+
+	e.logger.Debug(fmt.Sprintf("Command: %s", strings.Join(cmd.Args, " ")))
+
+	// Run pg_dump (CombinedOutput captures both stdout and stderr)
+	e.logger.Info(fmt.Sprintf("Dumping schema for partitioned table %s to temp file", tableName))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pg_dump failed: %w\noutput: %s", err, string(output))
+	}
+
+	// Log output if there's any (might contain warnings)
+	if len(output) > 0 && e.config.Debug {
+		e.logger.Debug(fmt.Sprintf("pg_dump output: %s", string(output)))
+	}
+
+	// Check file size
+	fileInfo, err := os.Stat(tempFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to stat temp file: %w", err)
+	}
+	if fileInfo.Size() == 0 {
+		return fmt.Errorf("pg_dump produced empty file (0 bytes)")
+	}
+	e.logger.Debug(fmt.Sprintf("Dumped %d bytes to temp file", fileInfo.Size()))
+
+	// Upload to S3
+	if e.config.DryRun {
+		e.logger.Info("Dry run mode: skipping upload")
+		return nil
+	}
+
+	e.logger.Info(fmt.Sprintf("Uploading to s3://%s/%s", e.config.S3.Bucket, objectKey))
+	file, err := os.Open(tempFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to open temp file for upload: %w", err)
+	}
+	defer file.Close()
+
+	uploadInput := &s3manager.UploadInput{
+		Bucket:      aws.String(e.config.S3.Bucket),
+		Key:         aws.String(objectKey),
+		Body:        file,
+		ContentType: aws.String("application/octet-stream"),
+	}
+
+	result, err := e.s3Uploader.UploadWithContext(ctx, uploadInput)
+	if err != nil {
+		return fmt.Errorf("S3 upload failed: %w", err)
+	}
+
+	if result != nil {
+		e.logger.Debug(fmt.Sprintf("Successfully uploaded to S3: %s", result.Location))
 	}
 
 	return nil
@@ -284,28 +456,28 @@ func (e *PgDumpExecutor) dumpTable(ctx context.Context, tableName string) error 
 func (e *PgDumpExecutor) buildPgDumpCommand(tableName string) (*exec.Cmd, error) {
 	// Set PGPASSWORD environment variable for password
 	cmd := exec.CommandContext(e.ctx, "pg_dump")
-	cmd.Env = append(os.Environ(), fmt.Sprintf("PGPASSWORD=%s", e.config.Database.Password))
+	env := os.Environ()
+	env = append(env, fmt.Sprintf("PGPASSWORD=%s", e.config.Database.Password))
 
-	// Build connection string
-	connParts := []string{
-		fmt.Sprintf("host=%s", e.config.Database.Host),
-		fmt.Sprintf("port=%d", e.config.Database.Port),
-		fmt.Sprintf("user=%s", e.config.Database.User),
-		fmt.Sprintf("dbname=%s", e.config.Database.Name),
-	}
-
+	// Set SSL mode in environment if specified
 	if e.config.Database.SSLMode != "" {
-		connParts = append(connParts, fmt.Sprintf("sslmode=%s", e.config.Database.SSLMode))
+		env = append(env, fmt.Sprintf("PGSSLMODE=%s", e.config.Database.SSLMode))
 	}
+	cmd.Env = env
 
-	connStr := strings.Join(connParts, " ")
-	cmd.Args = append(cmd.Args, "-d", connStr)
+	// Use separate connection flags instead of connection string for better compatibility
+	cmd.Args = append(cmd.Args,
+		"-h", e.config.Database.Host,
+		"-p", fmt.Sprintf("%d", e.config.Database.Port),
+		"-U", e.config.Database.User,
+		"-d", e.config.Database.Name,
+	)
 
 	// Handle dump mode and format selection
 	switch e.config.DumpMode {
 	case "schema-only":
-		// For schema-only, use plain SQL format (simpler, faster, human-readable)
-		cmd.Args = append(cmd.Args, "-Fp", "--schema-only")
+		// For schema-only, use custom format (compatible with pg_restore)
+		cmd.Args = append(cmd.Args, "-Fc", "--schema-only")
 	case "data-only":
 		// For data-only, use custom format with compression for efficiency
 		cmd.Args = append(cmd.Args, "-Fc", "-Z", "9", "--data-only")
@@ -324,13 +496,11 @@ func (e *PgDumpExecutor) buildPgDumpCommand(tableName string) (*exec.Cmd, error)
 		return nil, fmt.Errorf("invalid dump mode: %s", e.config.DumpMode)
 	}
 
+	// Add -w flag to prevent password prompts (we use PGPASSWORD env var instead)
+	cmd.Args = append(cmd.Args, "-w")
+
 	// For schema-only mode, handle table selection
 	if e.config.DumpMode == "schema-only" {
-		// When dumping a single table, we don't need to exclude partitions
-		// because pg_dump -t will only dump that specific table
-		// Only exclude partitions when dumping multiple tables (which we don't do anymore)
-		// For now, we always dump one table at a time, so no exclude needed
-
 		// Dump only the specified table
 		if tableName != "" {
 			cmd.Args = append(cmd.Args, "-t", tableName)
@@ -343,6 +513,7 @@ func (e *PgDumpExecutor) buildPgDumpCommand(tableName string) (*exec.Cmd, error)
 	}
 
 	// Explicitly set output to stdout (works for both plain and custom formats)
+	// Note: For partitioned tables, we use dumpTableToFile instead (without -f -)
 	cmd.Args = append(cmd.Args, "-f", "-")
 
 	return cmd, nil

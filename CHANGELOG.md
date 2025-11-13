@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.5] - 2025-11-12
+
 ### Added
+- **Compare Command:**
+  - New `compare` subcommand to compare schemas and data between two PostgreSQL databases or between a database and S3
+  - Schema comparison with human-readable diff output (table format) and JSON output option
+  - Data comparison modes: row-count, row-by-row (checksums), and sample-based comparison
+  - Support for comparing against S3 schemas from `pg_dump` files or inferred from data files
+  - Table filtering by name pattern or individual table specification
+  - Output to stdout and/or file with format control
+
 - **pg_dump Command:**
   - New `dump` subcommand to use `pg_dump` output directly to S3
   - Custom format (`-Fc`) with heavy compression (`-Z 9`)
@@ -18,6 +28,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatic filename generation with timestamp and dump mode suffix
   - Dry-run mode support for validation without upload
   - **Schema-Only Optimization**: Automatically discovers and dumps only top-level tables (excludes partitions) since partitions share the same schema as their parent table
+  - Support for partitioned tables: automatically detects parent tables and dumps schema correctly
+  - File-based dump for partitioned tables (avoids stdout issues with custom format)
+
+### Fixed
+- **pg_dump Command:**
+  - Fixed password prompt issue by adding `-w` flag to prevent interactive prompts
+  - Fixed 0-byte output for partitioned tables by using file-based dump instead of stdout streaming
+  - Fixed connection string format by using separate connection flags (`-h`, `-p`, `-U`, `-d`) instead of connection string
+
+- **Restore Command:**
+  - Fixed schema restore from `pg_dump` files: added `--clean` and `--if-exists` flags for proper object cleanup
+  - Fixed missing sequence errors by automatically creating sequences when not found in dump files
+  - Fixed table drop conflicts by manually dropping tables and sequences before restore
+  - Fixed text format dump handling with automatic fallback to `psql` when `pg_restore` detects text format
+  - Support for non-partitioned tables: made `start-date` and `end-date` optional
+  - Made date extraction optional for non-partitioned tables (uses file last modified time if no date in filename)
+
+### Changed
+- **Restore Command:**
+  - `start-date` and `end-date` flags are now optional (only used for filtering if provided)
+  - Non-partitioned tables no longer require dates in filenames
+  - Improved error handling and diagnostics for schema restoration
 
 ## [1.5.3] - 2025-11-12
 

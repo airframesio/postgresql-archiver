@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -36,6 +37,9 @@ var (
 	restoreDateColumn             string
 	restoreOutputFormat           string
 	restoreCompression            string
+	restoreMode                   string // schema-only, data-only, schema-and-data
+	restoreSchemaSource           string // pg_dump, inferred, auto, db
+	restoreSchemaPath              string // S3 path for schema files (pg_dump)
 )
 
 var restoreCmd = &cobra.Command{
@@ -78,6 +82,9 @@ func init() {
 	restoreCmd.Flags().StringVar(&restoreDateColumn, "date-column", "", "timestamp column name for splitting rows into partitions (required for hourly partitioning of daily files)")
 	restoreCmd.Flags().StringVar(&restoreOutputFormat, "output-format", "", "override format detection (jsonl, csv, parquet)")
 	restoreCmd.Flags().StringVar(&restoreCompression, "compression", "", "override compression detection (zstd, lz4, gzip, none)")
+	restoreCmd.Flags().StringVar(&restoreMode, "restore-mode", "schema-and-data", "Restore mode: schema-only, data-only, schema-and-data")
+	restoreCmd.Flags().StringVar(&restoreSchemaSource, "schema-source", "auto", "Schema source: pg_dump, inferred, auto, db")
+	restoreCmd.Flags().StringVar(&restoreSchemaPath, "schema-path", "", "S3 path for schema files (pg_dump) - defaults to path-template if not specified")
 
 	// Bind database flags to viper
 	_ = viper.BindPFlag("db.host", restoreCmd.Flags().Lookup("db-host"))
@@ -107,6 +114,9 @@ func init() {
 	_ = viper.BindPFlag("restore.date_column", restoreCmd.Flags().Lookup("date-column"))
 	_ = viper.BindPFlag("restore.output_format", restoreCmd.Flags().Lookup("output-format"))
 	_ = viper.BindPFlag("restore.compression", restoreCmd.Flags().Lookup("compression"))
+	_ = viper.BindPFlag("restore.mode", restoreCmd.Flags().Lookup("restore-mode"))
+	_ = viper.BindPFlag("restore.schema_source", restoreCmd.Flags().Lookup("schema-source"))
+	_ = viper.BindPFlag("restore.schema_path", restoreCmd.Flags().Lookup("schema-path"))
 }
 
 // S3File represents a file found in S3
@@ -216,13 +226,40 @@ func runRestore(cmd *cobra.Command) {
 	logger.Info(fmt.Sprintf("🔄 Data Restorer v%s", Version))
 	logger.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
+	// Get restore mode (check flags first, then viper, then default)
+	restoreModeVal := restoreMode
+	if flag := cmd.Flags().Lookup("restore-mode"); flag == nil || !flag.Changed {
+		if viper.IsSet("restore.mode") {
+			restoreModeVal = viper.GetString("restore.mode")
+		} else {
+			restoreModeVal = "schema-and-data" // default
+		}
+	}
+
+	// Get schema source for config display
+	restoreSchemaSourceVal := restoreSchemaSource
+	if flag := cmd.Flags().Lookup("schema-source"); flag == nil || !flag.Changed {
+		if viper.IsSet("restore.schema_source") {
+			restoreSchemaSourceVal = viper.GetString("restore.schema_source")
+		} else {
+			restoreSchemaSourceVal = "auto" // default
+		}
+	}
+
+	restoreSchemaPathVal := restoreSchemaPath
+	if flag := cmd.Flags().Lookup("schema-path"); flag == nil || !flag.Changed {
+		if viper.IsSet("restore.schema_path") {
+			restoreSchemaPathVal = viper.GetString("restore.schema_path")
+		}
+	}
+
 	// Print configuration table in debug mode
 	if config.Debug {
-		printRestoreConfig(config, restoreTablePartitionRangeVal, restoreTablePartitionTemplateVal, restoreDateColumnVal, restoreOutputFormatVal, restoreCompressionVal)
+		printRestoreConfig(config, restoreTablePartitionRangeVal, restoreTablePartitionTemplateVal, restoreDateColumnVal, restoreOutputFormatVal, restoreCompressionVal, restoreModeVal, restoreSchemaSourceVal, restoreSchemaPathVal)
 	}
 
 	logger.Debug("Validating configuration...")
-	if err := validateRestoreConfig(config, restoreTablePartitionRangeVal); err != nil {
+	if err := validateRestoreConfig(config, restoreTablePartitionRangeVal, restoreModeVal, restoreSchemaSourceVal); err != nil {
 		logger.Error(fmt.Sprintf("❌ Configuration error: %s", err.Error()))
 		os.Exit(1)
 	}
@@ -235,6 +272,8 @@ func runRestore(cmd *cobra.Command) {
 		defer stop()
 	}
 
+	// Get schema source and path (already retrieved above for config display)
+
 	restorer := NewRestorer(config, logger)
 
 	// Store restore-specific config in a way we can access it
@@ -244,6 +283,9 @@ func runRestore(cmd *cobra.Command) {
 		"date_column":              restoreDateColumnVal,
 		"output_format":            restoreOutputFormatVal,
 		"compression":              restoreCompressionVal,
+		"restore_mode":             restoreModeVal,
+		"schema_source":            restoreSchemaSourceVal,
+		"schema_path":              restoreSchemaPathVal,
 	}
 
 	err := restorer.Run(ctx, restoreConfig)
@@ -262,7 +304,7 @@ func runRestore(cmd *cobra.Command) {
 }
 
 // printRestoreConfig prints a table of configuration information in debug mode
-func printRestoreConfig(config *Config, partitionRange, tablePartitionTemplate, dateColumn, outputFormat, compression string) {
+func printRestoreConfig(config *Config, partitionRange, tablePartitionTemplate, dateColumn, outputFormat, compression, restoreMode, schemaSource, schemaPath string) {
 	logger.Debug("")
 	logger.Debug("📋 Configuration:")
 	logger.Debug("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -289,6 +331,11 @@ func printRestoreConfig(config *Config, partitionRange, tablePartitionTemplate, 
 	// Restore configuration
 	logger.Debug("  Restore:")
 	logger.Debug(fmt.Sprintf("    Table:             %s", config.Table))
+	logger.Debug(fmt.Sprintf("    Restore Mode:      %s", restoreMode))
+	logger.Debug(fmt.Sprintf("    Schema Source:     %s", schemaSource))
+	if schemaPath != "" {
+		logger.Debug(fmt.Sprintf("    Schema Path:       %s", schemaPath))
+	}
 	if config.StartDate != "" {
 		logger.Debug(fmt.Sprintf("    Start Date:        %s", config.StartDate))
 	}
@@ -336,7 +383,7 @@ func maskString(s string) string {
 }
 
 // validateRestoreConfig validates restore-specific configuration
-func validateRestoreConfig(config *Config, partitionRange string) error {
+func validateRestoreConfig(config *Config, partitionRange string, restoreMode string, schemaSource string) error {
 	if config.Table == "" {
 		return errors.New("table name is required for restore")
 	}
@@ -346,6 +393,33 @@ func validateRestoreConfig(config *Config, partitionRange string) error {
 	if !isValidTableName(config.Table) {
 		return fmt.Errorf("%w: '%s'", ErrTableNameInvalid, config.Table)
 	}
+
+	// Validate restore mode
+	validModes := map[string]bool{
+		"schema-only":     true,
+		"data-only":       true,
+		"schema-and-data": true,
+	}
+	if !validModes[restoreMode] {
+		return fmt.Errorf("invalid restore-mode: %s (must be: schema-only, data-only, or schema-and-data)", restoreMode)
+	}
+
+	// Validate schema source
+	validSources := map[string]bool{
+		"pg_dump":  true,
+		"inferred": true,
+		"auto":     true,
+		"db":       true,
+	}
+	if !validSources[schemaSource] {
+		return fmt.Errorf("invalid schema-source: %s (must be: pg_dump, inferred, auto, or db)", schemaSource)
+	}
+
+	// Schema source "db" requires database connection
+	if schemaSource == "db" && (config.Database.Host == "" || config.Database.Name == "" || config.Database.User == "") {
+		return errors.New("schema-source 'db' requires database connection (db-host, db-name, db-user)")
+	}
+
 	if partitionRange != "" {
 		validRanges := map[string]bool{
 			"hourly":    true,
@@ -513,7 +587,7 @@ func extractDateFromFilename(filename string) (time.Time, bool) {
 }
 
 // discoverS3Files discovers files in S3 matching the path template and date range
-func (r *Restorer) discoverS3Files(ctx context.Context, tableName string, startDate, endDate *time.Time) ([]S3File, error) {
+func (r *Restorer) discoverS3Files(ctx context.Context, tableName string, startDate, endDate *time.Time, partitionRange string) ([]S3File, error) {
 	// Build base path from template (replace {table} placeholder)
 	basePath := strings.ReplaceAll(r.config.S3.PathTemplate, "{table}", tableName)
 
@@ -557,24 +631,34 @@ func (r *Restorer) discoverS3Files(ctx context.Context, tableName string, startD
 				continue
 			}
 
-			// Extract date from filename
 			filename := filepath.Base(key)
-			fileDate, ok := extractDateFromFilename(filename)
-			if !ok {
-				r.logger.Debug(fmt.Sprintf("Skipping file %s: unable to extract date from filename %s", key, filename))
+
+			// Try to extract date from filename (optional for non-partitioned tables)
+			fileDate, hasDate := extractDateFromFilename(filename)
+
+			// If partition range is set, we require dates; otherwise dates are optional
+			if partitionRange != "" && !hasDate {
+				r.logger.Debug(fmt.Sprintf("Skipping file %s: partitioned table requires date in filename %s", key, filename))
 				continue
 			}
 
-			r.logger.Debug(fmt.Sprintf("Extracted date %s from filename %s", fileDate.Format("2006-01-02"), filename))
+			// If date was extracted, filter by date range (if provided)
+			if hasDate {
+				r.logger.Debug(fmt.Sprintf("Extracted date %s from filename %s", fileDate.Format("2006-01-02"), filename))
 
-			// Filter by date range
-			if startDate != nil && fileDate.Before(*startDate) {
-				r.logger.Debug(fmt.Sprintf("Skipping file %s: date %s is before start date %s", key, fileDate.Format("2006-01-02"), startDate.Format("2006-01-02")))
-				continue
-			}
-			if endDate != nil && fileDate.After(*endDate) {
-				r.logger.Debug(fmt.Sprintf("Skipping file %s: date %s is after end date %s", key, fileDate.Format("2006-01-02"), endDate.Format("2006-01-02")))
-				continue
+				// Filter by date range (only if dates are provided)
+				if startDate != nil && fileDate.Before(*startDate) {
+					r.logger.Debug(fmt.Sprintf("Skipping file %s: date %s is before start date %s", key, fileDate.Format("2006-01-02"), startDate.Format("2006-01-02")))
+					continue
+				}
+				if endDate != nil && fileDate.After(*endDate) {
+					r.logger.Debug(fmt.Sprintf("Skipping file %s: date %s is after end date %s", key, fileDate.Format("2006-01-02"), endDate.Format("2006-01-02")))
+					continue
+				}
+			} else {
+				// For non-partitioned tables without dates, use file's last modified time as date
+				fileDate = aws.TimeValue(obj.LastModified)
+				r.logger.Debug(fmt.Sprintf("No date in filename %s, using last modified time: %s", filename, fileDate.Format("2006-01-02")))
 			}
 
 			// Detect format and compression
@@ -866,6 +950,70 @@ func (r *Restorer) ensurePartitionExists(ctx context.Context, baseTable string, 
 	return nil
 }
 
+// createPartitionsForDateRange creates partitions for all dates in the given range
+func (r *Restorer) createPartitionsForDateRange(ctx context.Context, baseTable string, startDate, endDate *time.Time, partitionRange, partitionTemplate string) error {
+	if partitionRange == "" {
+		return nil
+	}
+
+	if startDate == nil || endDate == nil {
+		return fmt.Errorf("start date and end date are required for partition creation")
+	}
+
+	// Generate all partition dates based on range
+	var partitionDates []time.Time
+	current := *startDate
+
+	// Normalize to start of period based on partition range
+	switch partitionRange {
+	case "hourly":
+		current = time.Date(current.Year(), current.Month(), current.Day(), current.Hour(), 0, 0, 0, current.Location())
+		for !current.After(*endDate) {
+			partitionDates = append(partitionDates, current)
+			current = current.Add(1 * time.Hour)
+		}
+	case "daily":
+		current = time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, current.Location())
+		for !current.After(*endDate) {
+			partitionDates = append(partitionDates, current)
+			current = current.AddDate(0, 0, 1)
+		}
+	case "monthly":
+		current = time.Date(current.Year(), current.Month(), 1, 0, 0, 0, 0, current.Location())
+		for !current.After(*endDate) {
+			partitionDates = append(partitionDates, current)
+			current = current.AddDate(0, 1, 0)
+		}
+	case "quarterly":
+		// Quarters: Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec
+		quarter := (int(current.Month()) - 1) / 3
+		current = time.Date(current.Year(), time.Month(quarter*3+1), 1, 0, 0, 0, 0, current.Location())
+		for !current.After(*endDate) {
+			partitionDates = append(partitionDates, current)
+			current = current.AddDate(0, 3, 0)
+		}
+	case "yearly":
+		current = time.Date(current.Year(), 1, 1, 0, 0, 0, 0, current.Location())
+		for !current.After(*endDate) {
+			partitionDates = append(partitionDates, current)
+			current = current.AddDate(1, 0, 0)
+		}
+	default:
+		return fmt.Errorf("unsupported partition range: %s", partitionRange)
+	}
+
+	r.logger.Info(fmt.Sprintf("Creating %d partitions for date range %s to %s", len(partitionDates), startDate.Format("2006-01-02"), endDate.Format("2006-01-02")))
+
+	// Create each partition
+	for _, partitionDate := range partitionDates {
+		if err := r.ensurePartitionExists(ctx, baseTable, partitionDate, partitionRange, partitionTemplate); err != nil {
+			return fmt.Errorf("failed to create partition for date %s: %w", partitionDate.Format("2006-01-02"), err)
+		}
+	}
+
+	return nil
+}
+
 // getTableSchema gets schema for an existing table
 func (r *Restorer) getTableSchema(ctx context.Context, tableName string) (*TableSchema, error) {
 	query := `
@@ -1091,6 +1239,446 @@ func convertValueForPostgreSQL(value interface{}, pgType string) interface{} {
 	return value
 }
 
+// extractSchema extracts schema based on the specified source
+func (r *Restorer) extractSchema(ctx context.Context, schemaSource, schemaPath string, files []S3File, overrideFormat, overrideCompression string) (*TableSchema, error) {
+	switch schemaSource {
+	case "db":
+		// Get schema from database
+		return r.getTableSchema(ctx, r.config.Table)
+	case "pg_dump":
+		// Extract schema from pg_dump files in S3
+		return r.extractSchemaFromPgDump(ctx, schemaPath)
+	case "inferred":
+		// Infer schema from data files
+		return r.extractSchemaFromDataFiles(ctx, files, overrideFormat, overrideCompression)
+	case "auto":
+		// Try pg_dump first, then fall back to inferred
+		schema, err := r.extractSchemaFromPgDump(ctx, schemaPath)
+		if err == nil && schema != nil {
+			return schema, nil
+		}
+		r.logger.Debug(fmt.Sprintf("Failed to extract schema from pg_dump, falling back to inferred: %v", err))
+		return r.extractSchemaFromDataFiles(ctx, files, overrideFormat, overrideCompression)
+	default:
+		return nil, fmt.Errorf("unknown schema source: %s", schemaSource)
+	}
+}
+
+// extractSchemaFromPgDump extracts schema from pg_dump files in S3
+func (r *Restorer) extractSchemaFromPgDump(ctx context.Context, schemaPath string) (*TableSchema, error) {
+	// List S3 objects matching schema path
+	prefix := strings.TrimSuffix(schemaPath, "/")
+	if !strings.HasSuffix(prefix, "*") {
+		prefix = prefix + "/"
+	}
+	prefix = strings.ReplaceAll(prefix, "{table}", r.config.Table)
+
+	r.logger.Debug(fmt.Sprintf("Looking for pg_dump files in S3 path: %s", prefix))
+
+	var allObjects []*s3.Object
+	var continuationToken *string
+
+	// Handle pagination
+	for {
+		listInput := &s3.ListObjectsV2Input{
+			Bucket:            aws.String(r.config.S3.Bucket),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		}
+
+		result, err := r.s3Client.ListObjectsV2WithContext(ctx, listInput)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list S3 objects: %w", err)
+		}
+
+		r.logger.Debug(fmt.Sprintf("ListObjectsV2 returned %d objects", len(result.Contents)))
+
+		allObjects = append(allObjects, result.Contents...)
+
+		// Check if there are more pages
+		if !aws.BoolValue(result.IsTruncated) {
+			break
+		}
+		continuationToken = result.NextContinuationToken
+	}
+
+	r.logger.Debug(fmt.Sprintf("Found %d total objects in %s", len(allObjects), prefix))
+
+	// Log all files found for debugging
+	for _, obj := range allObjects {
+		key := aws.StringValue(obj.Key)
+		r.logger.Debug(fmt.Sprintf("Found S3 object: %s", key))
+	}
+
+	// Find pg_dump files (typically .sql, .sql.gz, .sql.zst, .sql.lz4, or .dump)
+	var pgDumpFiles []string
+	for _, obj := range allObjects {
+		key := aws.StringValue(obj.Key)
+		// Skip directories
+		if strings.HasSuffix(key, "/") {
+			continue
+		}
+		// Check for pg_dump file extensions
+		isPgDumpFile := strings.HasSuffix(key, ".sql") ||
+			strings.HasSuffix(key, ".sql.gz") ||
+			strings.HasSuffix(key, ".sql.zst") ||
+			strings.HasSuffix(key, ".sql.lz4") ||
+			strings.HasSuffix(key, ".dump") ||
+			strings.HasSuffix(key, "-schema.dump")
+
+		if isPgDumpFile {
+			// Check if table name matches exactly (for files like flights-schema.dump)
+			// Match pattern: {table}-schema.dump or {table}.dump
+			// Must match at the start of the filename (after the last /)
+			matches := false
+			if r.config.Table != "" {
+				// Extract filename from path
+				filename := filepath.Base(key)
+				expectedPattern1 := r.config.Table + "-schema.dump"
+				expectedPattern2 := r.config.Table + ".dump"
+				// Check if filename starts with table name followed by -schema.dump or .dump
+				matches = filename == expectedPattern1 ||
+				         filename == expectedPattern2 ||
+				         strings.HasPrefix(filename, r.config.Table+"-schema.") ||
+				         strings.HasPrefix(filename, r.config.Table+".")
+			} else {
+				// If no table specified, match all pg_dump files
+				matches = true
+			}
+
+			if matches {
+				pgDumpFiles = append(pgDumpFiles, key)
+				r.logger.Debug(fmt.Sprintf("Found pg_dump file: %s", key))
+			} else {
+				r.logger.Debug(fmt.Sprintf("Skipping pg_dump file %s (doesn't match table %s)", key, r.config.Table))
+			}
+		}
+	}
+
+	if len(pgDumpFiles) == 0 {
+		return nil, fmt.Errorf("no pg_dump files found in %s (found %d total objects)", prefix, len(allObjects))
+	}
+
+	// Use the first pg_dump file found
+	pgDumpFile := pgDumpFiles[0]
+	r.logger.Info(fmt.Sprintf("Using pg_dump file: %s", pgDumpFile))
+
+	// Check S3 object size before downloading
+	var fileSize int64
+	for _, obj := range allObjects {
+		if aws.StringValue(obj.Key) == pgDumpFile {
+			fileSize = aws.Int64Value(obj.Size)
+			r.logger.Debug(fmt.Sprintf("S3 object size: %d bytes", fileSize))
+			if fileSize == 0 {
+				return nil, fmt.Errorf("pg_dump file %s is empty (0 bytes) in S3", pgDumpFile)
+			}
+			break
+		}
+	}
+
+	// Download the dump file
+	tempFile, err := os.CreateTemp("", "pg_dump-*.dump")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	r.logger.Debug(fmt.Sprintf("Downloading pg_dump file: %s", pgDumpFile))
+	downloadedBytes, err := r.s3Downloader.DownloadWithContext(ctx, tempFile, &s3.GetObjectInput{
+		Bucket: aws.String(r.config.S3.Bucket),
+		Key:    aws.String(pgDumpFile),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to download pg_dump file: %w", err)
+	}
+
+	// Check downloaded file size
+	if downloadedBytes == 0 {
+		return nil, fmt.Errorf("downloaded pg_dump file %s is empty (0 bytes)", pgDumpFile)
+	}
+	r.logger.Debug(fmt.Sprintf("Downloaded %d bytes", downloadedBytes))
+
+	// Get file info to verify
+	fileInfo, err := tempFile.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat downloaded file: %w", err)
+	}
+	if fileInfo.Size() == 0 {
+		return nil, fmt.Errorf("downloaded pg_dump file %s is empty (0 bytes)", pgDumpFile)
+	}
+	r.logger.Debug(fmt.Sprintf("File size on disk: %d bytes", fileInfo.Size()))
+
+	tempFile.Close()
+
+	// Drop the table and sequences if they exist (to avoid conflicts)
+	// We do this manually to ensure everything is clean before pg_restore
+	if r.db != nil {
+		// Drop table with CASCADE to remove all dependencies
+		dropQuery := fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", pq.QuoteIdentifier(r.config.Table))
+		r.logger.Debug(fmt.Sprintf("Dropping existing table if it exists: %s", r.config.Table))
+		_, err := r.db.ExecContext(ctx, dropQuery)
+		if err != nil {
+			r.logger.Warn(fmt.Sprintf("Failed to drop existing table (may not exist): %v", err))
+		} else {
+			r.logger.Debug("Successfully dropped existing table")
+		}
+
+		// Also explicitly drop sequences that might not have been dropped by CASCADE
+		// The sequence name pattern is {table}_new_id_seq based on the error message
+		dropSeqQuery := fmt.Sprintf("DROP SEQUENCE IF EXISTS %s_new_id_seq CASCADE", pq.QuoteIdentifier(r.config.Table))
+		r.logger.Debug(fmt.Sprintf("Dropping sequence if it exists: %s_new_id_seq", r.config.Table))
+		_, err = r.db.ExecContext(ctx, dropSeqQuery)
+		if err != nil {
+			r.logger.Debug(fmt.Sprintf("Sequence may not exist (this is OK): %v", err))
+		}
+	}
+
+	// Determine if this is a text format (SQL) or custom format dump
+	// Try pg_restore first (for custom format), fall back to psql (for text format)
+	sslMode := r.config.Database.SSLMode
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+
+	// First, try pg_restore (for custom format dumps)
+	r.logger.Debug("Attempting to restore using pg_restore (custom format)...")
+	// Use --clean --if-exists to let pg_restore handle ordering properly
+	connArgs := []string{
+		"--schema-only",
+		"--clean", // Drop objects before creating them
+		"--if-exists", // Don't error if objects don't exist
+		"--verbose", // Show what's being restored for debugging
+		"--no-owner",
+		"--no-privileges",
+		fmt.Sprintf("--host=%s", r.config.Database.Host),
+		fmt.Sprintf("--port=%d", r.config.Database.Port),
+		fmt.Sprintf("--username=%s", r.config.Database.User),
+		fmt.Sprintf("--dbname=%s", r.config.Database.Name),
+		tempFile.Name(),
+	}
+
+	cmd := exec.CommandContext(ctx, "pg_restore", connArgs...)
+	env := os.Environ()
+	env = append(env,
+		fmt.Sprintf("PGPASSWORD=%s", r.config.Database.Password),
+		fmt.Sprintf("PGSSLMODE=%s", sslMode),
+	)
+	cmd.Env = env
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		outputStr := string(output)
+		// If pg_restore fails with "text format" error, use psql instead
+		if strings.Contains(outputStr, "text format") ||
+		   strings.Contains(outputStr, "Please use psql") ||
+		   strings.Contains(outputStr, "input file is too short") ||
+		   strings.Contains(outputStr, "too short") {
+			r.logger.Debug(fmt.Sprintf("pg_restore failed (likely text format or corrupted custom format): %s", outputStr))
+			r.logger.Debug("Attempting to restore using psql instead...")
+			return r.restoreSchemaWithPsql(ctx, tempFile.Name(), sslMode)
+		}
+
+		// Check if the error is about a missing sequence
+		// Pattern: relation "public.{table}_new_id_seq" does not exist
+		seqPattern := fmt.Sprintf(`relation "public\.%s_new_id_seq" does not exist`, r.config.Table)
+		if strings.Contains(outputStr, seqPattern) || strings.Contains(outputStr, "_new_id_seq") {
+			r.logger.Warn("Sequence not found in dump file, creating it manually...")
+			// Create the sequence manually
+			seqName := fmt.Sprintf("%s_new_id_seq", r.config.Table)
+			createSeqQuery := fmt.Sprintf("CREATE SEQUENCE IF NOT EXISTS %s OWNED BY NONE", pq.QuoteIdentifier(seqName))
+			if r.db != nil {
+				_, seqErr := r.db.ExecContext(ctx, createSeqQuery)
+				if seqErr != nil {
+					r.logger.Warn(fmt.Sprintf("Failed to create sequence manually: %v", seqErr))
+				} else {
+					r.logger.Info(fmt.Sprintf("Created sequence %s manually", seqName))
+					// Retry pg_restore after creating the sequence
+					r.logger.Debug("Retrying pg_restore after creating sequence...")
+					// Recreate the command for retry
+					cmd2 := exec.CommandContext(ctx, "pg_restore", connArgs...)
+					cmd2.Env = env
+					output2, err2 := cmd2.CombinedOutput()
+					if err2 != nil {
+						return nil, fmt.Errorf("failed to run pg_restore after creating sequence: %w (output: %s)", err2, string(output2))
+					}
+					r.logger.Debug(fmt.Sprintf("pg_restore output (retry): %s", string(output2)))
+					r.logger.Info("✅ Schema restored successfully using pg_restore (after sequence creation)")
+					// Continue to get schema from database
+					output = output2
+					goto getSchema
+				}
+			}
+		}
+
+		return nil, fmt.Errorf("failed to run pg_restore: %w (output: %s)", err, outputStr)
+	}
+
+	r.logger.Debug(fmt.Sprintf("pg_restore output: %s", string(output)))
+	r.logger.Info("✅ Schema restored successfully using pg_restore")
+
+getSchema:
+	// Get the schema from the database to return it
+	schema, err := r.getTableSchema(ctx, r.config.Table)
+	if err != nil {
+		// Schema might not exist yet, or might be in a different format
+		// Return a basic schema so the restore can continue
+		r.logger.Warn(fmt.Sprintf("Could not get schema after restore: %v", err))
+		return &TableSchema{
+			TableName: r.config.Table,
+			Columns:   []ColumnInfo{},
+		}, nil
+	}
+
+	return schema, nil
+}
+
+// restoreSchemaWithPsql restores schema from a text format SQL dump using psql
+func (r *Restorer) restoreSchemaWithPsql(ctx context.Context, dumpFile string, sslMode string) (*TableSchema, error) {
+	r.logger.Info("Restoring schema using psql...")
+
+	// Build connection string for psql
+	connStr := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=%s",
+		r.config.Database.User,
+		r.config.Database.Password,
+		r.config.Database.Host,
+		r.config.Database.Port,
+		r.config.Database.Name,
+		sslMode,
+	)
+
+	// Read the dump file and filter to only schema statements
+	// For now, just pipe the file to psql - psql will execute all statements
+	dumpReader, err := os.Open(dumpFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open dump file: %w", err)
+	}
+	defer dumpReader.Close()
+
+	// Run psql to execute the SQL dump
+	cmd := exec.CommandContext(ctx, "psql", connStr)
+	cmd.Stdin = dumpReader
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("PGPASSWORD=%s", r.config.Database.Password),
+		fmt.Sprintf("PGSSLMODE=%s", sslMode),
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to run psql: %w (output: %s)", err, string(output))
+	}
+
+	r.logger.Debug(fmt.Sprintf("psql output: %s", string(output)))
+	r.logger.Info("✅ Schema restored successfully using psql")
+
+	// Get the schema from the database to return it
+	schema, err := r.getTableSchema(ctx, r.config.Table)
+	if err != nil {
+		// Schema might not exist yet, or might be in a different format
+		// Return a basic schema so the restore can continue
+		r.logger.Warn(fmt.Sprintf("Could not get schema after restore: %v", err))
+		return &TableSchema{
+			TableName: r.config.Table,
+			Columns:   []ColumnInfo{},
+		}, nil
+	}
+
+	return schema, nil
+}
+
+// extractSchemaFromDataFiles extracts schema by inferring from data files
+func (r *Restorer) extractSchemaFromDataFiles(ctx context.Context, files []S3File, overrideFormat, overrideCompression string) (*TableSchema, error) {
+	if len(files) == 0 {
+		return nil, errors.New("no files available for schema inference")
+	}
+
+	// Use first file to infer schema
+	file := files[0]
+	r.logger.Debug(fmt.Sprintf("Inferring schema from file: %s", file.Key))
+
+	// Download file
+	tempFile, err := os.CreateTemp("", "restore-schema-*.tmp")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	_, err = r.s3Downloader.DownloadWithContext(ctx, tempFile, &s3.GetObjectInput{
+		Bucket: aws.String(r.config.S3.Bucket),
+		Key:    aws.String(file.Key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to download file: %w", err)
+	}
+
+	tempFile.Close()
+	fileReader, err := os.Open(tempFile.Name())
+	if err != nil {
+		return nil, fmt.Errorf("failed to open temp file: %w", err)
+	}
+	defer fileReader.Close()
+
+	// Detect format/compression
+	format := file.DetectedFormat
+	compression := file.DetectedCompression
+	if overrideFormat != "" {
+		format = overrideFormat
+	}
+	if overrideCompression != "" {
+		compression = overrideCompression
+	}
+
+	// Decompress
+	compressor, err := compressors.GetCompressor(compression)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get compressor: %w", err)
+	}
+
+	decompressedReader, err := compressor.NewReader(fileReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create decompression reader: %w", err)
+	}
+	defer decompressedReader.Close()
+
+	// Parse format and get sample rows
+	var rows []map[string]interface{}
+	switch format {
+	case "jsonl":
+		reader := formatters.NewJSONLReaderWithCloser(decompressedReader)
+		rows, err = reader.ReadAll()
+	case "csv":
+		reader, err := formatters.NewCSVReaderWithCloser(decompressedReader)
+		if err == nil {
+			rows, err = reader.ReadAll()
+		}
+	case "parquet":
+		reader, err := formatters.NewParquetReaderWithCloser(decompressedReader)
+		if err == nil {
+			rows, err = reader.ReadAll()
+		}
+	default:
+		return nil, fmt.Errorf("unsupported format: %s", format)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to read data: %w", err)
+	}
+
+	if len(rows) == 0 {
+		return nil, errors.New("no rows found in file for schema inference")
+	}
+
+	// Infer schema from rows
+	schema, err := r.inferTableSchema(ctx, rows)
+	if err != nil {
+		return nil, fmt.Errorf("failed to infer schema: %w", err)
+	}
+
+	schema.TableName = r.config.Table
+	return schema, nil
+}
+
 // Run executes the restore process
 func (r *Restorer) Run(ctx context.Context, restoreConfig map[string]string) error {
 	r.ctx = ctx
@@ -1121,9 +1709,16 @@ func (r *Restorer) Run(ctx context.Context, restoreConfig map[string]string) err
 		}
 	}
 
+	// Get restore mode and partition range from restore config
+	restoreMode := restoreConfig["restore_mode"]
+	if restoreMode == "" {
+		restoreMode = "schema-and-data" // default
+	}
+	partitionRange := restoreConfig["table_partition_range"]
+
 	// Discover S3 files
 	r.logger.Info("Discovering files in S3...")
-	files, err := r.discoverS3Files(ctx, r.config.Table, startDate, endDate)
+	files, err := r.discoverS3Files(ctx, r.config.Table, startDate, endDate, partitionRange)
 	if err != nil {
 		return fmt.Errorf("failed to discover files: %w", err)
 	}
@@ -1133,12 +1728,57 @@ func (r *Restorer) Run(ctx context.Context, restoreConfig map[string]string) err
 		return nil
 	}
 
+	switch restoreMode {
+	case "schema-only":
+		r.logger.Info("🔧 Schema-only mode: will create tables/partitions without inserting data")
+	case "data-only":
+		r.logger.Info("🔧 Data-only mode: will insert data without creating tables/partitions (assumes they exist)")
+	case "schema-and-data":
+		r.logger.Info("🔧 Schema-and-data mode: will create tables/partitions and insert data")
+	default:
+		return fmt.Errorf("invalid restore-mode: %s", restoreMode)
+	}
+
 	// Process files sequentially
-	partitionRange := restoreConfig["table_partition_range"]
 	overrideFormat := restoreConfig["output_format"]
 	overrideCompression := restoreConfig["compression"]
+	schemaSource := restoreConfig["schema_source"]
+	if schemaSource == "" {
+		schemaSource = "auto"
+	}
+	schemaPath := restoreConfig["schema_path"]
+	if schemaPath == "" {
+		schemaPath = r.config.S3.PathTemplate
+	}
 
 	var inferredSchema *TableSchema
+
+	// Extract schema based on schema source (if not data-only mode)
+	if restoreMode != "data-only" {
+		r.logger.Info(fmt.Sprintf("Extracting schema from source: %s", schemaSource))
+		var err error
+		inferredSchema, err = r.extractSchema(ctx, schemaSource, schemaPath, files, overrideFormat, overrideCompression)
+		if err != nil {
+			return fmt.Errorf("failed to extract schema: %w", err)
+		}
+		if inferredSchema != nil {
+			r.logger.Info(fmt.Sprintf("✅ Extracted schema for table %s (%d columns)", inferredSchema.TableName, len(inferredSchema.Columns)))
+			// Ensure base table exists
+			if err := r.ensureTableExists(ctx, r.config.Table, inferredSchema); err != nil {
+				return fmt.Errorf("failed to ensure table exists: %w", err)
+			}
+		}
+	}
+
+	// In schema-only mode with partitions, create all partitions for date range
+	if restoreMode == "schema-only" && partitionRange != "" && inferredSchema != nil {
+		partitionTemplate := restoreConfig["table_partition_template"]
+		if err := r.createPartitionsForDateRange(ctx, r.config.Table, startDate, endDate, partitionRange, partitionTemplate); err != nil {
+			return fmt.Errorf("failed to create partitions: %w", err)
+		}
+		r.logger.Info("✅ All partitions created")
+		return nil
+	}
 
 	for i, file := range files {
 		select {
@@ -1244,8 +1884,8 @@ func (r *Restorer) Run(ctx context.Context, restoreConfig map[string]string) err
 			continue
 		}
 
-		// Infer schema if first file
-		if inferredSchema == nil {
+		// Infer schema if first file (skip in data-only mode)
+		if inferredSchema == nil && restoreMode != "data-only" {
 			r.logger.Debug("Inferring table schema from data...")
 			inferredSchema, err = r.inferTableSchema(ctx, rows)
 			if err != nil {
@@ -1258,6 +1898,39 @@ func (r *Restorer) Run(ctx context.Context, restoreConfig map[string]string) err
 				r.logger.Error(fmt.Sprintf("Failed to ensure table exists: %v", err))
 				continue
 			}
+		}
+
+		// In schema-only mode, skip data insertion but ensure partitions exist
+		if restoreMode == "schema-only" {
+			if partitionRange != "" {
+				partitionTemplate := restoreConfig["table_partition_template"]
+				// Ensure partition exists for this file's date
+				if err := r.ensurePartitionExists(ctx, r.config.Table, file.Date, partitionRange, partitionTemplate); err != nil {
+					r.logger.Error(fmt.Sprintf("Failed to ensure partition exists: %v", err))
+					continue
+				}
+				targetTable := generatePartitionName(r.config.Table, file.Date, partitionRange, partitionTemplate)
+				r.logger.Info(fmt.Sprintf("✅ Created partition %s for date %s", targetTable, file.Date.Format("2006-01-02")))
+			} else {
+				r.logger.Info(fmt.Sprintf("✅ Schema inferred from %s (no partitions needed)", file.Key))
+			}
+			// Skip data insertion in schema-only mode
+			continue
+		}
+
+		// In data-only mode, get schema from existing table
+		if restoreMode == "data-only" && inferredSchema == nil {
+			var err error
+			inferredSchema, err = r.getTableSchema(ctx, r.config.Table)
+			if err != nil {
+				r.logger.Error(fmt.Sprintf("Failed to get table schema (table may not exist): %v", err))
+				continue
+			}
+		}
+
+		// Skip data insertion in schema-only mode
+		if restoreMode == "schema-only" {
+			continue
 		}
 
 		// Determine target table (base or partition)
@@ -1274,10 +1947,12 @@ func (r *Restorer) Run(ctx context.Context, restoreConfig map[string]string) err
 			targetTable := r.config.Table
 			if partitionRange != "" {
 				partitionTemplate := restoreConfig["table_partition_template"]
-				// Ensure partition exists
-				if err := r.ensurePartitionExists(ctx, r.config.Table, file.Date, partitionRange, partitionTemplate); err != nil {
-					r.logger.Error(fmt.Sprintf("Failed to ensure partition exists: %v", err))
-					continue
+				// Ensure partition exists (skip in data-only mode)
+				if restoreMode != "data-only" {
+					if err := r.ensurePartitionExists(ctx, r.config.Table, file.Date, partitionRange, partitionTemplate); err != nil {
+						r.logger.Error(fmt.Sprintf("Failed to ensure partition exists: %v", err))
+						continue
+					}
 				}
 				// Generate partition name using template or default
 				targetTable = generatePartitionName(r.config.Table, file.Date, partitionRange, partitionTemplate)
