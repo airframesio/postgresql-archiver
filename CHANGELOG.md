@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.5.7] - 2025-11-15
+## [1.5.8] - 2025-11-15
 
 ### Added
 - **Hybrid Dump Command:**
@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Reuses existing `--path-template` placeholders so schema and grouped data land together in S3
   - Validates date ranges and table requirements to make partition-scoped dumps easy to automate
   - When tables aren’t physically partitioned, the tool now requires `--date-column` and materializes temporary window tables so each `pg_dump` contains only rows within the requested range
+  - Hybrid mode now dumps both physical partitions and any remaining rows that still live in the parent table by creating short-lived staging tables per date window
 
 ## [1.5.6] - 2025-11-12
 

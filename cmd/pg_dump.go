@@ -591,7 +591,7 @@ func (e *PgDumpExecutor) dumpPartitionsByDateRange(ctx context.Context) error {
 			return fmt.Errorf("date column filtering requires both start-date and end-date")
 		}
 		e.logger.Info(fmt.Sprintf("Using date column %s to dump %s in windows", e.config.DateColumn, e.config.Table))
-		return e.dumpTableByDateColumn(ctx, *startDate, *endDate)
+		return e.dumpTableByDateColumn(ctx, *startDate, *endDate, nil)
 	}
 
 	e.logger.Info(fmt.Sprintf("Found %d partition(s) to dump in date range", len(partitionsToDump)))
@@ -626,15 +626,30 @@ func (e *PgDumpExecutor) dumpPartitionsByDateRange(ctx context.Context) error {
 		return sortedGroups[i].date.Before(sortedGroups[j].date)
 	})
 
+	coveredGroupKeys := make(map[string]bool)
 	// Dump each group in sorted order
 	for i, group := range sortedGroups {
 		e.logger.Info(fmt.Sprintf("Dumping group %d/%d: %s (%d partition(s))", i+1, len(sortedGroups), group.key, len(group.partitions)))
+		coveredGroupKeys[group.key] = true
 		if err := e.dumpPartitionGroup(ctx, group.partitions, group.key); err != nil {
 			return fmt.Errorf("failed to dump group %s: %w", group.key, err)
 		}
 	}
 
 	e.logger.Info(fmt.Sprintf("✅ Successfully dumped %d group(s) (%d total partition(s))", len(groups), len(partitionsToDump)))
+
+	// After partition dumps, handle any remaining parent-table rows via date column filtering
+	if e.config.DateColumn != "" {
+		if startDate != nil && endDate != nil {
+			e.logger.Info(fmt.Sprintf("Checking parent table %s for remaining rows via %s", e.config.Table, e.config.DateColumn))
+			if err := e.dumpTableByDateColumn(ctx, *startDate, *endDate, coveredGroupKeys); err != nil {
+				return err
+			}
+		} else {
+			e.logger.Warn("Date column provided but start/end dates missing; skipping parent table fallback")
+		}
+	}
+
 	return nil
 }
 
@@ -722,7 +737,8 @@ type dateWindow struct {
 
 // dumpTableByDateColumn generates date-based windows using the configured output duration
 // and dumps each window by materializing a temporary staging table that contains only rows in the window.
-func (e *PgDumpExecutor) dumpTableByDateColumn(ctx context.Context, startDate, endDate time.Time) error {
+// skipKeys allows callers to avoid dumping ranges already covered by physical partitions (key format matches getGroupKeyForDuration).
+func (e *PgDumpExecutor) dumpTableByDateColumn(ctx context.Context, startDate, endDate time.Time, skipKeys map[string]bool) error {
 	if e.db == nil {
 		if err := e.connect(ctx); err != nil {
 			return fmt.Errorf("failed to connect before date-column dump: %w", err)
@@ -744,6 +760,12 @@ func (e *PgDumpExecutor) dumpTableByDateColumn(ctx context.Context, startDate, e
 	}
 
 	for i, window := range windows {
+		windowKey := e.getGroupKeyForDuration(window.start, e.config.OutputDuration)
+		if skipKeys != nil && skipKeys[windowKey] {
+			e.logger.Debug(fmt.Sprintf("Skipping window %s (%s → %s): already covered by partitions", windowKey, window.start.Format("2006-01-02 15:04"), window.end.Add(-time.Second).Format("2006-01-02 15:04")))
+			continue
+		}
+
 		stagingName := e.buildStagingTableName(i, window.start)
 		rows, err := e.createStagingTable(ctx, stagingName, window)
 		if err != nil {

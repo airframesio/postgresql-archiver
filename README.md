@@ -213,6 +213,7 @@ Use `data-archiver dump-hybrid` when you need a schema dump plus partitioned dat
 
 - Step 1: Dump the parent table schema once (partitions are automatically excluded).
 - Step 2: Discover partitions that match the provided date range and upload grouped dumps using `--path-template` + `--output-duration`.
+- Any dates not covered by physical partitions are still exported by filtering the parent table via temporary staging tables, so mixed partition/non-partition layouts are supported.
 - Ideal for storing schema metadata next to date-windowed `pg_dump` archives without manual SQL.
 - Requires `--date-column` so non-partitioned tables can be filtered via `pg_dump --where`.
 
