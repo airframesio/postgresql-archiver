@@ -236,6 +236,16 @@ var dumpCmd = &cobra.Command{
 	},
 }
 
+var dumpHybridCmd = &cobra.Command{
+	Use:   "dump-hybrid",
+	Short: "Dump schema once, then stream date-sliced data dumps",
+	Long: `Dump a table schema via pg_dump and then emit date-sliced data dumps
+using the path template/duration logic. Ideal for creating schema + incremental data archives.`,
+	Run: func(_ *cobra.Command, _ []string) {
+		runHybridDump()
+	},
+}
+
 func Execute() error {
 	return rootCmd.Execute()
 }
@@ -246,6 +256,7 @@ func init() {
 	// Register archive subcommand
 	rootCmd.AddCommand(archiveCmd)
 	rootCmd.AddCommand(dumpCmd)
+	rootCmd.AddCommand(dumpHybridCmd)
 
 	// Persistent flags (available to all subcommands)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.data-archiver.yaml)")
@@ -308,6 +319,25 @@ func init() {
 	dumpCmd.Flags().StringVar(&dateColumn, "date-column", "", "timestamp column name for date-based filtering (required for data dumps with date ranges)")
 	dumpCmd.Flags().StringVar(&outputDuration, "output-duration", "daily", "output file duration: hourly, daily, weekly, monthly, yearly (for data dumps)")
 
+	// Hybrid dump-specific flags (shares same variables as dump)
+	dumpHybridCmd.Flags().StringVar(&dbHost, "db-host", "localhost", "PostgreSQL host")
+	dumpHybridCmd.Flags().IntVar(&dbPort, "db-port", 5432, "PostgreSQL port")
+	dumpHybridCmd.Flags().StringVar(&dbUser, "db-user", "", "PostgreSQL user")
+	dumpHybridCmd.Flags().StringVar(&dbPassword, "db-password", "", "PostgreSQL password")
+	dumpHybridCmd.Flags().StringVar(&dbName, "db-name", "", "PostgreSQL database name")
+	dumpHybridCmd.Flags().StringVar(&dbSSLMode, "db-sslmode", "disable", "PostgreSQL SSL mode (disable, require, verify-ca, verify-full)")
+	dumpHybridCmd.Flags().StringVar(&s3Endpoint, "s3-endpoint", "", "S3-compatible endpoint URL")
+	dumpHybridCmd.Flags().StringVar(&s3Bucket, "s3-bucket", "", "S3 bucket name")
+	dumpHybridCmd.Flags().StringVar(&s3AccessKey, "s3-access-key", "", "S3 access key")
+	dumpHybridCmd.Flags().StringVar(&s3SecretKey, "s3-secret-key", "", "S3 secret key")
+	dumpHybridCmd.Flags().StringVar(&s3Region, "s3-region", "auto", "S3 region")
+	dumpHybridCmd.Flags().StringVar(&pathTemplate, "path-template", "", "S3 path template with placeholders: {table}, {YYYY}, {MM}, {DD}, {HH} (required)")
+	dumpHybridCmd.Flags().StringVar(&baseTable, "table", "", "table name to dump (required)")
+	dumpHybridCmd.Flags().IntVar(&workers, "workers", 4, "number of parallel jobs for pg_dump")
+	dumpHybridCmd.Flags().StringVar(&startDate, "start-date", "", "start date (YYYY-MM-DD) for filtering partitions/data (required for hybrid data dumps)")
+	dumpHybridCmd.Flags().StringVar(&endDate, "end-date", "", "end date (YYYY-MM-DD) for filtering partitions/data")
+	dumpHybridCmd.Flags().StringVar(&outputDuration, "output-duration", "daily", "output file duration: hourly, daily, weekly, monthly, yearly (required)")
+
 	// Note: We don't use MarkFlagRequired because it checks before viper loads the config file.
 	// Instead, validation happens in config.Validate() which runs after all config sources are loaded.
 
@@ -366,6 +396,25 @@ func init() {
 	_ = viper.BindPFlag("end_date", dumpCmd.Flags().Lookup("end-date"))
 	_ = viper.BindPFlag("date_column", dumpCmd.Flags().Lookup("date-column"))
 	_ = viper.BindPFlag("output_duration", dumpCmd.Flags().Lookup("output-duration"))
+
+	// Bind hybrid dump flags (last binding wins for shared variables)
+	_ = viper.BindPFlag("db.host", dumpHybridCmd.Flags().Lookup("db-host"))
+	_ = viper.BindPFlag("db.port", dumpHybridCmd.Flags().Lookup("db-port"))
+	_ = viper.BindPFlag("db.user", dumpHybridCmd.Flags().Lookup("db-user"))
+	_ = viper.BindPFlag("db.password", dumpHybridCmd.Flags().Lookup("db-password"))
+	_ = viper.BindPFlag("db.name", dumpHybridCmd.Flags().Lookup("db-name"))
+	_ = viper.BindPFlag("db.sslmode", dumpHybridCmd.Flags().Lookup("db-sslmode"))
+	_ = viper.BindPFlag("s3.endpoint", dumpHybridCmd.Flags().Lookup("s3-endpoint"))
+	_ = viper.BindPFlag("s3.bucket", dumpHybridCmd.Flags().Lookup("s3-bucket"))
+	_ = viper.BindPFlag("s3.access_key", dumpHybridCmd.Flags().Lookup("s3-access-key"))
+	_ = viper.BindPFlag("s3.secret_key", dumpHybridCmd.Flags().Lookup("s3-secret-key"))
+	_ = viper.BindPFlag("s3.region", dumpHybridCmd.Flags().Lookup("s3-region"))
+	_ = viper.BindPFlag("s3.path_template", dumpHybridCmd.Flags().Lookup("path-template"))
+	_ = viper.BindPFlag("table", dumpHybridCmd.Flags().Lookup("table"))
+	_ = viper.BindPFlag("workers", dumpHybridCmd.Flags().Lookup("workers"))
+	_ = viper.BindPFlag("start_date", dumpHybridCmd.Flags().Lookup("start-date"))
+	_ = viper.BindPFlag("end_date", dumpHybridCmd.Flags().Lookup("end-date"))
+	_ = viper.BindPFlag("output_duration", dumpHybridCmd.Flags().Lookup("output-duration"))
 }
 
 func initConfig() {

@@ -133,6 +133,9 @@ data-archiver archive [flags]
 # Dump database using pg_dump to S3
 data-archiver dump [flags]
 
+# Dump schema once, then emit date-sliced data dumps via pg_dump
+data-archiver dump-hybrid [flags]
+
 # Restore data from S3
 data-archiver restore [flags]
 ```
@@ -203,6 +206,36 @@ Flags:
 - `--chunk-size` - Number of rows to process per chunk (default: 10000, range: 100-1000000)
   - Tune based on average row size for optimal memory usage
   - Smaller chunks for large rows, larger chunks for small rows
+
+### Hybrid pg_dump workflow
+
+Use `data-archiver dump-hybrid` when you need a schema dump plus partitioned data files generated directly by `pg_dump`.
+
+- Step 1: Dump the parent table schema once (partitions are automatically excluded).
+- Step 2: Discover partitions that match the provided date range and upload grouped dumps using `--path-template` + `--output-duration`.
+- Ideal for storing schema metadata next to date-windowed `pg_dump` archives without manual SQL.
+
+Example: dump the `events` table schema plus daily data files for January 2024.
+
+```bash
+data-archiver dump-hybrid \
+  --db-host localhost \
+  --db-port 5432 \
+  --db-user myuser \
+  --db-password mypass \
+  --db-name analytics \
+  --table events \
+  --start-date 2024-01-01 \
+  --end-date 2024-01-31 \
+  --s3-endpoint https://s3.example.com \
+  --s3-bucket pg-dumps \
+  --s3-access-key YOUR_KEY \
+  --s3-secret-key YOUR_SECRET \
+  --path-template "pgdumps/{table}/{YYYY}/{MM}" \
+  --output-duration daily
+```
+
+The schema is uploaded once (e.g., `pgdumps/events/schema.dump`), then `pg_dump` writes compressed custom-format data for each daily/weekly/monthly grouping such as `pgdumps/events/2024/01/events-2024-01-05.dump`.
 
 ## ⚙️ Configuration
 
