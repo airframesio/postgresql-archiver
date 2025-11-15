@@ -119,6 +119,13 @@ func validateHybridConfig(config *Config) error {
 		return ErrPathTemplateRequired
 	}
 
+	if config.DateColumn == "" {
+		return fmt.Errorf("%w", ErrDateColumnInvalid)
+	}
+	if !validPostgreSQLIdentifier.MatchString(config.DateColumn) {
+		return fmt.Errorf("%w: '%s'", ErrDateColumnInvalid, config.DateColumn)
+	}
+
 	if config.StartDate == "" && config.EndDate == "" {
 		return errHybridDateRangeRequired
 	}

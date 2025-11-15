@@ -336,6 +336,7 @@ func init() {
 	dumpHybridCmd.Flags().IntVar(&workers, "workers", 4, "number of parallel jobs for pg_dump")
 	dumpHybridCmd.Flags().StringVar(&startDate, "start-date", "", "start date (YYYY-MM-DD) for filtering partitions/data (required for hybrid data dumps)")
 	dumpHybridCmd.Flags().StringVar(&endDate, "end-date", "", "end date (YYYY-MM-DD) for filtering partitions/data")
+	dumpHybridCmd.Flags().StringVar(&dateColumn, "date-column", "", "timestamp column name for date-based filtering (required)")
 	dumpHybridCmd.Flags().StringVar(&outputDuration, "output-duration", "daily", "output file duration: hourly, daily, weekly, monthly, yearly (required)")
 
 	// Note: We don't use MarkFlagRequired because it checks before viper loads the config file.
@@ -414,6 +415,7 @@ func init() {
 	_ = viper.BindPFlag("workers", dumpHybridCmd.Flags().Lookup("workers"))
 	_ = viper.BindPFlag("start_date", dumpHybridCmd.Flags().Lookup("start-date"))
 	_ = viper.BindPFlag("end_date", dumpHybridCmd.Flags().Lookup("end-date"))
+	_ = viper.BindPFlag("date_column", dumpHybridCmd.Flags().Lookup("date-column"))
 	_ = viper.BindPFlag("output_duration", dumpHybridCmd.Flags().Lookup("output-duration"))
 }
 

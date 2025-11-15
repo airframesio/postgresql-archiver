@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,7 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-	_ "github.com/lib/pq" // PostgreSQL driver
+	pq "github.com/lib/pq"
 )
 
 // PgDumpExecutor handles pg_dump operations with S3 upload
@@ -220,9 +221,9 @@ func (e *PgDumpExecutor) dumpTable(ctx context.Context, tableName string) error 
 	// Generate S3 object key for this table
 	objectKey := e.generateObjectKey(tableName)
 
-	// For partitioned tables, pg_dump -t doesn't work well with stdout (-f -)
-	// Write to a temp file instead, then upload it
-	if hasPartitions && e.config.DumpMode == "schema-only" {
+	// For schema-only dumps, pg_dump -t streaming to stdout can produce empty output for some tables.
+	// Use a temp file path instead (also required for partitioned tables).
+	if e.config.DumpMode == "schema-only" {
 		return e.dumpTableToFile(ctx, tableName, objectKey)
 	}
 
@@ -368,7 +369,7 @@ func (e *PgDumpExecutor) dumpTable(ctx context.Context, tableName string) error 
 			errorMsg += fmt.Sprintf("\npg_dump stderr: %s", stderrOutput)
 		}
 		errorMsg += "\nPossible causes: table does not exist, table has no schema, or permissions issue"
-		return fmt.Errorf(errorMsg)
+		return errors.New(errorMsg)
 	}
 
 	return nil
@@ -377,6 +378,8 @@ func (e *PgDumpExecutor) dumpTable(ctx context.Context, tableName string) error 
 // dumpTableToFile dumps a partitioned table to a temp file, then uploads it to S3
 // This is needed because pg_dump -t on partitioned tables doesn't work with stdout (-f -)
 func (e *PgDumpExecutor) dumpTableToFile(ctx context.Context, tableName string, objectKey string) error {
+	dumpTarget := e.qualifyTableName(tableName)
+
 	// Create temp file
 	tempFile, err := os.CreateTemp("", "pg_dump-*.dump")
 	if err != nil {
@@ -400,7 +403,7 @@ func (e *PgDumpExecutor) dumpTableToFile(ctx context.Context, tableName string, 
 		"-p", fmt.Sprintf("%d", e.config.Database.Port),
 		"-U", e.config.Database.User,
 		"-d", e.config.Database.Name,
-		"-Fc", "--schema-only", "-w", "-t", tableName,
+		"-Fc", "--schema-only", "-w", "-t", dumpTarget,
 		"-f", tempFilePath, // Write to file instead of stdout
 	)
 
@@ -579,15 +582,16 @@ func (e *PgDumpExecutor) dumpPartitionsByDateRange(ctx context.Context) error {
 	}
 
 	if len(partitionsToDump) == 0 {
-		// If output duration is set but no partitions found, dump the parent table with date-based filename
-		if e.config.OutputDuration != "" {
-			e.logger.Info("No partitions found, dumping parent table with date-based filename")
-			now := time.Now()
-			objectKey := e.generateObjectKeyWithDuration(e.config.Table, now, e.config.OutputDuration)
-			return e.dumpMultiplePartitionsToFile(ctx, []string{e.config.Table}, objectKey, now)
-		}
 		e.logger.Info("No partitions found in date range")
-		return nil
+		if e.config.DateColumn == "" {
+			e.logger.Info("Date column not provided; skipping data dump fallback")
+			return nil
+		}
+		if startDate == nil || endDate == nil {
+			return fmt.Errorf("date column filtering requires both start-date and end-date")
+		}
+		e.logger.Info(fmt.Sprintf("Using date column %s to dump %s in windows", e.config.DateColumn, e.config.Table))
+		return e.dumpTableByDateColumn(ctx, *startDate, *endDate)
 	}
 
 	e.logger.Info(fmt.Sprintf("Found %d partition(s) to dump in date range", len(partitionsToDump)))
@@ -711,13 +715,165 @@ func (e *PgDumpExecutor) dumpPartitionGroup(ctx context.Context, partitions []st
 	return e.dumpMultiplePartitionsToFile(ctx, partitionNames, objectKey, groupDate)
 }
 
-// dumpPartitionWithDate dumps a partition with date-based filename
-func (e *PgDumpExecutor) dumpPartitionWithDate(ctx context.Context, partitionName string, partitionDate time.Time) error {
-	// Generate object key with date
-	objectKey := e.generateObjectKeyWithDate(e.config.Table, partitionDate)
+type dateWindow struct {
+	start time.Time
+	end   time.Time
+}
 
-	// Use dumpTableToFile for partitioned tables (works better than stdout)
-	return e.dumpTableToFileWithDate(ctx, partitionName, objectKey, partitionDate)
+// dumpTableByDateColumn generates date-based windows using the configured output duration
+// and dumps each window by materializing a temporary staging table that contains only rows in the window.
+func (e *PgDumpExecutor) dumpTableByDateColumn(ctx context.Context, startDate, endDate time.Time) error {
+	if e.db == nil {
+		if err := e.connect(ctx); err != nil {
+			return fmt.Errorf("failed to connect before date-column dump: %w", err)
+		}
+		defer e.db.Close()
+	}
+
+	if e.config.DateColumn == "" {
+		return fmt.Errorf("date column is required for date-based dumping")
+	}
+
+	windows, err := e.buildDateWindows(startDate, endDate)
+	if err != nil {
+		return err
+	}
+	if len(windows) == 0 {
+		e.logger.Info("No date windows generated for requested range")
+		return nil
+	}
+
+	for i, window := range windows {
+		stagingName := e.buildStagingTableName(i, window.start)
+		rows, err := e.createStagingTable(ctx, stagingName, window)
+		if err != nil {
+			return fmt.Errorf("failed to create staging table %s: %w", stagingName, err)
+		}
+
+		if rows == 0 {
+			e.logger.Info(fmt.Sprintf("Skipping window %d/%d (%s → %s): no rows",
+				i+1, len(windows),
+				window.start.Format("2006-01-02 15:04"),
+				window.end.Add(-time.Second).Format("2006-01-02 15:04")))
+			if dropErr := e.dropStagingTable(ctx, stagingName); dropErr != nil {
+				e.logger.Warn(fmt.Sprintf("Failed to drop empty staging table %s: %v", stagingName, dropErr))
+			}
+			continue
+		}
+
+		objectKey := e.generateObjectKeyWithDuration(e.config.Table, window.start, e.config.OutputDuration)
+		rowDesc := "unknown"
+		if rows > 0 {
+			rowDesc = fmt.Sprintf("%d", rows)
+		}
+		e.logger.Info(fmt.Sprintf("Dumping window %d/%d (%s row(s)): %s → %s",
+			i+1, len(windows), rowDesc,
+			window.start.Format("2006-01-02 15:04"),
+			window.end.Add(-time.Second).Format("2006-01-02 15:04")))
+
+		err = e.dumpMultiplePartitionsToFile(ctx, []string{stagingName}, objectKey, window.start)
+		dropErr := e.dropStagingTable(ctx, stagingName)
+
+		if dropErr != nil {
+			e.logger.Warn(fmt.Sprintf("Failed to drop staging table %s: %v", stagingName, dropErr))
+		}
+		if err != nil {
+			return fmt.Errorf("pg_dump failed for window starting %s: %w", window.start.Format("2006-01-02"), err)
+		}
+	}
+
+	e.logger.Info(fmt.Sprintf("✅ Successfully dumped %d date window(s) using column %s", len(windows), e.config.DateColumn))
+	return nil
+}
+
+func (e *PgDumpExecutor) buildDateWindows(startDate, endDate time.Time) ([]dateWindow, error) {
+	start := normalizeToUTC(startDate)
+	end := normalizeToUTC(endDate)
+	if end.Before(start) {
+		return nil, fmt.Errorf("end date %s cannot be before start date %s", end.Format("2006-01-02"), start.Format("2006-01-02"))
+	}
+
+	endExclusive := end.AddDate(0, 0, 1)
+	duration := e.config.OutputDuration
+	if duration == "" {
+		duration = DurationDaily
+	}
+
+	var windows []dateWindow
+	current := start
+	for current.Before(endExclusive) {
+		next := addDuration(current, duration)
+		if next.After(endExclusive) {
+			next = endExclusive
+		}
+		if !next.After(current) {
+			break
+		}
+		windows = append(windows, dateWindow{start: current, end: next})
+		current = next
+	}
+
+	return windows, nil
+}
+
+func normalizeToUTC(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, time.UTC)
+}
+
+func addDuration(t time.Time, duration string) time.Time {
+	switch duration {
+	case DurationHourly:
+		return t.Add(time.Hour)
+	case DurationWeekly:
+		return t.AddDate(0, 0, 7)
+	case DurationMonthly:
+		return t.AddDate(0, 1, 0)
+	case DurationYearly:
+		return t.AddDate(1, 0, 0)
+	default: // daily
+		return t.AddDate(0, 0, 1)
+	}
+}
+
+func (e *PgDumpExecutor) buildStagingTableName(idx int, windowStart time.Time) string {
+	base := fmt.Sprintf("_archiver_%s_%s_%d", e.config.Table, windowStart.Format("20060102"), idx)
+	return truncateIdentifier(base)
+}
+
+func truncateIdentifier(identifier string) string {
+	const maxLen = 63
+	if len(identifier) <= maxLen {
+		return identifier
+	}
+	return identifier[:maxLen]
+}
+
+func (e *PgDumpExecutor) createStagingTable(ctx context.Context, stagingName string, window dateWindow) (int64, error) {
+	quotedStaging := fmt.Sprintf("public.%s", pq.QuoteIdentifier(stagingName))
+	quotedBase := fmt.Sprintf("public.%s", pq.QuoteIdentifier(e.config.Table))
+	quotedColumn := pq.QuoteIdentifier(e.config.DateColumn)
+
+	query := fmt.Sprintf(`CREATE UNLOGGED TABLE %s AS
+SELECT *
+FROM %s
+WHERE %s >= $1 AND %s < $2`, quotedStaging, quotedBase, quotedColumn, quotedColumn)
+
+	result, err := e.db.ExecContext(ctx, query, window.start, window.end)
+	if err != nil {
+		return 0, err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return -1, nil
+	}
+	return rows, nil
+}
+
+func (e *PgDumpExecutor) dropStagingTable(ctx context.Context, stagingName string) error {
+	quotedStaging := fmt.Sprintf("public.%s", pq.QuoteIdentifier(stagingName))
+	_, err := e.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", quotedStaging))
+	return err
 }
 
 // dumpMultiplePartitionsToFile dumps multiple partitions together to a temp file, then uploads it to S3
@@ -762,7 +918,7 @@ func (e *PgDumpExecutor) dumpMultiplePartitionsToFile(ctx context.Context, parti
 
 	// Add -t flag for each partition
 	for _, partitionName := range partitionNames {
-		cmd.Args = append(cmd.Args, "-t", partitionName)
+		cmd.Args = append(cmd.Args, "-t", e.qualifyTableName(partitionName))
 	}
 
 	cmd.Args = append(cmd.Args, "-f", tempFilePath)
@@ -818,11 +974,6 @@ func (e *PgDumpExecutor) dumpMultiplePartitionsToFile(ctx context.Context, parti
 	return nil
 }
 
-// dumpTableToFileWithDate dumps a table/partition to a temp file with date-based filename, then uploads it to S3
-func (e *PgDumpExecutor) dumpTableToFileWithDate(ctx context.Context, tableName string, objectKey string, dumpDate time.Time) error {
-	return e.dumpMultiplePartitionsToFile(ctx, []string{tableName}, objectKey, dumpDate)
-}
-
 // generateObjectKeyWithDuration generates the S3 object key with date placeholders filled in based on output duration
 func (e *PgDumpExecutor) generateObjectKeyWithDuration(tableName string, dumpDate time.Time, duration string) string {
 	pathTemplate := NewPathTemplate(e.config.S3.PathTemplate)
@@ -860,11 +1011,6 @@ func (e *PgDumpExecutor) generateObjectKeyWithDuration(tableName string, dumpDat
 	}
 
 	return fmt.Sprintf("%s/%s", basePath, filename)
-}
-
-// generateObjectKeyWithDate generates the S3 object key with date placeholders filled in
-func (e *PgDumpExecutor) generateObjectKeyWithDate(tableName string, dumpDate time.Time) string {
-	return e.generateObjectKeyWithDuration(tableName, dumpDate, DurationDaily)
 }
 
 // buildPgDumpCommand builds the pg_dump command with appropriate flags for a specific table
@@ -918,12 +1064,12 @@ func (e *PgDumpExecutor) buildPgDumpCommand(tableName string) (*exec.Cmd, error)
 	if e.config.DumpMode == "schema-only" {
 		// Dump only the specified table
 		if tableName != "" {
-			cmd.Args = append(cmd.Args, "-t", tableName)
+			cmd.Args = append(cmd.Args, "-t", e.qualifyTableName(tableName))
 		}
 	} else {
 		// For data-only or schema-and-data modes, use table if specified
 		if tableName != "" {
-			cmd.Args = append(cmd.Args, "-t", tableName)
+			cmd.Args = append(cmd.Args, "-t", e.qualifyTableName(tableName))
 		}
 	}
 
@@ -932,6 +1078,14 @@ func (e *PgDumpExecutor) buildPgDumpCommand(tableName string) (*exec.Cmd, error)
 	cmd.Args = append(cmd.Args, "-f", "-")
 
 	return cmd, nil
+}
+
+// qualifyTableName ensures pg_dump gets a schema-qualified table identifier
+func (e *PgDumpExecutor) qualifyTableName(tableName string) string {
+	if strings.Contains(tableName, ".") {
+		return tableName
+	}
+	return fmt.Sprintf("public.%s", tableName)
 }
 
 // generateObjectKey generates the S3 object key based on path template and dump mode

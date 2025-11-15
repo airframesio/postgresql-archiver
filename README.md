@@ -214,6 +214,7 @@ Use `data-archiver dump-hybrid` when you need a schema dump plus partitioned dat
 - Step 1: Dump the parent table schema once (partitions are automatically excluded).
 - Step 2: Discover partitions that match the provided date range and upload grouped dumps using `--path-template` + `--output-duration`.
 - Ideal for storing schema metadata next to date-windowed `pg_dump` archives without manual SQL.
+- Requires `--date-column` so non-partitioned tables can be filtered via `pg_dump --where`.
 
 Example: dump the `events` table schema plus daily data files for January 2024.
 
@@ -225,6 +226,7 @@ data-archiver dump-hybrid \
   --db-password mypass \
   --db-name analytics \
   --table events \
+  --date-column created_at \
   --start-date 2024-01-01 \
   --end-date 2024-01-31 \
   --s3-endpoint https://s3.example.com \
