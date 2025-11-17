@@ -875,6 +875,11 @@ func (e *PgDumpExecutor) createStagingTable(ctx context.Context, stagingName str
 	quotedBase := fmt.Sprintf("public.%s", pq.QuoteIdentifier(e.config.Table))
 	quotedColumn := pq.QuoteIdentifier(e.config.DateColumn)
 
+	// Ensure leftover tables from previous runs don't block creation
+	if _, err := e.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", quotedStaging)); err != nil {
+		return 0, err
+	}
+
 	query := fmt.Sprintf(`CREATE UNLOGGED TABLE %s AS
 SELECT *
 FROM %s

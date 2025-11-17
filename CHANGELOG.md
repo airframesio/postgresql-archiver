@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.9] - 2025-11-17
+
+### Fixed
+- **Hybrid Dump Command:**
+  - Staging tables are dropped before creation so re-runs or overlapping ranges no longer fail with `relation ... already exists`
+
 ## [1.5.8] - 2025-11-15
 
 ### Added
