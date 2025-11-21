@@ -2074,6 +2074,85 @@ func convertPostgreSQLValue(value interface{}, pgType string) interface{} {
 	return value
 }
 
+// calculateUncompressedRowSize estimates the uncompressed size of a single row
+// based on the output format. This is used for metrics and capacity planning.
+func calculateUncompressedRowSize(row map[string]interface{}, format string, columnNames []string) int64 {
+	switch format {
+	case formatters.FormatJSONL:
+		// JSONL: JSON marshaling + newline
+		jsonBytes, _ := json.Marshal(row)
+		return int64(len(jsonBytes)) + 1 // +1 for newline
+
+	case formatters.FormatCSV:
+		// CSV: Estimate size accounting for commas, escaping, and newline
+		// CSV writer handles escaping, so we estimate conservatively
+		var size int64
+		for i, col := range columnNames {
+			if i > 0 {
+				size++ // comma
+			}
+			val := row[col]
+			if val == nil {
+				// Empty field
+				continue
+			}
+			// Estimate: string representation + potential escaping (double quotes + escaped quotes)
+			// CSV escaping: if value contains comma, newline, or quote, it's wrapped in quotes
+			// and internal quotes are doubled
+			valStr := fmt.Sprintf("%v", val)
+			needsEscaping := strings.Contains(valStr, ",") || strings.Contains(valStr, "\n") || strings.Contains(valStr, `"`)
+			if needsEscaping {
+				size += int64(len(valStr)) + 2 + int64(strings.Count(valStr, `"`)) // quotes + escaped quotes
+			} else {
+				size += int64(len(valStr))
+			}
+		}
+		size++ // newline
+		return size
+
+	case formatters.FormatParquet:
+		// Parquet: Binary columnar format - estimate based on data types
+		// Parquet is typically more compact than JSON, but we can't easily calculate
+		// without actually writing. Use a type-based estimate as approximation.
+		var size int64
+		for _, val := range row {
+			if val == nil {
+				continue // Nulls take minimal space in Parquet
+			}
+			switch v := val.(type) {
+			case bool:
+				size += 1 // 1 byte
+			case int, int8, int16, int32:
+				size += 4 // 4 bytes
+			case int64:
+				size += 8 // 8 bytes
+			case float32:
+				size += 4 // 4 bytes
+			case float64:
+				size += 8 // 8 bytes
+			case string:
+				// String length + overhead (dictionary encoding can reduce this, but we estimate conservatively)
+				size += int64(len(v)) + 4 // length prefix + string data
+			case []byte:
+				size += int64(len(v)) + 4 // length prefix + bytes
+			case time.Time:
+				size += 8 // timestamp typically 8 bytes
+			default:
+				// Fallback: estimate as string representation
+				size += int64(len(fmt.Sprintf("%v", v))) + 4
+			}
+		}
+		// Add overhead for Parquet metadata (column overhead, row group overhead)
+		// This is a rough estimate - actual Parquet files have additional overhead
+		return size + int64(len(row)*2) // ~2 bytes overhead per column
+
+	default:
+		// Fallback: use JSON size
+		jsonBytes, _ := json.Marshal(row)
+		return int64(len(jsonBytes)) + 1
+	}
+}
+
 // extractPartitionDataStreaming extracts partition data using streaming architecture
 // This streams data in chunks to a temp file, avoiding loading everything into memory
 //
@@ -2167,13 +2246,22 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 	// Build column list for SELECT query
 	columns := schema.GetColumns()
 	columnNames := make([]string, len(columns))
+	unquotedColumnNames := make([]string, len(columns))
 	for i, col := range columns {
+		unquotedColumnNames[i] = col.GetName()
 		columnNames[i] = pq.QuoteIdentifier(col.GetName())
 	}
 
 	quotedTable := pq.QuoteIdentifier(partition.TableName)
 	//nolint:gosec // G201: SQL string formatting is safe here - all identifiers are properly quoted via pq.QuoteIdentifier
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(columnNames, ", "), quotedTable)
+
+	// Account for CSV header row in uncompressed size
+	if a.config.OutputFormat == formatters.FormatCSV {
+		// CSV header: column names separated by commas + newline
+		headerSize := int64(len(strings.Join(unquotedColumnNames, ",")) + 1) // commas + newline
+		uncompressedSize += headerSize
+	}
 
 	rows, queryErr := a.db.QueryContext(a.ctx, query)
 	if queryErr != nil {
@@ -2251,10 +2339,9 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 				return
 			}
 
-			// Track uncompressed size (approximate - JSON size of chunk)
+			// Track uncompressed size based on output format
 			for _, row := range chunk {
-				jsonBytes, _ := json.Marshal(row)
-				uncompressedSize += int64(len(jsonBytes)) + 1 // +1 for newline
+				uncompressedSize += calculateUncompressedRowSize(row, a.config.OutputFormat, unquotedColumnNames)
 			}
 
 			chunk = chunk[:0] // Reset slice, keeping capacity
@@ -2289,8 +2376,7 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 
 		// Track uncompressed size of final chunk
 		for _, row := range chunk {
-			jsonBytes, _ := json.Marshal(row)
-			uncompressedSize += int64(len(jsonBytes)) + 1
+			uncompressedSize += calculateUncompressedRowSize(row, a.config.OutputFormat, unquotedColumnNames)
 		}
 	}
 
