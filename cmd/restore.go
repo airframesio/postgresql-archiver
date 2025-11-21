@@ -39,7 +39,7 @@ var (
 	restoreCompression            string
 	restoreMode                   string // schema-only, data-only, schema-and-data
 	restoreSchemaSource           string // pg_dump, inferred, auto, db
-	restoreSchemaPath              string // S3 path for schema files (pg_dump)
+	restoreSchemaPath             string // S3 path for schema files (pg_dump)
 )
 
 var restoreCmd = &cobra.Command{
@@ -689,7 +689,7 @@ func (r *Restorer) discoverS3Files(ctx context.Context, tableName string, startD
 }
 
 // inferTableSchema infers table schema from sample rows
-func (r *Restorer) inferTableSchema(ctx context.Context, rows []map[string]interface{}) (*TableSchema, error) {
+func (r *Restorer) inferTableSchema(rows []map[string]interface{}) (*TableSchema, error) {
 	if len(rows) == 0 {
 		return nil, errors.New("cannot infer schema from empty rows")
 	}
@@ -739,7 +739,7 @@ func (r *Restorer) inferTableSchema(ctx context.Context, rows []map[string]inter
 
 // inferPostgreSQLType infers PostgreSQL type from Go value
 func inferPostgreSQLType(value interface{}) string {
-	switch value.(type) {
+	switch v := value.(type) {
 	case bool:
 		return "bool"
 	case int, int8, int16, int32:
@@ -751,11 +751,8 @@ func inferPostgreSQLType(value interface{}) string {
 	case float64:
 		return "float8"
 	case string:
-		// Try to parse as timestamp
-		if str, ok := value.(string); ok {
-			if _, err := time.Parse(time.RFC3339, str); err == nil {
-				return "timestamptz"
-			}
+		if _, err := time.Parse(time.RFC3339, v); err == nil {
+			return "timestamptz"
 		}
 		return "text"
 	case []byte:
@@ -1338,9 +1335,9 @@ func (r *Restorer) extractSchemaFromPgDump(ctx context.Context, schemaPath strin
 				expectedPattern2 := r.config.Table + ".dump"
 				// Check if filename starts with table name followed by -schema.dump or .dump
 				matches = filename == expectedPattern1 ||
-				         filename == expectedPattern2 ||
-				         strings.HasPrefix(filename, r.config.Table+"-schema.") ||
-				         strings.HasPrefix(filename, r.config.Table+".")
+					filename == expectedPattern2 ||
+					strings.HasPrefix(filename, r.config.Table+"-schema.") ||
+					strings.HasPrefix(filename, r.config.Table+".")
 			} else {
 				// If no table specified, match all pg_dump files
 				matches = true
@@ -1446,9 +1443,9 @@ func (r *Restorer) extractSchemaFromPgDump(ctx context.Context, schemaPath strin
 	// Use --clean --if-exists to let pg_restore handle ordering properly
 	connArgs := []string{
 		"--schema-only",
-		"--clean", // Drop objects before creating them
+		"--clean",     // Drop objects before creating them
 		"--if-exists", // Don't error if objects don't exist
-		"--verbose", // Show what's being restored for debugging
+		"--verbose",   // Show what's being restored for debugging
 		"--no-owner",
 		"--no-privileges",
 		fmt.Sprintf("--host=%s", r.config.Database.Host),
@@ -1471,9 +1468,9 @@ func (r *Restorer) extractSchemaFromPgDump(ctx context.Context, schemaPath strin
 		outputStr := string(output)
 		// If pg_restore fails with "text format" error, use psql instead
 		if strings.Contains(outputStr, "text format") ||
-		   strings.Contains(outputStr, "Please use psql") ||
-		   strings.Contains(outputStr, "input file is too short") ||
-		   strings.Contains(outputStr, "too short") {
+			strings.Contains(outputStr, "Please use psql") ||
+			strings.Contains(outputStr, "input file is too short") ||
+			strings.Contains(outputStr, "too short") {
 			r.logger.Debug(fmt.Sprintf("pg_restore failed (likely text format or corrupted custom format): %s", outputStr))
 			r.logger.Debug("Attempting to restore using psql instead...")
 			return r.restoreSchemaWithPsql(ctx, tempFile.Name(), sslMode)
@@ -1648,14 +1645,16 @@ func (r *Restorer) extractSchemaFromDataFiles(ctx context.Context, files []S3Fil
 		reader := formatters.NewJSONLReaderWithCloser(decompressedReader)
 		rows, err = reader.ReadAll()
 	case "csv":
-		reader, err := formatters.NewCSVReaderWithCloser(decompressedReader)
+		var csvReader *formatters.CSVReader
+		csvReader, err = formatters.NewCSVReaderWithCloser(decompressedReader)
 		if err == nil {
-			rows, err = reader.ReadAll()
+			rows, err = csvReader.ReadAll()
 		}
 	case "parquet":
-		reader, err := formatters.NewParquetReaderWithCloser(decompressedReader)
+		var parquetReader *formatters.ParquetReader
+		parquetReader, err = formatters.NewParquetReaderWithCloser(decompressedReader)
 		if err == nil {
-			rows, err = reader.ReadAll()
+			rows, err = parquetReader.ReadAll()
 		}
 	default:
 		return nil, fmt.Errorf("unsupported format: %s", format)
@@ -1670,7 +1669,7 @@ func (r *Restorer) extractSchemaFromDataFiles(ctx context.Context, files []S3Fil
 	}
 
 	// Infer schema from rows
-	schema, err := r.inferTableSchema(ctx, rows)
+	schema, err := r.inferTableSchema(rows)
 	if err != nil {
 		return nil, fmt.Errorf("failed to infer schema: %w", err)
 	}
@@ -1887,7 +1886,7 @@ func (r *Restorer) Run(ctx context.Context, restoreConfig map[string]string) err
 		// Infer schema if first file (skip in data-only mode)
 		if inferredSchema == nil && restoreMode != "data-only" {
 			r.logger.Debug("Inferring table schema from data...")
-			inferredSchema, err = r.inferTableSchema(ctx, rows)
+			inferredSchema, err = r.inferTableSchema(rows)
 			if err != nil {
 				r.logger.Error(fmt.Sprintf("Failed to infer schema: %v", err))
 				continue

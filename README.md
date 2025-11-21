@@ -7,7 +7,7 @@
 
 A high-performance CLI tool for archiving database data to S3-compatible object storage.
 
-**Currently supports:** PostgreSQL input (partitioned tables) and S3-compatible object storage output.
+**Currently supports:** PostgreSQL input (partitioned tables, plus non-partitioned tables when `--date-column`, `--start-date`, and `--end-date` are provided) and S3-compatible object storage output.
 
 ## Screenshots
 
@@ -54,7 +54,7 @@ A high-performance CLI tool for archiving database data to S3-compatible object 
 ## 📋 Prerequisites
 
 - Go 1.22 or higher
-- PostgreSQL database with partitioned tables (format: `tablename_YYYYMMDD`)
+- PostgreSQL database with partitioned tables (format: `tablename_YYYYMMDD`) **or** non-partitioned tables when you supply `--date-column`, `--start-date`, and `--end-date` so the archiver can build synthetic windows
 - S3-compatible object storage (Hetzner, AWS S3, MinIO, etc.)
 
 ## 🔧 Installation
@@ -202,10 +202,20 @@ Flags:
   - Zstandard: 1-22 (higher = better compression, slower)
   - LZ4/Gzip: 1-9 (higher = better compression, slower)
 - `--output-duration` - File duration: `hourly`, `daily` (default), `weekly`, `monthly`, or `yearly`
-- `--date-column` - Optional timestamp column for duration-based splitting
+- `--date-column` - Timestamp column for duration-based splitting. Required when archiving non-partitioned tables so the archiver can build synthetic windows.
 - `--chunk-size` - Number of rows to process per chunk (default: 10000, range: 100-1000000)
   - Tune based on average row size for optimal memory usage
   - Smaller chunks for large rows, larger chunks for small rows
+
+### Working with Non-Partitioned Tables
+
+The archive command now supports base tables that aren't physically partitioned. Provide:
+
+- `--date-column` so rows can be filtered by time
+- `--start-date` and `--end-date` to define the overall range
+- `--output-duration` to control the slice size (daily, weekly, etc.)
+
+When no partitions are discovered, the archiver automatically slices the base table into synthetic windows covering the requested range and streams each window through the normal extraction/compression/upload pipeline.
 
 ### Hybrid pg_dump workflow
 
@@ -483,7 +493,7 @@ The archiver uses an intelligent two-tier caching system to maximize performance
 - Caches partition row counts for 24 hours
 - Speeds up progress bar initialization
 - Always recounts today's partition for accuracy
-- Cache location: `~/.data-archiver/cache/{table}_metadata.json`
+- Cache files live under `~/.data-archiver/cache/` and are namespaced by the subcommand plus the absolute S3 destination (for example `archive_events_a1b2c3d4_metadata.json`)
 
 ### File Metadata Cache
 - Caches compressed/uncompressed sizes, MD5 hash, and S3 upload status
@@ -493,6 +503,7 @@ The archiver uses an intelligent two-tier caching system to maximize performance
 - Preserves all metadata when updating row counts
 - Stores error messages with timestamps for failed uploads
 - File metadata is kept permanently (only row counts expire after 24 hours)
+- Applies to `archive`, `dump` (when using `--start-date/--end-date` and `--output-duration`), and the date-windowed `dump-hybrid` step so reruns skip windows that already exist in S3
 
 ### Cache Efficiency
 On subsequent runs with cached metadata:

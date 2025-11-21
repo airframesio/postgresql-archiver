@@ -53,6 +53,8 @@ func runHybridDump() {
 		DateColumn:     viper.GetString("date_column"),
 	}
 
+	config.CacheScope = NewCacheScope("dump-hybrid", config)
+
 	if config.OutputDuration == "" {
 		config.OutputDuration = DurationDaily
 	}
@@ -69,6 +71,7 @@ func runHybridDump() {
 	}
 
 	schemaConfig := *config
+	schemaConfig.CacheScope = NewCacheScope("dump-hybrid-schema", &schemaConfig)
 	schemaConfig.DumpMode = "schema-only"
 	if err := schemaConfig.Validate(); err != nil {
 		logger.Error(fmt.Sprintf("❌ Schema dump configuration error: %s", err.Error()))
@@ -76,6 +79,7 @@ func runHybridDump() {
 	}
 
 	dataConfig := *config
+	dataConfig.CacheScope = NewCacheScope("dump-hybrid-data", &dataConfig)
 	dataConfig.DumpMode = "data-only"
 	if err := dataConfig.Validate(); err != nil {
 		logger.Error(fmt.Sprintf("❌ Data dump configuration error: %s", err.Error()))

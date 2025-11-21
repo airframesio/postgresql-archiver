@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Archive Command:**
+  - When a table lacks physical partitions, providing `--date-column`, `--start-date`, and `--end-date` now enables synthetic date-window processing so partitionless tables can be archived with the standard workflow
+- **pg_dump & dump-hybrid**
+  - Date-window dumps now reuse the global cache so completed windows or partition groups are skipped immediately on reruns when the S3 object already exists and matches size/MD5 (or multipart ETag)
+
+### Changed
+- **Caching**
+  - Cache files are namespaced by subcommand plus the absolute S3 destination, preventing collisions when the same table is archived by different workflows or sent to different paths
+  - Existing per-table caches are migrated automatically the first time a scoped cache is loaded
+
 ## [1.5.9] - 2025-11-17
 
 ### Fixed

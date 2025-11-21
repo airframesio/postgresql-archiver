@@ -275,6 +275,67 @@ func TestPartitionInfoStruct(t *testing.T) {
 	}
 }
 
+func TestPartitionInfoHasCustomRange(t *testing.T) {
+	info := PartitionInfo{
+		TableName: "test_table",
+		Date:      time.Now(),
+	}
+
+	if info.HasCustomRange() {
+		t.Fatal("expected HasCustomRange to be false for zero range")
+	}
+
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	info.RangeStart = start
+	info.RangeEnd = start.AddDate(0, 0, 1)
+
+	if !info.HasCustomRange() {
+		t.Fatal("expected HasCustomRange to be true when range bounds are set")
+	}
+}
+
+func TestBuildDateRangePartition(t *testing.T) {
+	t.Run("valid configuration", func(t *testing.T) {
+		archiver := NewArchiver(&Config{
+			Table:          "events",
+			DateColumn:     "created_at",
+			StartDate:      "2024-01-01",
+			EndDate:        "2024-01-07",
+			OutputDuration: "daily",
+		}, newTestLogger())
+
+		partitions, err := archiver.buildDateRangePartition()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(partitions) != 1 {
+			t.Fatalf("expected 1 partition, got %d", len(partitions))
+		}
+		p := partitions[0]
+		if !p.HasCustomRange() {
+			t.Fatal("expected custom range to be set")
+		}
+		if !p.RangeStart.Equal(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)) {
+			t.Fatalf("unexpected range start: %v", p.RangeStart)
+		}
+		if !p.RangeEnd.Equal(time.Date(2024, 1, 8, 0, 0, 0, 0, time.UTC)) {
+			t.Fatalf("unexpected range end: %v", p.RangeEnd)
+		}
+	})
+
+	t.Run("missing date column", func(t *testing.T) {
+		archiver := NewArchiver(&Config{
+			Table:     "events",
+			StartDate: "2024-01-01",
+			EndDate:   "2024-01-02",
+		}, newTestLogger())
+
+		if _, err := archiver.buildDateRangePartition(); err == nil {
+			t.Fatal("expected error when date column is missing")
+		}
+	})
+}
+
 func TestProcessResultStruct(t *testing.T) {
 	info := PartitionInfo{
 		TableName: "test_table",
@@ -370,6 +431,7 @@ func TestShouldSplitPartition(t *testing.T) {
 		partition      string
 		outputDuration string
 		expectSplit    bool
+		customRange    bool
 	}{
 		{
 			name:           "monthly partition to daily output",
@@ -406,6 +468,14 @@ func TestShouldSplitPartition(t *testing.T) {
 			outputDuration: "daily",
 			expectSplit:    true,
 		},
+		{
+			name:           "custom range forces split",
+			baseTable:      "flights",
+			partition:      "flights",
+			outputDuration: "daily",
+			expectSplit:    true,
+			customRange:    true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -420,6 +490,11 @@ func TestShouldSplitPartition(t *testing.T) {
 				TableName: tt.partition,
 				Date:      time.Now(),
 				RowCount:  1000,
+			}
+			if tt.customRange {
+				start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+				partition.RangeStart = start
+				partition.RangeEnd = start.AddDate(0, 0, 7)
 			}
 
 			result := archiver.shouldSplitPartition(partition)

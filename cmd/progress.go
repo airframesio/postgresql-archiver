@@ -315,7 +315,7 @@ func newProgressModelWithArchiver(ctx context.Context, cancel context.CancelFunc
 	)
 
 	// Load cache for row counts
-	cache, _ := loadPartitionCache(config.Table)
+	cache, _ := loadPartitionCache(config.CacheScope)
 	if cache == nil {
 		cache = &PartitionCache{
 			Entries: make(map[string]PartitionCacheEntry),
@@ -493,9 +493,12 @@ func (m *progressModel) doDiscover() tea.Cmd {
 			return messageMsg(fmt.Sprintf("❌ Failed to scan partitions: %v", err))
 		}
 
-		// Return the discovered tables
 		if len(matchingTables) == 0 {
-			return messageMsg("⚠️ No matching partitions found")
+			partitions, err := m.archiver.buildDateRangePartition()
+			if err != nil {
+				return messageMsg(fmt.Sprintf("❌ %v", err))
+			}
+			return partitionsFoundMsg{partitions: partitions}
 		}
 
 		return discoveredTablesMsg{
@@ -532,7 +535,7 @@ func (m *progressModel) countNextTable() tea.Cmd {
 		// Done counting all tables - clean expired entries and save cache
 		if m.partitionCache != nil && m.config != nil {
 			m.partitionCache.cleanExpired()
-			_ = m.partitionCache.save(m.config.Table)
+			_ = m.partitionCache.save(m.config.CacheScope)
 		}
 		return func() tea.Msg {
 			return partitionsFoundMsg{partitions: m.countedPartitions}
@@ -562,7 +565,7 @@ func (m *progressModel) countNextTable() tea.Cmd {
 				if m.partitionCache != nil {
 					m.partitionCache.setRowCount(table.name, count)
 					// Save cache immediately after updating
-					_ = m.partitionCache.save(m.config.Table)
+					_ = m.partitionCache.save(m.config.CacheScope)
 				}
 			} else {
 				// Even on error, continue to next table
@@ -877,9 +880,26 @@ func (m progressModel) handlePartitionsFoundMsg(msg partitionsFoundMsg) (tea.Mod
 	m.currentIndex = 0
 	m.currentStage = ""
 
+	if m.taskInfo != nil {
+		m.taskInfo.TotalPartitions = len(msg.partitions)
+		_ = WriteTaskInfo(m.taskInfo)
+	}
+
 	m.messages = append(m.messages, fmt.Sprintf("🚀 Starting to process %d partitions", len(msg.partitions)))
 	if len(m.messages) > 10 {
 		m.messages = m.messages[len(m.messages)-10:]
+	}
+
+	if len(msg.partitions) == 1 && msg.partitions[0].HasCustomRange() {
+		inclusiveEnd := msg.partitions[0].RangeEnd.Add(-24 * time.Hour).Format("2006-01-02")
+		m.messages = append(m.messages, fmt.Sprintf("📆 %s is not partitioned; archiving rows from %s to %s via %s windows",
+			msg.partitions[0].TableName,
+			msg.partitions[0].RangeStart.Format("2006-01-02"),
+			inclusiveEnd,
+			m.config.OutputDuration))
+		if len(m.messages) > 10 {
+			m.messages = m.messages[len(m.messages)-10:]
+		}
 	}
 
 	if len(msg.partitions) > 0 {

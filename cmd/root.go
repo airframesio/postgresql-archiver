@@ -490,6 +490,8 @@ func runArchive() {
 		DateColumn:       viper.GetString("date_column"),
 	}
 
+	config.CacheScope = NewCacheScope("archive", config)
+
 	// Initialize logger
 	initLogger(config.Debug, config.LogFormat)
 
@@ -623,6 +625,8 @@ func runDump() {
 		DateColumn:     viper.GetString("date_column"),
 		OutputDuration: viper.GetString("output_duration"),
 	}
+
+	config.CacheScope = NewCacheScope("dump", config)
 
 	// Initialize logger
 	initLogger(config.Debug, config.LogFormat)

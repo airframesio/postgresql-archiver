@@ -1,12 +1,128 @@
 package cmd
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
+
+// CacheScope represents a unique namespace for cached metadata.
+// It combines the executing subcommand with the fully-qualified output path
+// so that different commands or destinations do not clobber each other's cache.
+type CacheScope struct {
+	Command    string
+	Table      string
+	OutputPath string
+}
+
+// NewCacheScope builds a cache scope for the provided command/config pair.
+func NewCacheScope(command string, cfg *Config) CacheScope {
+	if cfg == nil {
+		return CacheScope{}
+	}
+
+	table := cfg.Table
+	if table == "" {
+		table = cfg.Database.Name
+	}
+
+	return CacheScope{
+		Command:    command,
+		Table:      table,
+		OutputPath: buildAbsoluteOutputPath(cfg),
+	}
+}
+
+// buildAbsoluteOutputPath converts the configured bucket/path template into a
+// canonical absolute S3-style path for cache namespacing purposes.
+func buildAbsoluteOutputPath(cfg *Config) string {
+	if cfg == nil {
+		return ""
+	}
+
+	bucket := strings.TrimSpace(cfg.S3.Bucket)
+	pathTemplate := strings.TrimSpace(cfg.S3.PathTemplate)
+
+	for strings.HasPrefix(pathTemplate, "/") {
+		pathTemplate = strings.TrimPrefix(pathTemplate, "/")
+	}
+
+	if bucket == "" {
+		return pathTemplate
+	}
+
+	if strings.Contains(bucket, "://") {
+		bucket = strings.TrimSuffix(bucket, "/")
+		if pathTemplate == "" {
+			return bucket
+		}
+		return fmt.Sprintf("%s/%s", bucket, pathTemplate)
+	}
+
+	if pathTemplate == "" {
+		return fmt.Sprintf("s3://%s", bucket)
+	}
+
+	return fmt.Sprintf("s3://%s/%s", bucket, pathTemplate)
+}
+
+func (s CacheScope) normalize() CacheScope {
+	normalized := s
+	if normalized.Command == "" {
+		normalized.Command = "default"
+	}
+	if normalized.Table == "" {
+		normalized.Table = "global"
+	}
+	if normalized.OutputPath == "" {
+		normalized.OutputPath = "default"
+	}
+	return normalized
+}
+
+func sanitizeCacheComponent(value, fallback string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		value = fallback
+	}
+
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+
+	return b.String()
+}
+
+func (s CacheScope) fileIdentifier() string {
+	normalized := s.normalize()
+
+	commandComponent := sanitizeCacheComponent(normalized.Command, "cmd")
+	tableComponent := sanitizeCacheComponent(normalized.Table, "table")
+
+	hashSource := normalized.OutputPath
+	if hashSource == "" {
+		hashSource = fmt.Sprintf("%s:%s", normalized.Command, normalized.Table)
+	}
+	hash := sha1.Sum([]byte(hashSource))
+	hashComponent := hex.EncodeToString(hash[:])[:16]
+
+	return fmt.Sprintf("%s_%s_%s", commandComponent, tableComponent, hashComponent)
+}
 
 // PartitionCache stores both row counts and file metadata
 type PartitionCache struct {
@@ -48,7 +164,16 @@ type RowCountEntry struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-func getCachePath(tableName string) string {
+func getCachePath(scope CacheScope) string {
+	scope = scope.normalize()
+
+	homeDir, _ := os.UserHomeDir()
+	cacheDir := filepath.Join(homeDir, ".data-archiver", "cache")
+	_ = os.MkdirAll(cacheDir, 0o755)
+	return filepath.Join(cacheDir, fmt.Sprintf("%s_metadata.json", scope.fileIdentifier()))
+}
+
+func getLegacyMetadataPath(tableName string) string {
 	homeDir, _ := os.UserHomeDir()
 	cacheDir := filepath.Join(homeDir, ".data-archiver", "cache")
 	_ = os.MkdirAll(cacheDir, 0o755)
@@ -62,15 +187,20 @@ func getLegacyCachePath(tableName string) string {
 	return filepath.Join(cacheDir, fmt.Sprintf("%s_counts.json", tableName))
 }
 
-func loadPartitionCache(tableName string) (*PartitionCache, error) {
-	cachePath := getCachePath(tableName)
+func loadPartitionCache(scope CacheScope) (*PartitionCache, error) {
+	cachePath := getCachePath(scope)
 
 	// Try to load new cache format
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// Attempt to migrate from old metadata filename first
+			if migrated, migrateErr := migrateLegacyMetadata(scope); migrateErr == nil && migrated != nil {
+				return migrated, nil
+			}
+
 			// Try to migrate from legacy cache
-			legacyCache, err := loadLegacyCache(tableName)
+			legacyCache, err := loadLegacyCache(scope.Table)
 			if err == nil && legacyCache != nil {
 				// Migrate legacy cache
 				newCache := &PartitionCache{
@@ -83,9 +213,9 @@ func loadPartitionCache(tableName string) (*PartitionCache, error) {
 					}
 				}
 				// Save in new format
-				_ = newCache.save(tableName)
+				_ = newCache.save(scope)
 				// Remove old cache file
-				_ = os.Remove(getLegacyCachePath(tableName))
+				_ = os.Remove(getLegacyCachePath(scope.Table))
 				return newCache, nil
 			}
 			// Return empty cache if no legacy cache exists
@@ -128,6 +258,34 @@ func loadLegacyCache(tableName string) (*RowCountCache, error) {
 	return &cache, nil
 }
 
+func migrateLegacyMetadata(scope CacheScope) (*PartitionCache, error) {
+	if scope.Table == "" {
+		return nil, os.ErrNotExist
+	}
+
+	legacyPath := getLegacyMetadataPath(scope.Table)
+	data, err := os.ReadFile(legacyPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var cache PartitionCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, err
+	}
+
+	if cache.Entries == nil {
+		cache.Entries = make(map[string]PartitionCacheEntry)
+	}
+
+	if err := cache.save(scope); err != nil {
+		return nil, err
+	}
+
+	_ = os.Remove(legacyPath)
+	return &cache, nil
+}
+
 // Backward compatibility wrapper - kept for potential future use
 /*
 func loadCache(tableName string) (*RowCountCache, error) {
@@ -151,8 +309,8 @@ func loadCache(tableName string) (*RowCountCache, error) {
 }
 */
 
-func (c *PartitionCache) save(tableName string) error {
-	cachePath := getCachePath(tableName)
+func (c *PartitionCache) save(scope CacheScope) error {
+	cachePath := getCachePath(scope)
 
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {

@@ -60,6 +60,7 @@ type Config struct {
 	CompressionLevel int
 	DateColumn       string
 	DumpMode         string // pg_dump mode: schema-only, data-only, schema-and-data
+	CacheScope       CacheScope
 }
 
 type DatabaseConfig struct {
@@ -174,9 +175,9 @@ func isValidCompressionLevel(compression string, level int) bool {
 // isValidDumpMode validates the dump mode
 func isValidDumpMode(mode string) bool {
 	validModes := map[string]bool{
-		"schema-only":       true,
-		"data-only":         true,
-		"schema-and-data":   true,
+		"schema-only":     true,
+		"data-only":       true,
+		"schema-and-data": true,
 	}
 	return validModes[mode]
 }

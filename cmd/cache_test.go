@@ -2,13 +2,23 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 const testTablePartition = "test_table_20240101"
+
+func buildTestScope(tableName string) CacheScope {
+	return CacheScope{
+		Command:    "test",
+		Table:      tableName,
+		OutputPath: fmt.Sprintf("s3://cache-test/%s", tableName),
+	}
+}
 
 func TestPartitionCache_NewCache(t *testing.T) {
 	// Create a temporary directory for test cache
@@ -26,7 +36,7 @@ func TestPartitionCache_NewCache(t *testing.T) {
 	tableName := "test_table"
 
 	t.Run("NewCache", func(t *testing.T) {
-		cache, err := loadPartitionCache(tableName)
+		cache, err := loadPartitionCache(buildTestScope(tableName))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -231,13 +241,13 @@ func TestPartitionCache_SaveAndLoad(t *testing.T) {
 		}
 
 		// Save cache
-		err := cache.save(tableName)
+		err := cache.save(buildTestScope(tableName))
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// Load cache
-		loaded, err := loadPartitionCache(tableName)
+		loaded, err := loadPartitionCache(buildTestScope(tableName))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -292,7 +302,7 @@ func TestPartitionCache_LegacyMigration(t *testing.T) {
 		_ = os.WriteFile(legacyPath, data, 0o644)
 
 		// Load should migrate
-		cache, err := loadPartitionCache("legacy_table")
+		cache, err := loadPartitionCache(buildTestScope("legacy_table"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -312,6 +322,59 @@ func TestPartitionCache_LegacyMigration(t *testing.T) {
 	})
 }
 
+func TestPartitionCache_MetadataMigration(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cache_metadata_migration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", originalHome)
+
+	scope := buildTestScope("migrate_table")
+	legacyPath := getLegacyMetadataPath("migrate_table")
+	cacheDir := filepath.Dir(legacyPath)
+	_ = os.MkdirAll(cacheDir, 0o755)
+
+	legacyCache := &PartitionCache{
+		Entries: map[string]PartitionCacheEntry{
+			"partition_old": {
+				FileSize: 1024,
+				FileMD5:  "deadbeef",
+			},
+		},
+	}
+
+	data, _ := json.MarshalIndent(legacyCache, "", "  ")
+	if err := os.WriteFile(legacyPath, data, 0o644); err != nil {
+		t.Fatalf("failed to write legacy metadata: %v", err)
+	}
+
+	loaded, err := loadPartitionCache(scope)
+	if err != nil {
+		t.Fatalf("loadPartitionCache returned error: %v", err)
+	}
+
+	entry, ok := loaded.Entries["partition_old"]
+	if !ok {
+		t.Fatal("expected partition_old to be migrated")
+	}
+	if entry.FileSize != 1024 || entry.FileMD5 != "deadbeef" {
+		t.Fatal("legacy metadata did not migrate correctly")
+	}
+
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatal("legacy metadata file should be removed after migration")
+	}
+
+	newPath := getCachePath(scope)
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("scoped cache file was not created: %v", err)
+	}
+}
+
 func TestCachePathGeneration(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "cache_path_test")
 	if err != nil {
@@ -324,11 +387,16 @@ func TestCachePathGeneration(t *testing.T) {
 	defer os.Setenv("HOME", originalHome)
 
 	tableName := "my_table"
-	expectedPath := filepath.Join(tempDir, ".data-archiver", "cache", "my_table_metadata.json")
+	scope := CacheScope{
+		Command:    "archive",
+		Table:      tableName,
+		OutputPath: "s3://bucket/archive/{table}/{YYYY}",
+	}
 
-	actualPath := getCachePath(tableName)
-	if actualPath != expectedPath {
-		t.Fatalf("expected path %s, got %s", expectedPath, actualPath)
+	actualPath := getCachePath(scope)
+	filename := filepath.Base(actualPath)
+	if !strings.HasPrefix(filename, "archive_my_table_") || !strings.HasSuffix(filename, "_metadata.json") {
+		t.Fatalf("cache filename should include command/table prefix, got %s", filename)
 	}
 
 	// Check directory was created

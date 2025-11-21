@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"context"
+	"crypto/md5" //nolint:gosec // MD5 used for checksum comparisons only
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -30,14 +33,133 @@ type PgDumpExecutor struct {
 	logger     *slog.Logger
 	ctx        context.Context
 	partitions []string // Cached list of partitions to exclude for schema-only mode
+	cacheScope CacheScope
+	cache      *PartitionCache
 }
 
 // NewPgDumpExecutor creates a new pg_dump executor
 func NewPgDumpExecutor(config *Config, logger *slog.Logger) *PgDumpExecutor {
-	return &PgDumpExecutor{
-		config: config,
-		logger: logger,
+	scope := config.CacheScope
+	if (scope == CacheScope{}) {
+		scope = NewCacheScope("dump", config)
+		config.CacheScope = scope
 	}
+	return &PgDumpExecutor{
+		config:     config,
+		logger:     logger,
+		cacheScope: scope,
+	}
+}
+
+var errS3ObjectMissing = errors.New("s3 object not found")
+
+func (e *PgDumpExecutor) getCache() *PartitionCache {
+	if e.cache != nil {
+		return e.cache
+	}
+
+	if (e.cacheScope == CacheScope{}) {
+		return nil
+	}
+
+	cache, err := loadPartitionCache(e.cacheScope)
+	if err != nil || cache == nil {
+		e.logger.Debug(fmt.Sprintf("Unable to load cache (%v), creating new scope", err))
+		cache = &PartitionCache{
+			Entries: make(map[string]PartitionCacheEntry),
+		}
+	}
+
+	e.cache = cache
+	return e.cache
+}
+
+func (e *PgDumpExecutor) cacheEntryKey(segment string) string {
+	base := e.config.Table
+	if base == "" {
+		base = e.config.Database.Name
+	}
+	if segment == "" {
+		return base
+	}
+	return fmt.Sprintf("%s:%s", base, segment)
+}
+
+func (e *PgDumpExecutor) shouldSkipCachedFile(ctx context.Context, cache *PartitionCache, entryKey, objectKey string, partitionDate time.Time) (bool, string) {
+	if cache == nil {
+		return false, ""
+	}
+
+	cachedSize, cachedMD5, cachedMultipartETag, found := cache.getFileMetadataWithETag(entryKey, objectKey, partitionDate)
+	if !found {
+		return false, ""
+	}
+
+	s3Size, s3ETag, err := e.fetchS3Metadata(ctx, objectKey)
+	if err != nil {
+		if errors.Is(err, errS3ObjectMissing) {
+			e.logger.Debug(fmt.Sprintf("Cached metadata exists but S3 object %s missing; will re-upload", objectKey))
+			return false, ""
+		}
+		e.logger.Debug(fmt.Sprintf("Failed to verify cached metadata for %s: %v", objectKey, err))
+		return false, ""
+	}
+
+	isMultipart := strings.Contains(s3ETag, "-")
+	if s3Size == cachedSize {
+		if !isMultipart && s3ETag == cachedMD5 {
+			return true, fmt.Sprintf("cached metadata matches S3 (size=%d, md5=%s)", cachedSize, cachedMD5)
+		}
+		if cachedMultipartETag != "" && s3ETag == cachedMultipartETag {
+			return true, fmt.Sprintf("cached metadata matches S3 (size=%d, multipartETag=%s)", cachedSize, cachedMultipartETag)
+		}
+	}
+
+	return false, ""
+}
+
+func (e *PgDumpExecutor) persistCacheEntry(cache *PartitionCache, entryKey, objectKey string, compressedSize int64, md5Hash, multipartETag string, startTime time.Time) {
+	if cache == nil || (e.cacheScope == CacheScope{}) {
+		return
+	}
+
+	cache.setFileMetadataWithETagAndStartTime(entryKey, objectKey, compressedSize, 0, md5Hash, multipartETag, true, startTime)
+	if err := cache.save(e.cacheScope); err != nil {
+		e.logger.Debug(fmt.Sprintf("Failed to save cache metadata for %s: %v", objectKey, err))
+	}
+}
+
+func (e *PgDumpExecutor) fetchS3Metadata(ctx context.Context, objectKey string) (int64, string, error) {
+	if e.s3Client == nil {
+		return 0, "", errors.New("s3 client is not initialized")
+	}
+
+	input := &s3.HeadObjectInput{
+		Bucket: aws.String(e.config.S3.Bucket),
+		Key:    aws.String(objectKey),
+	}
+
+	result, err := e.s3Client.HeadObjectWithContext(ctx, input)
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			if aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound" {
+				return 0, "", errS3ObjectMissing
+			}
+		}
+		return 0, "", err
+	}
+
+	size := int64(0)
+	if result.ContentLength != nil {
+		size = *result.ContentLength
+	}
+
+	etag := ""
+	if result.ETag != nil {
+		etag = strings.Trim(*result.ETag, "\"")
+	}
+
+	return size, etag, nil
 }
 
 // Run executes pg_dump and uploads to S3
@@ -719,6 +841,13 @@ func (e *PgDumpExecutor) dumpPartitionGroup(ctx context.Context, partitions []st
 
 	// Generate object key with date based on output duration
 	objectKey := e.generateObjectKeyWithDuration(e.config.Table, groupDate, e.config.OutputDuration)
+	cache := e.getCache()
+	entryKey := e.cacheEntryKey(groupKey)
+
+	if skip, reason := e.shouldSkipCachedFile(ctx, cache, entryKey, objectKey, groupDate); skip {
+		e.logger.Info(fmt.Sprintf("Skipping group %s: %s", groupKey, reason))
+		return nil
+	}
 
 	// Extract partition names
 	partitionNames := make([]string, len(partitions))
@@ -726,8 +855,21 @@ func (e *PgDumpExecutor) dumpPartitionGroup(ctx context.Context, partitions []st
 		partitionNames[i] = p.name
 	}
 
-	// Dump all partitions in the group together
-	return e.dumpMultiplePartitionsToFile(ctx, partitionNames, objectKey, groupDate)
+	startTime := time.Now()
+	compressedSize, md5Hash, s3ETag, err := e.dumpMultiplePartitionsToFile(ctx, partitionNames, objectKey)
+	if err != nil {
+		return err
+	}
+
+	multipartETag := ""
+	if strings.Contains(s3ETag, "-") {
+		multipartETag = s3ETag
+	}
+	if !e.config.DryRun {
+		e.persistCacheEntry(cache, entryKey, objectKey, compressedSize, md5Hash, multipartETag, startTime)
+	}
+
+	return nil
 }
 
 type dateWindow struct {
@@ -759,10 +901,19 @@ func (e *PgDumpExecutor) dumpTableByDateColumn(ctx context.Context, startDate, e
 		return nil
 	}
 
+	cache := e.getCache()
+
 	for i, window := range windows {
 		windowKey := e.getGroupKeyForDuration(window.start, e.config.OutputDuration)
 		if skipKeys != nil && skipKeys[windowKey] {
 			e.logger.Debug(fmt.Sprintf("Skipping window %s (%s → %s): already covered by partitions", windowKey, window.start.Format("2006-01-02 15:04"), window.end.Add(-time.Second).Format("2006-01-02 15:04")))
+			continue
+		}
+
+		objectKey := e.generateObjectKeyWithDuration(e.config.Table, window.start, e.config.OutputDuration)
+		entryKey := e.cacheEntryKey(windowKey)
+		if skip, reason := e.shouldSkipCachedFile(ctx, cache, entryKey, objectKey, window.start); skip {
+			e.logger.Info(fmt.Sprintf("Skipping window %d/%d: %s", i+1, len(windows), reason))
 			continue
 		}
 
@@ -783,7 +934,6 @@ func (e *PgDumpExecutor) dumpTableByDateColumn(ctx context.Context, startDate, e
 			continue
 		}
 
-		objectKey := e.generateObjectKeyWithDuration(e.config.Table, window.start, e.config.OutputDuration)
 		rowDesc := "unknown"
 		if rows > 0 {
 			rowDesc = fmt.Sprintf("%d", rows)
@@ -793,14 +943,23 @@ func (e *PgDumpExecutor) dumpTableByDateColumn(ctx context.Context, startDate, e
 			window.start.Format("2006-01-02 15:04"),
 			window.end.Add(-time.Second).Format("2006-01-02 15:04")))
 
-		err = e.dumpMultiplePartitionsToFile(ctx, []string{stagingName}, objectKey, window.start)
+		startTime := time.Now()
+		compressedSize, md5Hash, s3ETag, dumpErr := e.dumpMultiplePartitionsToFile(ctx, []string{stagingName}, objectKey)
 		dropErr := e.dropStagingTable(ctx, stagingName)
 
 		if dropErr != nil {
 			e.logger.Warn(fmt.Sprintf("Failed to drop staging table %s: %v", stagingName, dropErr))
 		}
-		if err != nil {
-			return fmt.Errorf("pg_dump failed for window starting %s: %w", window.start.Format("2006-01-02"), err)
+		if dumpErr != nil {
+			return fmt.Errorf("pg_dump failed for window starting %s: %w", window.start.Format("2006-01-02"), dumpErr)
+		}
+
+		multipartETag := ""
+		if strings.Contains(s3ETag, "-") {
+			multipartETag = s3ETag
+		}
+		if !e.config.DryRun {
+			e.persistCacheEntry(cache, entryKey, objectKey, compressedSize, md5Hash, multipartETag, startTime)
 		}
 	}
 
@@ -903,12 +1062,13 @@ func (e *PgDumpExecutor) dropStagingTable(ctx context.Context, stagingName strin
 	return err
 }
 
-// dumpMultiplePartitionsToFile dumps multiple partitions together to a temp file, then uploads it to S3
-func (e *PgDumpExecutor) dumpMultiplePartitionsToFile(ctx context.Context, partitionNames []string, objectKey string, dumpDate time.Time) error {
+// dumpMultiplePartitionsToFile dumps multiple partitions together to a temp file, then uploads it to S3.
+// It returns the compressed file size, the local MD5 checksum, and the S3 ETag (if available).
+func (e *PgDumpExecutor) dumpMultiplePartitionsToFile(ctx context.Context, partitionNames []string, objectKey string) (int64, string, string, error) {
 	// Create temp file
 	tempFile, err := os.CreateTemp("", "pg_dump-*.dump")
 	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
+		return 0, "", "", fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tempFilePath := tempFile.Name()
 	tempFile.Close()              // Close immediately, pg_dump will create/write to it
@@ -931,7 +1091,7 @@ func (e *PgDumpExecutor) dumpMultiplePartitionsToFile(ctx context.Context, parti
 	case "schema-and-data", "":
 		formatFlags = []string{"-Fc", "-Z", "9"}
 	default:
-		return fmt.Errorf("unsupported dump mode for date-based dumps: %s", e.config.DumpMode)
+		return 0, "", "", fmt.Errorf("unsupported dump mode for date-based dumps: %s", e.config.DumpMode)
 	}
 
 	cmd.Args = append(cmd.Args,
@@ -956,32 +1116,42 @@ func (e *PgDumpExecutor) dumpMultiplePartitionsToFile(ctx context.Context, parti
 	e.logger.Debug(fmt.Sprintf("Dumping %d partition(s) to temp file", len(partitionNames)))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("pg_dump failed: %w\noutput: %s", err, string(output))
+		return 0, "", "", fmt.Errorf("pg_dump failed: %w\noutput: %s", err, string(output))
 	}
 
 	// Check file size
 	fileInfo, err := os.Stat(tempFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to stat temp file: %w", err)
+		return 0, "", "", fmt.Errorf("failed to stat temp file: %w", err)
 	}
 	if fileInfo.Size() == 0 {
-		return fmt.Errorf("pg_dump produced empty file (0 bytes)")
+		return 0, "", "", fmt.Errorf("pg_dump produced empty file (0 bytes)")
 	}
 	e.logger.Debug(fmt.Sprintf("Dumped %d bytes to temp file", fileInfo.Size()))
+
+	file, err := os.Open(tempFilePath)
+	if err != nil {
+		return 0, "", "", fmt.Errorf("failed to open temp file: %w", err)
+	}
+	defer file.Close()
+
+	hash := md5.New() //nolint:gosec // MD5 used for change detection only
+	if _, err := io.Copy(hash, file); err != nil {
+		return 0, "", "", fmt.Errorf("failed to hash temp file: %w", err)
+	}
+	md5Hash := hex.EncodeToString(hash.Sum(nil))
+
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return 0, "", "", fmt.Errorf("failed to rewind temp file: %w", err)
+	}
 
 	// Upload to S3
 	if e.config.DryRun {
 		e.logger.Info("Dry run mode: skipping upload")
-		return nil
+		return fileInfo.Size(), md5Hash, "", nil
 	}
 
 	e.logger.Info(fmt.Sprintf("Uploading to s3://%s/%s", e.config.S3.Bucket, objectKey))
-	file, err := os.Open(tempFilePath)
-	if err != nil {
-		return fmt.Errorf("failed to open temp file for upload: %w", err)
-	}
-	defer file.Close()
-
 	uploadInput := &s3manager.UploadInput{
 		Bucket:      aws.String(e.config.S3.Bucket),
 		Key:         aws.String(objectKey),
@@ -991,14 +1161,21 @@ func (e *PgDumpExecutor) dumpMultiplePartitionsToFile(ctx context.Context, parti
 
 	result, err := e.s3Uploader.UploadWithContext(ctx, uploadInput)
 	if err != nil {
-		return fmt.Errorf("S3 upload failed: %w", err)
+		return 0, "", "", fmt.Errorf("S3 upload failed: %w", err)
 	}
 
 	if result != nil {
 		e.logger.Debug(fmt.Sprintf("Successfully uploaded to S3: %s", result.Location))
 	}
 
-	return nil
+	s3Size, s3ETag, err := e.fetchS3Metadata(ctx, objectKey)
+	if err != nil {
+		e.logger.Debug(fmt.Sprintf("Unable to fetch S3 metadata for %s: %v", objectKey, err))
+	} else if s3Size != fileInfo.Size() {
+		e.logger.Warn(fmt.Sprintf("Uploaded size mismatch for %s: local=%d, s3=%d", objectKey, fileInfo.Size(), s3Size))
+	}
+
+	return fileInfo.Size(), md5Hash, s3ETag, nil
 }
 
 // generateObjectKeyWithDuration generates the S3 object key with date placeholders filled in based on output duration

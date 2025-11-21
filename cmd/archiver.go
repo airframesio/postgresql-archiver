@@ -37,10 +37,12 @@ const (
 
 // Error definitions
 var (
-	ErrInsufficientPermissions  = errors.New("insufficient permissions to read table")
-	ErrPartitionNoPermissions   = errors.New("partition tables exist but you don't have SELECT permissions")
-	ErrS3ClientNotInitialized   = errors.New("S3 client not initialized")
-	ErrS3UploaderNotInitialized = errors.New("S3 uploader not initialized")
+	ErrInsufficientPermissions         = errors.New("insufficient permissions to read table")
+	ErrPartitionNoPermissions          = errors.New("partition tables exist but you don't have SELECT permissions")
+	ErrS3ClientNotInitialized          = errors.New("S3 client not initialized")
+	ErrS3UploaderNotInitialized        = errors.New("S3 uploader not initialized")
+	errPartitionlessDateColumnRequired = errors.New("partitionless tables require --date-column")
+	errPartitionlessDateRangeRequired  = errors.New("partitionless tables require both --start-date and --end-date")
 )
 
 // Terminal styling for fmt.Println messages (not logger output)
@@ -140,9 +142,15 @@ type Archiver struct {
 }
 
 type PartitionInfo struct {
-	TableName string
-	Date      time.Time
-	RowCount  int64
+	TableName  string
+	Date       time.Time
+	RowCount   int64
+	RangeStart time.Time
+	RangeEnd   time.Time
+}
+
+func (p PartitionInfo) HasCustomRange() bool {
+	return !p.RangeStart.IsZero() && !p.RangeEnd.IsZero()
 }
 
 type ProcessResult struct {
@@ -160,6 +168,9 @@ type ProcessResult struct {
 }
 
 func NewArchiver(config *Config, logger *slog.Logger) *Archiver {
+	if (config.CacheScope == CacheScope{}) {
+		config.CacheScope = NewCacheScope("archive", config)
+	}
 	return &Archiver{
 		config:       config,
 		progressChan: make(chan tea.Cmd, 100),
@@ -402,12 +413,23 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, _ *tea.Program, _ *Ta
 		return fmt.Errorf("error iterating over partition rows: %w", err)
 	}
 
-	a.logger.Info(fmt.Sprintf("✅ Found %d partitions", len(partitions)))
-
 	if len(partitions) == 0 {
-		a.logger.Info("No partitions found to archive")
-		return nil
+		fallbackPartitions, fallbackErr := a.buildDateRangePartition()
+		if fallbackErr != nil {
+			a.logger.Info("No partitions found to archive")
+			return fmt.Errorf("partitionless fallback unavailable: %w", fallbackErr)
+		}
+		partitions = fallbackPartitions
+		inclusiveEnd := partitions[0].RangeEnd.Add(-24 * time.Hour).Format("2006-01-02")
+		a.logger.Info(fmt.Sprintf("ℹ️  Table %s is not partitioned; slicing %s → %s via %s windows using %s",
+			a.config.Table,
+			partitions[0].RangeStart.Format("2006-01-02"),
+			inclusiveEnd,
+			a.config.OutputDuration,
+			a.config.DateColumn))
 	}
+
+	a.logger.Info(fmt.Sprintf("✅ Found %d partitions", len(partitions)))
 
 	a.logger.Debug("Processing partitions...")
 	results := make([]ProcessResult, 0, len(partitions))
@@ -871,6 +893,43 @@ func (a *Archiver) extractDateFromTableName(tableName string) (time.Time, bool) 
 	return time.Time{}, false
 }
 
+func (a *Archiver) buildDateRangePartition() ([]PartitionInfo, error) {
+	if a.config.Table == "" {
+		return nil, ErrTableNameRequired
+	}
+	if a.config.DateColumn == "" {
+		return nil, errPartitionlessDateColumnRequired
+	}
+	if a.config.StartDate == "" || a.config.EndDate == "" {
+		return nil, errPartitionlessDateRangeRequired
+	}
+
+	start, err := time.Parse("2006-01-02", a.config.StartDate)
+	if err != nil {
+		return nil, fmt.Errorf("invalid start date %s: %w", a.config.StartDate, err)
+	}
+	end, err := time.Parse("2006-01-02", a.config.EndDate)
+	if err != nil {
+		return nil, fmt.Errorf("invalid end date %s: %w", a.config.EndDate, err)
+	}
+	if end.Before(start) {
+		return nil, fmt.Errorf("end date %s cannot be before start date %s", a.config.EndDate, a.config.StartDate)
+	}
+
+	rangeStart := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+	rangeEnd := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
+
+	partition := PartitionInfo{
+		TableName:  a.config.Table,
+		Date:       rangeStart,
+		RowCount:   -1,
+		RangeStart: rangeStart,
+		RangeEnd:   rangeEnd,
+	}
+
+	return []PartitionInfo{partition}, nil
+}
+
 // processPartitionsWithProgress was used for UI-based processing but is currently replaced by progress.go logic
 // Keeping for potential future use
 /*
@@ -911,6 +970,10 @@ func (a *Archiver) ProcessPartitionWithProgress(partition PartitionInfo, program
 
 // shouldSplitPartition determines if a partition needs to be split based on output_duration
 func (a *Archiver) shouldSplitPartition(partition PartitionInfo) bool {
+	if partition.HasCustomRange() {
+		return true
+	}
+
 	// Determine partition period from table name
 	// For now, we'll check if it's a monthly partition and output is smaller
 	// Monthly partitions end with _YYYY_MM or _YYYYMM
@@ -952,9 +1015,15 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 
 	a.logger.Debug(fmt.Sprintf("Splitting partition %s by %s", partition.TableName, a.config.OutputDuration))
 
-	// Determine partition time range (start of month, end of month)
-	partitionStart := time.Date(partition.Date.Year(), partition.Date.Month(), 1, 0, 0, 0, 0, partition.Date.Location())
-	partitionEnd := partitionStart.AddDate(0, 1, 0) // Start of next month
+	var partitionStart time.Time
+	var partitionEnd time.Time
+	if partition.HasCustomRange() {
+		partitionStart = partition.RangeStart
+		partitionEnd = partition.RangeEnd
+	} else {
+		partitionStart = time.Date(partition.Date.Year(), partition.Date.Month(), 1, 0, 0, 0, 0, partition.Date.Location())
+		partitionEnd = partitionStart.AddDate(0, 1, 0) // Start of next month
+	}
 
 	a.logger.Debug(fmt.Sprintf("  Partition time range: %s to %s", partitionStart.Format("2006-01-02"), partitionEnd.Format("2006-01-02")))
 
@@ -1121,7 +1190,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 	time.Sleep(50 * time.Millisecond)
 
 	// Load cache
-	cache, _ := loadPartitionCache(a.config.Table)
+	cache, _ := loadPartitionCache(a.config.CacheScope)
 
 	// Check if we can skip based on cached metadata
 	if shouldSkip, skipResult := a.checkCachedMetadata(partition, objectKey, cache, updateTaskStage); shouldSkip {
@@ -1194,7 +1263,7 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 
 		// Save metadata to cache after successful upload
 		cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, multipartETag, true, startTime)
-		_ = cache.save(a.config.Table)
+		_ = cache.save(a.config.CacheScope)
 		a.logger.Debug(fmt.Sprintf("   💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s, multipartETag=%s", fileSize, uncompressedSize, md5Hash, multipartETag))
 	}
 
@@ -1258,7 +1327,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 	objectKey := basePath + "/" + filename
 
 	// Load cache
-	cache, _ := loadPartitionCache(a.config.Table)
+	cache, _ := loadPartitionCache(a.config.CacheScope)
 
 	// Helper function for stage updates (slices use debug logging only)
 	updateTaskStage := func(stage string) {
@@ -1364,7 +1433,7 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 
 		// Save metadata to cache
 		cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, int64(len(compressed)), uncompressedSize, localMD5, "", true, sliceStartTime)
-		_ = cache.save(a.config.Table)
+		_ = cache.save(a.config.CacheScope)
 
 		// Only log in debug mode when TUI is disabled
 		if a.config.Debug {
@@ -1444,7 +1513,7 @@ func (a *Archiver) compressPartitionData(data []byte, partition PartitionInfo, p
 	compressor, err := compressors.GetCompressor(a.config.Compression)
 	if err != nil {
 		cache.setError(partition.TableName, fmt.Sprintf("Compressor setup failed: %v", err))
-		_ = cache.save(a.config.Table)
+		_ = cache.save(a.config.CacheScope)
 		return nil, "", fmt.Errorf("compressor setup failed: %w", err)
 	}
 
@@ -1453,7 +1522,7 @@ func (a *Archiver) compressPartitionData(data []byte, partition PartitionInfo, p
 	if err != nil {
 		// Save error to cache
 		cache.setError(partition.TableName, fmt.Sprintf("Compression failed: %v", err))
-		_ = cache.save(a.config.Table)
+		_ = cache.save(a.config.CacheScope)
 		return nil, "", fmt.Errorf("compression failed: %w", err)
 	}
 
@@ -1516,7 +1585,7 @@ func (a *Archiver) checkExistingFile(partition PartitionInfo, objectKey string, 
 		a.logger.Debug("   ✅ Skipping: Size and MD5 match")
 		// Save to cache for future runs
 		cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
-		_ = cache.save(a.config.Table)
+		_ = cache.save(a.config.CacheScope)
 		return true, result
 	}
 
@@ -1531,7 +1600,7 @@ func (a *Archiver) checkExistingFile(partition PartitionInfo, objectKey string, 
 			a.logger.Debug("   ✅ Skipping: Size and multipart ETag match")
 			// Save to cache for future runs
 			cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
-			_ = cache.save(a.config.Table)
+			_ = cache.save(a.config.CacheScope)
 			return true, result
 		}
 		a.logger.Debug(fmt.Sprintf("   ❌ Multipart ETag mismatch: S3=%s, Local=%s", s3ETag, localMultipartETag))
@@ -2017,7 +2086,7 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 	schema, schemaErr := a.getTableSchema(a.ctx, partition.TableName)
 	if schemaErr != nil {
 		cache.setError(partition.TableName, fmt.Sprintf("Schema query failed: %v", schemaErr))
-		_ = cache.save(a.config.Table)
+		_ = cache.save(a.config.CacheScope)
 		err = fmt.Errorf("schema query failed: %w", schemaErr)
 		return
 	}
@@ -2275,7 +2344,7 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 	// Save row count to cache if it was unknown
 	if partition.RowCount <= 0 && rowCount > 0 {
 		cache.setRowCount(partition.TableName, rowCount)
-		_ = cache.save(a.config.Table)
+		_ = cache.save(a.config.CacheScope)
 	}
 
 	return tempFilePath, fileSize, md5Hash, uncompressedSize, nil

@@ -33,44 +33,44 @@ import (
 
 var (
 	// Source 1 flags
-	compareSource1Type        string
-	compareSource1DbHost      string
-	compareSource1DbPort      int
-	compareSource1DbUser      string
-	compareSource1DbPassword  string
-	compareSource1DbName      string
-	compareSource1DbSSLMode   string
+	compareSource1Type         string
+	compareSource1DbHost       string
+	compareSource1DbPort       int
+	compareSource1DbUser       string
+	compareSource1DbPassword   string
+	compareSource1DbName       string
+	compareSource1DbSSLMode    string
 	compareSource1S3Endpoint   string
 	compareSource1S3Bucket     string
-	compareSource1S3AccessKey string
-	compareSource1S3SecretKey string
-	compareSource1S3Region    string
-	compareSource1SchemaPath  string
-	compareSource1DataPath    string
+	compareSource1S3AccessKey  string
+	compareSource1S3SecretKey  string
+	compareSource1S3Region     string
+	compareSource1SchemaPath   string
+	compareSource1DataPath     string
 	compareSource1SchemaSource string // pg_dump, inferred, auto
 
 	// Source 2 flags
-	compareSource2Type        string
-	compareSource2DbHost      string
-	compareSource2DbPort      int
-	compareSource2DbUser      string
-	compareSource2DbPassword  string
-	compareSource2DbName      string
-	compareSource2DbSSLMode   string
+	compareSource2Type         string
+	compareSource2DbHost       string
+	compareSource2DbPort       int
+	compareSource2DbUser       string
+	compareSource2DbPassword   string
+	compareSource2DbName       string
+	compareSource2DbSSLMode    string
 	compareSource2S3Endpoint   string
 	compareSource2S3Bucket     string
-	compareSource2S3AccessKey string
-	compareSource2S3SecretKey string
-	compareSource2S3Region    string
-	compareSource2SchemaPath  string
-	compareSource2DataPath    string
+	compareSource2S3AccessKey  string
+	compareSource2S3SecretKey  string
+	compareSource2S3Region     string
+	compareSource2SchemaPath   string
+	compareSource2DataPath     string
 	compareSource2SchemaSource string // pg_dump, inferred, auto
 
 	// Comparison flags
-	compareMode        string // schema-only, data-only, schema-and-data
-	dataCompareType    string // row-count, row-by-row, sample
-	sampleSize         int
-	compareTables      string // comma-separated table names
+	compareMode     string // schema-only, data-only, schema-and-data
+	dataCompareType string // row-count, row-by-row, sample
+	sampleSize      int
+	compareTables   string // comma-separated table names
 
 	// Output flags
 	compareOutputFormat string // text, json
@@ -136,11 +136,11 @@ func init() {
 
 // ComparisonSource represents a source for comparison (database or S3)
 type ComparisonSource struct {
-	Type        string // "db" or "s3"
-	Database    DatabaseConfig
-	S3          S3Config
-	SchemaPath  string // S3 path for schemas
-	DataPath    string // S3 path for data
+	Type         string // "db" or "s3"
+	Database     DatabaseConfig
+	S3           S3Config
+	SchemaPath   string // S3 path for schemas
+	DataPath     string // S3 path for data
 	SchemaSource string // pg_dump, inferred, auto
 }
 
@@ -159,14 +159,14 @@ type SchemaComparisonResult struct {
 
 // TableSchemaDiff contains differences for a single table
 type TableSchemaDiff struct {
-	ColumnsOnlyInSource1 []ColumnInfo            `json:"columns_only_in_source1"`
-	ColumnsOnlyInSource2 []ColumnInfo            `json:"columns_only_in_source2"`
-	TypeMismatches       []ColumnTypeMismatch    `json:"type_mismatches"`
+	ColumnsOnlyInSource1 []ColumnInfo         `json:"columns_only_in_source1"`
+	ColumnsOnlyInSource2 []ColumnInfo         `json:"columns_only_in_source2"`
+	TypeMismatches       []ColumnTypeMismatch `json:"type_mismatches"`
 }
 
 // ColumnTypeMismatch represents a column type difference
 type ColumnTypeMismatch struct {
-	ColumnName string `json:"column_name"`
+	ColumnName  string `json:"column_name"`
 	Source1Type string `json:"source1_type"`
 	Source2Type string `json:"source2_type"`
 }
@@ -187,45 +187,45 @@ type RowCountDiff struct {
 
 // RowByRowDiff contains row-by-row comparison results
 type RowByRowDiff struct {
-	Source1TotalRows int64   `json:"source1_total_rows"`
-	Source2TotalRows int64   `json:"source2_total_rows"`
-	MatchingRows     int64   `json:"matching_rows"`
-	MissingInSource2 int64   `json:"missing_in_source2"`
-	ExtraInSource2   int64   `json:"extra_in_source2"`
+	Source1TotalRows int64 `json:"source1_total_rows"`
+	Source2TotalRows int64 `json:"source2_total_rows"`
+	MatchingRows     int64 `json:"matching_rows"`
+	MissingInSource2 int64 `json:"missing_in_source2"`
+	ExtraInSource2   int64 `json:"extra_in_source2"`
 }
 
 // SampleDiff contains sample comparison results
 type SampleDiff struct {
 	Source1Sample []map[string]interface{} `json:"source1_sample,omitempty"`
 	Source2Sample []map[string]interface{} `json:"source2_sample,omitempty"`
-	Differences   []string                  `json:"differences"`
+	Differences   []string                 `json:"differences"`
 }
 
 // Comparer handles comparison operations
 type Comparer struct {
-	source1      *ComparisonSource
-	source2      *ComparisonSource
-	config       *CompareConfig
-	logger       *slog.Logger
-	ctx          context.Context
-	db1          *sql.DB
-	db2          *sql.DB
-	s3Client1    *s3.S3
-	s3Client2    *s3.S3
+	source1       *ComparisonSource
+	source2       *ComparisonSource
+	config        *CompareConfig
+	logger        *slog.Logger
+	ctx           context.Context
+	db1           *sql.DB
+	db2           *sql.DB
+	s3Client1     *s3.S3
+	s3Client2     *s3.S3
 	s3Downloader1 *s3manager.Downloader
 	s3Downloader2 *s3manager.Downloader
 }
 
 // CompareConfig contains comparison configuration
 type CompareConfig struct {
-	Mode           string   // schema-only, data-only, schema-and-data
-	DataCompareType string   // row-count, row-by-row, sample
-	SampleSize     int
-	Tables         []string // Empty = all tables
-	OutputFormat   string   // text, json
-	OutputFile     string
-	Debug          bool
-	DryRun         bool
+	Mode            string // schema-only, data-only, schema-and-data
+	DataCompareType string // row-count, row-by-row, sample
+	SampleSize      int
+	Tables          []string // Empty = all tables
+	OutputFormat    string   // text, json
+	OutputFile      string
+	Debug           bool
+	DryRun          bool
 }
 
 // NewComparer creates a new Comparer instance
@@ -272,12 +272,12 @@ func runCompare(cmd *cobra.Command) {
 	source1 := &ComparisonSource{
 		Type: getStringConfig(compareSource1Type, "source1-type", "compare.source1.type"),
 		Database: DatabaseConfig{
-			Host:    getStringConfig(compareSource1DbHost, "source1-db-host", "compare.source1.db.host"),
-			Port:    getIntConfig(compareSource1DbPort, "source1-db-port", "compare.source1.db.port"),
-			User:    getStringConfig(compareSource1DbUser, "source1-db-user", "compare.source1.db.user"),
+			Host:     getStringConfig(compareSource1DbHost, "source1-db-host", "compare.source1.db.host"),
+			Port:     getIntConfig(compareSource1DbPort, "source1-db-port", "compare.source1.db.port"),
+			User:     getStringConfig(compareSource1DbUser, "source1-db-user", "compare.source1.db.user"),
 			Password: getStringConfig(compareSource1DbPassword, "source1-db-password", "compare.source1.db.password"),
-			Name:    getStringConfig(compareSource1DbName, "source1-db-name", "compare.source1.db.name"),
-			SSLMode: getStringConfig(compareSource1DbSSLMode, "source1-db-sslmode", "compare.source1.db.sslmode"),
+			Name:     getStringConfig(compareSource1DbName, "source1-db-name", "compare.source1.db.name"),
+			SSLMode:  getStringConfig(compareSource1DbSSLMode, "source1-db-sslmode", "compare.source1.db.sslmode"),
 		},
 		S3: S3Config{
 			Endpoint:  getStringConfig(compareSource1S3Endpoint, "source1-s3-endpoint", "compare.source1.s3.endpoint"),
@@ -294,12 +294,12 @@ func runCompare(cmd *cobra.Command) {
 	source2 := &ComparisonSource{
 		Type: getStringConfig(compareSource2Type, "source2-type", "compare.source2.type"),
 		Database: DatabaseConfig{
-			Host:    getStringConfig(compareSource2DbHost, "source2-db-host", "compare.source2.db.host"),
-			Port:    getIntConfig(compareSource2DbPort, "source2-db-port", "compare.source2.db.port"),
-			User:    getStringConfig(compareSource2DbUser, "source2-db-user", "compare.source2.db.user"),
+			Host:     getStringConfig(compareSource2DbHost, "source2-db-host", "compare.source2.db.host"),
+			Port:     getIntConfig(compareSource2DbPort, "source2-db-port", "compare.source2.db.port"),
+			User:     getStringConfig(compareSource2DbUser, "source2-db-user", "compare.source2.db.user"),
 			Password: getStringConfig(compareSource2DbPassword, "source2-db-password", "compare.source2.db.password"),
-			Name:    getStringConfig(compareSource2DbName, "source2-db-name", "compare.source2.db.name"),
-			SSLMode: getStringConfig(compareSource2DbSSLMode, "source2-db-sslmode", "compare.source2.db.sslmode"),
+			Name:     getStringConfig(compareSource2DbName, "source2-db-name", "compare.source2.db.name"),
+			SSLMode:  getStringConfig(compareSource2DbSSLMode, "source2-db-sslmode", "compare.source2.db.sslmode"),
 		},
 		S3: S3Config{
 			Endpoint:  getStringConfig(compareSource2S3Endpoint, "source2-s3-endpoint", "compare.source2.s3.endpoint"),
@@ -323,14 +323,14 @@ func runCompare(cmd *cobra.Command) {
 	}
 
 	config := &CompareConfig{
-		Mode:           getStringConfig(compareMode, "compare-mode", "compare.mode"),
+		Mode:            getStringConfig(compareMode, "compare-mode", "compare.mode"),
 		DataCompareType: getStringConfig(dataCompareType, "data-compare-type", "compare.data_compare_type"),
-		SampleSize:     getIntConfig(sampleSize, "sample-size", "compare.sample_size"),
-		Tables:         tables,
-		OutputFormat:   getStringConfig(compareOutputFormat, "output-format", "compare.output_format"),
-		OutputFile:     getStringConfig(compareOutputFile, "output-file", "compare.output_file"),
-		Debug:          viper.GetBool("debug"),
-		DryRun:         viper.GetBool("dry_run"),
+		SampleSize:      getIntConfig(sampleSize, "sample-size", "compare.sample_size"),
+		Tables:          tables,
+		OutputFormat:    getStringConfig(compareOutputFormat, "output-format", "compare.output_format"),
+		OutputFile:      getStringConfig(compareOutputFile, "output-file", "compare.output_file"),
+		Debug:           viper.GetBool("debug"),
+		DryRun:          viper.GetBool("dry_run"),
 	}
 
 	// Initialize logger
@@ -530,7 +530,7 @@ func validateCompareConfig(source1, source2 *ComparisonSource, config *CompareCo
 	// Only validate data comparison settings if mode includes data comparison
 	if config.Mode == "data-only" || config.Mode == "schema-and-data" {
 		validDataCompareTypes := map[string]bool{
-			"row-count":   true,
+			"row-count":  true,
 			"row-by-row": true,
 			"sample":     true,
 		}
@@ -676,7 +676,7 @@ func (c *Comparer) connectDatabase(ctx context.Context, source *ComparisonSource
 		}
 		if currentDB != source.Database.Name {
 			conn.Close()
-			return fmt.Errorf("connected to database '%s' but expected '%s'. The user '%s' may not have permission to connect to '%s', or the database doesn't exist. Please check database permissions.", currentDB, source.Database.Name, source.Database.User, source.Database.Name)
+			return fmt.Errorf("connected to database %q but expected %q; user %q may not have permission to connect to %q or the database might not exist", currentDB, source.Database.Name, source.Database.User, source.Database.Name)
 		}
 	}
 
@@ -1186,7 +1186,7 @@ func (c *Comparer) extractSchemasFromPgDump(ctx context.Context, source *Compari
 		}
 
 		// Download and parse pg_dump file
-		schema, err := c.parsePgDumpSchema(ctx, source, key, client, downloader)
+		schema, err := c.parsePgDumpSchema(ctx, source, key, downloader)
 		if err != nil {
 			c.logger.Warn(fmt.Sprintf("Failed to parse pg_dump file %s: %v", key, err))
 			continue
@@ -1201,7 +1201,7 @@ func (c *Comparer) extractSchemasFromPgDump(ctx context.Context, source *Compari
 }
 
 // parsePgDumpSchema parses a pg_dump schema file
-func (c *Comparer) parsePgDumpSchema(ctx context.Context, source *ComparisonSource, key string, client *s3.S3, downloader *s3manager.Downloader) (*TableSchema, error) {
+func (c *Comparer) parsePgDumpSchema(ctx context.Context, source *ComparisonSource, key string, downloader *s3manager.Downloader) (*TableSchema, error) {
 	// Download file to temp location
 	tempFile, err := os.CreateTemp("", "pg_dump-*.tmp")
 	if err != nil {
@@ -1235,7 +1235,7 @@ func (c *Comparer) parsePgDumpSchema(ctx context.Context, source *ComparisonSour
 }
 
 // parsePgRestoreList parses pg_restore -l output
-func (c *Comparer) parsePgRestoreList(output, dumpFile string) (*TableSchema, error) {
+func (c *Comparer) parsePgRestoreList(_ string, _ string) (*TableSchema, error) {
 	// For now, return nil - full pg_dump parsing is complex
 	// We'll focus on inferred schemas for now
 	// TODO: Implement full pg_dump schema parsing
@@ -1291,7 +1291,7 @@ func (c *Comparer) extractSchemasFromDataFiles(ctx context.Context, source *Comp
 		}
 
 		// Use first file to infer schema
-		schema, err := c.inferSchemaFromS3File(ctx, source, files[0], client, downloader, tableName)
+		schema, err := c.inferSchemaFromS3File(ctx, source, files[0], downloader, tableName)
 		if err != nil {
 			c.logger.Warn(fmt.Sprintf("Failed to infer schema for table %s: %v", tableName, err))
 			continue
@@ -1404,7 +1404,7 @@ func (c *Comparer) extractTableNameFromPath(key, pathTemplate string) string {
 }
 
 // inferSchemaFromS3File infers schema from an S3 data file
-func (c *Comparer) inferSchemaFromS3File(ctx context.Context, source *ComparisonSource, file S3File, client *s3.S3, downloader *s3manager.Downloader, tableName string) (*TableSchema, error) {
+func (c *Comparer) inferSchemaFromS3File(ctx context.Context, source *ComparisonSource, file S3File, downloader *s3manager.Downloader, tableName string) (*TableSchema, error) {
 	// Download file
 	tempFile, err := os.CreateTemp("", "compare-*.tmp")
 	if err != nil {
@@ -1851,7 +1851,7 @@ func (c *Comparer) getRowCountFromS3(ctx context.Context, source *ComparisonSour
 
 	var totalCount int64
 	for _, file := range files {
-		count, err := c.countRowsInS3File(ctx, source, file, client, downloader)
+		count, err := c.countRowsInS3File(ctx, source, file, downloader)
 		if err != nil {
 			c.logger.Warn(fmt.Sprintf("Failed to count rows in %s: %v", file.Key, err))
 			continue
@@ -1863,7 +1863,7 @@ func (c *Comparer) getRowCountFromS3(ctx context.Context, source *ComparisonSour
 }
 
 // countRowsInS3File counts rows in an S3 data file
-func (c *Comparer) countRowsInS3File(ctx context.Context, source *ComparisonSource, file S3File, client *s3.S3, downloader *s3manager.Downloader) (int64, error) {
+func (c *Comparer) countRowsInS3File(ctx context.Context, source *ComparisonSource, file S3File, downloader *s3manager.Downloader) (int64, error) {
 	// Download file
 	tempFile, err := os.CreateTemp("", "compare-count-*.tmp")
 	if err != nil {
@@ -2111,7 +2111,7 @@ func (c *Comparer) getRowsFromS3(ctx context.Context, source *ComparisonSource, 
 
 	var allRows []map[string]interface{}
 	for _, file := range files {
-		rows, err := c.readRowsFromS3File(ctx, source, file, client, downloader)
+		rows, err := c.readRowsFromS3File(ctx, source, file, downloader)
 		if err != nil {
 			c.logger.Warn(fmt.Sprintf("Failed to read rows from %s: %v", file.Key, err))
 			continue
@@ -2123,7 +2123,7 @@ func (c *Comparer) getRowsFromS3(ctx context.Context, source *ComparisonSource, 
 }
 
 // readRowsFromS3File reads all rows from an S3 data file
-func (c *Comparer) readRowsFromS3File(ctx context.Context, source *ComparisonSource, file S3File, client *s3.S3, downloader *s3manager.Downloader) ([]map[string]interface{}, error) {
+func (c *Comparer) readRowsFromS3File(ctx context.Context, source *ComparisonSource, file S3File, downloader *s3manager.Downloader) ([]map[string]interface{}, error) {
 	// Download file
 	tempFile, err := os.CreateTemp("", "compare-read-*.tmp")
 	if err != nil {
@@ -2340,16 +2340,16 @@ func (c *Comparer) outputTextFormat(result *ComparisonResult, w io.Writer) error
 			for tableName, diff := range result.Schema.TableDiffs {
 				fmt.Fprintf(w, "\n  Table: %s\n", tableName)
 
-		// Check if one table has no columns
-		// If all columns from one source are "only in" that source and the other has none,
-		// it means the other table has no columns
-		if len(diff.ColumnsOnlyInSource1) > 0 && len(diff.ColumnsOnlyInSource2) == 0 {
-			// All columns are only in source1, and none in source2 - source2 table has no columns
-			fmt.Fprintf(w, "    ⚠️  Source 2 table has NO COLUMNS (Source 1 has %d columns)\n", len(diff.ColumnsOnlyInSource1))
-		} else if len(diff.ColumnsOnlyInSource2) > 0 && len(diff.ColumnsOnlyInSource1) == 0 {
-			// All columns are only in source2, and none in source1 - source1 table has no columns
-			fmt.Fprintf(w, "    ⚠️  Source 1 table has NO COLUMNS (Source 2 has %d columns)\n", len(diff.ColumnsOnlyInSource2))
-		}
+				// Check if one table has no columns
+				// If all columns from one source are "only in" that source and the other has none,
+				// it means the other table has no columns
+				if len(diff.ColumnsOnlyInSource1) > 0 && len(diff.ColumnsOnlyInSource2) == 0 {
+					// All columns are only in source1, and none in source2 - source2 table has no columns
+					fmt.Fprintf(w, "    ⚠️  Source 2 table has NO COLUMNS (Source 1 has %d columns)\n", len(diff.ColumnsOnlyInSource1))
+				} else if len(diff.ColumnsOnlyInSource2) > 0 && len(diff.ColumnsOnlyInSource1) == 0 {
+					// All columns are only in source2, and none in source1 - source1 table has no columns
+					fmt.Fprintf(w, "    ⚠️  Source 1 table has NO COLUMNS (Source 2 has %d columns)\n", len(diff.ColumnsOnlyInSource2))
+				}
 
 				if len(diff.ColumnsOnlyInSource1) > 0 {
 					fmt.Fprintf(w, "    Columns only in Source 1:\n")
