@@ -52,11 +52,12 @@ var (
 	endDate            string
 	workers            int
 	dryRun             bool
-	skipCount          bool
-	cacheViewer        bool
-	viewerPort         int
-	chunkSize          int
-	pathTemplate       string
+	skipCount                bool
+	cacheViewer               bool
+	viewerPort                int
+	chunkSize                 int
+	includeNonPartitionTables bool
+	pathTemplate              string
 	outputDuration     string
 	outputFormat       string
 	compression        string
@@ -289,6 +290,7 @@ func init() {
 	archiveCmd.Flags().BoolVar(&cacheViewer, "viewer", false, "start embedded cache viewer web server")
 	archiveCmd.Flags().IntVar(&viewerPort, "viewer-port", 8080, "port for cache viewer web server")
 	archiveCmd.Flags().IntVar(&chunkSize, "chunk-size", 10000, "number of rows to process in each chunk (streaming mode, 0 = auto)")
+	archiveCmd.Flags().BoolVar(&includeNonPartitionTables, "include-non-partition-tables", false, "include regular tables matching partition naming pattern (not just actual partitions)")
 
 	// Output configuration flags
 	archiveCmd.Flags().StringVar(&pathTemplate, "path-template", "", "S3 path template with placeholders: {table}, {YYYY}, {MM}, {DD}, {HH} (required)")
@@ -370,6 +372,7 @@ func init() {
 	_ = viper.BindPFlag("end_date", archiveCmd.Flags().Lookup("end-date"))
 	_ = viper.BindPFlag("workers", archiveCmd.Flags().Lookup("workers"))
 	_ = viper.BindPFlag("skip_count", archiveCmd.Flags().Lookup("skip-count"))
+	_ = viper.BindPFlag("include_non_partition_tables", archiveCmd.Flags().Lookup("include-non-partition-tables"))
 	_ = viper.BindPFlag("s3.path_template", archiveCmd.Flags().Lookup("path-template"))
 	_ = viper.BindPFlag("output_duration", archiveCmd.Flags().Lookup("output-duration"))
 	_ = viper.BindPFlag("output_format", archiveCmd.Flags().Lookup("output-format"))
@@ -456,11 +459,12 @@ func runArchive() {
 		Debug:       viper.GetBool("debug"),
 		LogFormat:   viper.GetString("log_format"),
 		DryRun:      viper.GetBool("dry_run"),
-		Workers:     viper.GetInt("workers"),
-		SkipCount:   viper.GetBool("skip_count"),
-		CacheViewer: viper.GetBool("viewer"),
-		ViewerPort:  viper.GetInt("viewer_port"),
-		ChunkSize:   viper.GetInt("chunk_size"),
+		Workers:                  viper.GetInt("workers"),
+		SkipCount:                viper.GetBool("skip_count"),
+		CacheViewer:              viper.GetBool("viewer"),
+		ViewerPort:               viper.GetInt("viewer_port"),
+		ChunkSize:                viper.GetInt("chunk_size"),
+		IncludeNonPartitionTables: viper.GetBool("include_non_partition_tables"),
 		Database: DatabaseConfig{
 			Host:             viper.GetString("db.host"),
 			Port:             viper.GetInt("db.port"),

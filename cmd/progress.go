@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -420,28 +421,6 @@ func (m *progressModel) doDiscover() tea.Cmd {
 			return messageMsg("❌ Database not connected")
 		}
 
-		// Query for leaf partitions only (not intermediate parent partitions)
-		// This handles hierarchical partitioning like: flights -> flights_2024 -> flights_2024_01 -> flights_2024_01_01
-		query := `
-			SELECT c.relname::text AS tablename
-			FROM pg_class c
-			JOIN pg_namespace n ON n.oid = c.relnamespace
-			WHERE n.nspname = 'public'
-				AND c.relname LIKE $1
-				AND c.relkind = 'r'
-				AND NOT EXISTS (
-					SELECT 1 FROM pg_inherits WHERE inhparent = c.oid
-				)
-			ORDER BY c.relname;
-		`
-
-		pattern := m.config.Table + "_%"
-		rows, err := m.archiver.db.Query(query, pattern)
-		if err != nil {
-			return messageMsg(fmt.Sprintf("❌ Failed to query partitions: %v", err))
-		}
-		defer rows.Close()
-
 		// First, collect all matching table names
 		var matchingTables []struct {
 			name string
@@ -458,39 +437,80 @@ func (m *progressModel) doDiscover() tea.Cmd {
 
 		discoveredCount := 0
 		skippedCount := 0
+		seenTables := make(map[string]bool) // Track tables to avoid duplicates
 
-		for rows.Next() {
-			var tableName string
-			if err := rows.Scan(&tableName); err != nil {
-				continue
-			}
+		// Helper function to process tables from a query result
+		processTableRows := func(rows *sql.Rows, sourceType string) error {
+			defer rows.Close()
+			for rows.Next() {
+				var tableName string
+				if err := rows.Scan(&tableName); err != nil {
+					return fmt.Errorf("failed to scan %s name: %w", sourceType, err)
+				}
 
-			// Try to extract date from different partition naming formats
-			date, ok := m.archiver.extractDateFromTableName(tableName)
-			if !ok {
-				skippedCount++
-				continue
-			}
+				// Skip if we've already seen this table
+				if seenTables[tableName] {
+					continue
+				}
+				seenTables[tableName] = true
 
-			if m.config.StartDate != "" && date.Before(startDate) {
-				skippedCount++
-				continue
-			}
-			if m.config.EndDate != "" && date.After(endDate) {
-				skippedCount++
-				continue
-			}
+				// Try to extract date from different partition naming formats
+				date, ok := m.archiver.extractDateFromTableName(tableName)
+				if !ok {
+					skippedCount++
+					continue
+				}
 
-			discoveredCount++
-			matchingTables = append(matchingTables, struct {
-				name string
-				date time.Time
-			}{name: tableName, date: date})
+				if m.config.StartDate != "" && date.Before(startDate) {
+					skippedCount++
+					continue
+				}
+				if m.config.EndDate != "" && date.After(endDate) {
+					skippedCount++
+					continue
+				}
+
+				// Validate that the table actually has columns before adding it
+				// This prevents errors later when trying to process tables that exist
+				// but have no columns or aren't valid tables
+				schema, schemaErr := m.archiver.getTableSchema(context.Background(), tableName)
+				if schemaErr != nil {
+					skippedCount++
+					continue
+				}
+				if schema == nil || len(schema.Columns) == 0 {
+					skippedCount++
+					continue
+				}
+
+				discoveredCount++
+				matchingTables = append(matchingTables, struct {
+					name string
+					date time.Time
+				}{name: tableName, date: date})
+			}
+			return rows.Err()
 		}
 
-		// Check for errors from iterating over rows
-		if err := rows.Err(); err != nil {
+		// Query for leaf partitions only (not intermediate parent partitions)
+		// This handles hierarchical partitioning like: flights -> flights_2024 -> flights_2024_01 -> flights_2024_01_01
+		rows, err := m.archiver.db.Query(leafPartitionListSQL, defaultTableSchema, m.config.Table)
+		if err != nil {
+			return messageMsg(fmt.Sprintf("❌ Failed to query partitions: %v", err))
+		}
+		if err := processTableRows(rows, "partition"); err != nil {
 			return messageMsg(fmt.Sprintf("❌ Failed to scan partitions: %v", err))
+		}
+
+		// If enabled, also query non-partition tables matching the pattern
+		if m.config.IncludeNonPartitionTables {
+			nonPartitionRows, err := m.archiver.db.Query(nonPartitionTableListSQL, defaultTableSchema, m.config.Table)
+			if err != nil {
+				return messageMsg(fmt.Sprintf("❌ Failed to query non-partition tables: %v", err))
+			}
+			if err := processTableRows(nonPartitionRows, "non-partition table"); err != nil {
+				return messageMsg(fmt.Sprintf("❌ Failed to scan non-partition tables: %v", err))
+			}
 		}
 
 		if len(matchingTables) == 0 {

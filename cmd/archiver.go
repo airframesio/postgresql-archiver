@@ -347,22 +347,61 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, _ *tea.Program, _ *Ta
 	}
 
 	a.logger.Debug("Discovering partitions...")
-	// Inline partition discovery (same logic as progress.go doDiscover)
-	query := `
-		SELECT c.relname::text AS tablename
-		FROM pg_class c
-		JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname = 'public'
-			AND c.relname LIKE $1
-			AND c.relkind = 'r'
-			AND NOT EXISTS (
-				SELECT 1 FROM pg_inherits WHERE inhparent = c.oid
-			)
-		ORDER BY c.relname;
-	`
+	var partitions []PartitionInfo
+	seenTables := make(map[string]bool) // Track tables to avoid duplicates
 
-	pattern := a.config.Table + "_%"
-	rows, err := a.db.QueryContext(ctx, query, pattern)
+	// Helper function to process tables from a query result
+	processTableRows := func(rows *sql.Rows, sourceType string) error {
+		defer rows.Close()
+		for rows.Next() {
+			// Check for cancellation in the loop
+			select {
+			case <-ctx.Done():
+				a.logger.Info("⚠️  Cancellation detected during partition discovery")
+				return ctx.Err()
+			default:
+			}
+
+			var tableName string
+			if err := rows.Scan(&tableName); err != nil {
+				return fmt.Errorf("failed to scan %s name: %w", sourceType, err)
+			}
+
+			// Skip if we've already seen this table
+			if seenTables[tableName] {
+				continue
+			}
+			seenTables[tableName] = true
+
+			date, ok := a.extractDateFromTableName(tableName)
+			if !ok {
+				a.logger.Debug(fmt.Sprintf("Skipping table %s (no valid date)", tableName))
+				continue
+			}
+
+			// Validate that the table actually has columns before adding it
+			// This prevents errors later when trying to process tables that exist
+			// but have no columns or aren't valid tables
+			schema, schemaErr := a.getTableSchema(ctx, tableName)
+			if schemaErr != nil {
+				a.logger.Debug(fmt.Sprintf("Skipping table %s (schema validation failed: %v)", tableName, schemaErr))
+				continue
+			}
+			if schema == nil || len(schema.Columns) == 0 {
+				a.logger.Debug(fmt.Sprintf("Skipping table %s (no columns found)", tableName))
+				continue
+			}
+
+			partitions = append(partitions, PartitionInfo{
+				TableName: tableName,
+				Date:      date,
+			})
+		}
+		return rows.Err()
+	}
+
+	// Query actual partitions
+	rows, err := a.db.QueryContext(ctx, leafPartitionListSQL, defaultTableSchema, a.config.Table)
 	if err != nil {
 		// Check if error is due to cancellation or closed connection
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isConnectionError(err) {
@@ -371,46 +410,25 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, _ *tea.Program, _ *Ta
 		}
 		return fmt.Errorf("failed to query partitions: %w", err)
 	}
-	defer rows.Close()
-
-	// Check for cancellation immediately after query starts
-	select {
-	case <-ctx.Done():
-		a.logger.Info("⚠️  Cancellation detected after query started")
-		return ctx.Err()
-	default:
-	}
-
-	var partitions []PartitionInfo
-	for rows.Next() {
-		// Check for cancellation in the loop
-		select {
-		case <-ctx.Done():
-			a.logger.Info("⚠️  Cancellation detected during partition discovery")
-			return ctx.Err()
-		default:
-		}
-
-		var tableName string
-		if err := rows.Scan(&tableName); err != nil {
-			return fmt.Errorf("failed to scan partition name: %w", err)
-		}
-
-		date, ok := a.extractDateFromTableName(tableName)
-		if !ok {
-			a.logger.Debug(fmt.Sprintf("Skipping table %s (no valid date)", tableName))
-			continue
-		}
-
-		partitions = append(partitions, PartitionInfo{
-			TableName: tableName,
-			Date:      date,
-		})
-	}
-
-	// Check for errors from iterating over rows
-	if err := rows.Err(); err != nil {
+	if err := processTableRows(rows, "partition"); err != nil {
 		return fmt.Errorf("error iterating over partition rows: %w", err)
+	}
+
+	// If enabled, also query non-partition tables matching the pattern
+	if a.config.IncludeNonPartitionTables {
+		a.logger.Debug("Including non-partition tables matching pattern...")
+		nonPartitionRows, err := a.db.QueryContext(ctx, nonPartitionTableListSQL, defaultTableSchema, a.config.Table)
+		if err != nil {
+			// Check if error is due to cancellation or closed connection
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isConnectionError(err) {
+				a.logger.Info("⚠️  Query cancelled or connection closed")
+				return context.Canceled
+			}
+			return fmt.Errorf("failed to query non-partition tables: %w", err)
+		}
+		if err := processTableRows(nonPartitionRows, "non-partition table"); err != nil {
+			return fmt.Errorf("error iterating over non-partition table rows: %w", err)
+		}
 	}
 
 	if len(partitions) == 0 {
@@ -601,18 +619,8 @@ func (a *Archiver) checkTablePermissions(ctx context.Context) error {
 	}
 
 	// Check if we can see and access partition tables
-	pattern := a.config.Table + "_%"
-	partitionCheckQuery := `
-		SELECT tablename
-		FROM pg_tables
-		WHERE schemaname = 'public'
-		AND tablename LIKE $1
-		AND has_table_privilege('public.' || tablename, 'SELECT')
-		LIMIT 1
-	`
-
 	var samplePartition string
-	err = a.db.QueryRowContext(ctx, partitionCheckQuery, pattern).Scan(&samplePartition)
+	err = a.db.QueryRowContext(ctx, leafPartitionPermissionSQL, defaultTableSchema, a.config.Table).Scan(&samplePartition)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		// Only fail if it's not a "no rows" error
 		return fmt.Errorf("failed to check partition table permissions: %w", err)
@@ -622,14 +630,9 @@ func (a *Archiver) checkTablePermissions(ctx context.Context) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		// Let's see if partitions exist but we can't access them
 		var partitionExists bool
-		existsQuery := `
-			SELECT EXISTS (
-				SELECT 1 FROM pg_tables
-				WHERE schemaname = 'public'
-				AND tablename LIKE $1
-			)
-		`
-		_ = a.db.QueryRowContext(ctx, existsQuery, pattern).Scan(&partitionExists)
+		if err := a.db.QueryRowContext(ctx, leafPartitionExistsSQL, defaultTableSchema, a.config.Table).Scan(&partitionExists); err != nil {
+			return fmt.Errorf("failed to check for partition existence: %w", err)
+		}
 
 		if partitionExists {
 			// Partitions exist but we can't access them

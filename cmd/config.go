@@ -41,26 +41,27 @@ var (
 const regionAuto = "auto"
 
 type Config struct {
-	Debug            bool
-	LogFormat        string
-	DryRun           bool
-	Workers          int
-	SkipCount        bool
-	CacheViewer      bool
-	ViewerPort       int
-	ChunkSize        int // Number of rows to process in each chunk (streaming mode)
-	Database         DatabaseConfig
-	S3               S3Config
-	Table            string
-	StartDate        string
-	EndDate          string
-	OutputDuration   string
-	OutputFormat     string
-	Compression      string
-	CompressionLevel int
-	DateColumn       string
-	DumpMode         string // pg_dump mode: schema-only, data-only, schema-and-data
-	CacheScope       CacheScope
+	Debug                    bool
+	LogFormat                string
+	DryRun                   bool
+	Workers                  int
+	SkipCount                bool
+	CacheViewer              bool
+	ViewerPort               int
+	ChunkSize                int // Number of rows to process in each chunk (streaming mode)
+	IncludeNonPartitionTables bool // Include regular tables matching partition naming pattern
+	Database                 DatabaseConfig
+	S3                       S3Config
+	Table                    string
+	StartDate                string
+	EndDate                  string
+	OutputDuration           string
+	OutputFormat             string
+	Compression              string
+	CompressionLevel         int
+	DateColumn               string
+	DumpMode                 string // pg_dump mode: schema-only, data-only, schema-and-data
+	CacheScope               CacheScope
 }
 
 type DatabaseConfig struct {

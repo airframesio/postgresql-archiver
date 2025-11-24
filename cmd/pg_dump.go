@@ -649,17 +649,8 @@ func (e *PgDumpExecutor) dumpPartitionsByDateRange(ctx context.Context) error {
 		}
 	}
 
-	// Discover partitions matching the table pattern
-	pattern := e.config.Table + "_%"
-	query := `
-		SELECT tablename
-		FROM pg_tables
-		WHERE schemaname = 'public'
-			AND tablename LIKE $1
-		ORDER BY tablename
-	`
-
-	rows, err := e.db.QueryContext(ctx, query, pattern)
+	// Discover partitions that inherit from the target table
+	rows, err := e.db.QueryContext(ctx, leafPartitionListSQL, defaultTableSchema, e.config.Table)
 	if err != nil {
 		return fmt.Errorf("failed to query partitions: %w", err)
 	}

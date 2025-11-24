@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2025-11-24
+
 ### Added
 - **Archive Command:**
+  - New `--include-non-partition-tables` flag to include regular tables matching partition naming patterns (not just actual PostgreSQL partitions)
   - When a table lacks physical partitions, providing `--date-column`, `--start-date`, and `--end-date` now enables synthetic date-window processing so partitionless tables can be archived with the standard workflow
 - **pg_dump & dump-hybrid**
   - Date-window dumps now reuse the global cache so completed windows or partition groups are skipped immediately on reruns when the S3 object already exists and matches size/MD5 (or multipart ETag)
@@ -17,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Caching**
   - Cache files are namespaced by subcommand plus the absolute S3 destination, preventing collisions when the same table is archived by different workflows or sent to different paths
   - Existing per-table caches are migrated automatically the first time a scoped cache is loaded
+
+### Fixed
+- **Archive & pg_dump Commands:**
+  - Partition discovery now only returns tables that inherit from the requested parent table, preventing lookups against similarly named tables that are not real partitions (and the resulting "table not found or has no columns" errors)
+  - Partition permission checks use the same metadata so missing privileges on actual partitions are reported accurately instead of being mistaken for missing tables
+  - Scan errors during partition discovery in TUI mode are now properly propagated instead of being silently ignored, matching the behavior in debug mode
 
 ## [1.5.9] - 2025-11-17
 
