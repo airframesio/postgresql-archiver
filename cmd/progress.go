@@ -483,6 +483,18 @@ func (m *progressModel) doDiscover() tea.Cmd {
 					continue
 				}
 
+				// Check if we have SELECT permission on the table
+				var hasPermission bool
+				checkPermissionQuery := `SELECT has_table_privilege('public.' || $1, 'SELECT')`
+				if err := m.archiver.db.QueryRow(checkPermissionQuery, tableName).Scan(&hasPermission); err != nil {
+					skippedCount++
+					continue
+				}
+				if !hasPermission {
+					skippedCount++
+					continue
+				}
+
 				discoveredCount++
 				matchingTables = append(matchingTables, struct {
 					name string

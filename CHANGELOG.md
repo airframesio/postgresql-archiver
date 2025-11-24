@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2025-11-24
+
+### Fixed
+- **Archive Command:**
+  - Added SELECT permission check during partition discovery to skip tables without access permissions
+  - Prevents "permission denied" errors during processing by validating permissions upfront
+
 ## [1.7.1] - 2025-11-24
 
 ### Fixed

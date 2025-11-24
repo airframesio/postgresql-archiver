@@ -392,6 +392,18 @@ func (a *Archiver) runArchivalProcess(ctx context.Context, _ *tea.Program, _ *Ta
 				continue
 			}
 
+			// Check if we have SELECT permission on the table
+			var hasPermission bool
+			checkPermissionQuery := `SELECT has_table_privilege('public.' || $1, 'SELECT')`
+			if err := a.db.QueryRowContext(ctx, checkPermissionQuery, tableName).Scan(&hasPermission); err != nil {
+				a.logger.Debug(fmt.Sprintf("Skipping table %s (permission check failed: %v)", tableName, err))
+				continue
+			}
+			if !hasPermission {
+				a.logger.Debug(fmt.Sprintf("Skipping table %s (no SELECT permission)", tableName))
+				continue
+			}
+
 			partitions = append(partitions, PartitionInfo{
 				TableName: tableName,
 				Date:      date,
