@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2025-11-24
+
+### Fixed
+- **Archive Command:**
+  - `getTableSchema` now uses multiple fallback methods (information_schema.columns, pg_attribute, direct SELECT) to handle permission issues when discovering non-partition tables with `--include-non-partition-tables` flag
+  - Non-partition tables matching the naming pattern are now properly validated and processed instead of being skipped
+
 ## [1.7.0] - 2025-11-24
 
 ### Added
