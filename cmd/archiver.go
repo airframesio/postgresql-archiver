@@ -1365,70 +1365,73 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 	default:
 	}
 
-	// Extract data for this time range
-	rows, err := a.extractRowsWithDateFilter(partition, startTime, endTime)
-	if err != nil {
-		result.Error = fmt.Errorf("failed to extract rows: %w", err)
+	// Use streaming extraction to avoid loading all rows into memory
+	tempFilePath, fileSize, md5Hash, uncompressedSize, extractErr := a.extractPartitionDataStreaming(partition, nil, cache, updateTaskStage, startTime, endTime)
+	if extractErr != nil {
+		result.Error = fmt.Errorf("failed to extract data: %w", extractErr)
 		result.Stage = "Extracting"
 		result.Duration = time.Since(sliceStartTime)
 		return result
 	}
 
-	// If no rows in this slice, skip it
-	if len(rows) == 0 {
+	// Check if file was created and has content (very small files likely have no data rows)
+	// Format-specific minimum sizes: CSV header ~100 bytes, Parquet footer ~1000 bytes, JSONL empty
+	if tempFilePath == "" || fileSize < 100 {
 		a.logger.Debug(fmt.Sprintf("      No data for %s, skipping", startTime.Format("2006-01-02")))
 		result.Skipped = true
 		result.SkipReason = "No data in time range"
+		if tempFilePath != "" {
+			cleanupTempFile(tempFilePath)
+		}
 		result.Duration = time.Since(sliceStartTime)
 		return result
 	}
 
-	a.logger.Debug(fmt.Sprintf("      Extracted %d rows", len(rows)))
-
-	// Format the data
-	data, err := formatter.Format(rows)
-	if err != nil {
-		result.Error = fmt.Errorf("failed to format data: %w", err)
-		result.Stage = "Formatting"
-		result.Duration = time.Since(sliceStartTime)
-		return result
-	}
-
-	uncompressedSize := int64(len(data))
-
-	// Check for cancellation
-	select {
-	case <-a.ctx.Done():
-		result.Error = a.ctx.Err()
-		result.Stage = StageCancelled
-		result.Duration = time.Since(sliceStartTime)
-		return result
-	default:
-	}
-
-	// Compress data
-	compressed, err := compressor.Compress(data, a.config.CompressionLevel)
-	if err != nil {
-		result.Error = fmt.Errorf("compression failed: %w", err)
-		result.Stage = "Compressing"
-		result.Duration = time.Since(sliceStartTime)
-		return result
-	}
 	result.Compressed = true
-	result.BytesWritten = int64(len(compressed))
+	result.BytesWritten = fileSize
 
-	// Calculate MD5
-	localMD5 := fmt.Sprintf("%x", md5.Sum(compressed)) //nolint:gosec // MD5 used for checksums, not cryptography
+	// Check if we can skip upload by comparing with S3
+	exists, s3Size, s3ETag := a.checkObjectExists(objectKey)
+	if exists && s3Size == fileSize {
+		s3ETag = strings.Trim(s3ETag, "\"")
+		isMultipart := strings.Contains(s3ETag, "-")
 
-	// Check if we can skip upload
-	if shouldSkip, skipResult := a.checkExistingFile(partition, objectKey, compressed, localMD5, int64(len(compressed)), uncompressedSize, cache, updateTaskStage); shouldSkip {
-		skipResult.Duration = time.Since(sliceStartTime)
-		return skipResult
+		if !isMultipart && s3ETag == md5Hash {
+			// Single-part upload matches
+			result.Skipped = true
+			result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and MD5 (%s)", s3Size, s3ETag)
+			result.Stage = StageSkipped
+			// Clean up temp file
+			cleanupTempFile(tempFilePath)
+			// Save to cache
+			cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, "", true, sliceStartTime)
+			_ = cache.save(a.config.CacheScope)
+			result.Duration = time.Since(sliceStartTime)
+			return result
+		}
+
+		if isMultipart {
+			// Calculate multipart ETag from file
+			multipartETag, err := a.calculateMultipartETagFromFile(tempFilePath)
+			if err == nil && s3ETag == multipartETag {
+				result.Skipped = true
+				result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and multipart ETag (%s)", s3Size, s3ETag)
+				result.Stage = StageSkipped
+				// Clean up temp file
+				cleanupTempFile(tempFilePath)
+				// Save to cache with multipart ETag
+				cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, multipartETag, true, sliceStartTime)
+				_ = cache.save(a.config.CacheScope)
+				result.Duration = time.Since(sliceStartTime)
+				return result
+			}
+		}
 	}
 
 	// Check for cancellation
 	select {
 	case <-a.ctx.Done():
+		cleanupTempFile(tempFilePath)
 		result.Error = a.ctx.Err()
 		result.Stage = StageCancelled
 		result.Duration = time.Since(sliceStartTime)
@@ -1439,22 +1442,38 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 	// Upload to S3
 	if !a.config.DryRun {
 		result.Stage = "Uploading"
-		if err := a.uploadToS3(objectKey, compressed); err != nil {
+		if err := a.uploadTempFileToS3(tempFilePath, objectKey); err != nil {
+			cleanupTempFile(tempFilePath)
 			result.Error = fmt.Errorf("upload failed: %w", err)
 			result.Duration = time.Since(sliceStartTime)
 			return result
 		}
 		result.Uploaded = true
 
-		// Save metadata to cache
-		cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, int64(len(compressed)), uncompressedSize, localMD5, "", true, sliceStartTime)
+		// Calculate multipart ETag if file is large enough
+		multipartETag := ""
+		if fileSize > 100*1024*1024 {
+			etag, err := a.calculateMultipartETagFromFile(tempFilePath)
+			if err != nil {
+				a.logger.Debug(fmt.Sprintf("      ⚠️  Failed to calculate multipart ETag: %v", err))
+			} else {
+				multipartETag = etag
+				a.logger.Debug(fmt.Sprintf("      🔐 Calculated multipart ETag: %s", multipartETag))
+			}
+		}
+
+		// Save metadata to cache with multipart ETag
+		cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, multipartETag, true, sliceStartTime)
 		_ = cache.save(a.config.CacheScope)
 
 		// Only log in debug mode when TUI is disabled
 		if a.config.Debug {
-			a.logger.Info(fmt.Sprintf("      ✅ Uploaded %s (%d bytes)", filename, len(compressed)))
+			a.logger.Info(fmt.Sprintf("      ✅ Uploaded %s (%d bytes)", filename, fileSize))
 		}
 	}
+
+	// Clean up temp file
+	cleanupTempFile(tempFilePath)
 
 	result.Stage = "Complete"
 	result.S3Key = objectKey
@@ -1604,21 +1623,21 @@ func (a *Archiver) checkExistingFile(partition PartitionInfo, objectKey string, 
 		return true, result
 	}
 
-	if isMultipart {
-		// For multipart uploads, calculate the multipart ETag
-		localMultipartETag := a.calculateMultipartETag(compressed)
-		a.logger.Debug(fmt.Sprintf("   Local multipart ETag: %s", localMultipartETag))
-		if s3ETag == localMultipartETag {
-			result.Skipped = true
-			result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and multipart ETag (%s)", s3Size, s3ETag)
-			result.Stage = StageSkipped
-			a.logger.Debug("   ✅ Skipping: Size and multipart ETag match")
-			// Save to cache for future runs
-			cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
-			_ = cache.save(a.config.CacheScope)
-			return true, result
-		}
-		a.logger.Debug(fmt.Sprintf("   ❌ Multipart ETag mismatch: S3=%s, Local=%s", s3ETag, localMultipartETag))
+		if isMultipart {
+			// For multipart uploads, calculate the multipart ETag
+			localMultipartETag := a.calculateMultipartETag(compressed)
+			a.logger.Debug(fmt.Sprintf("   Local multipart ETag: %s", localMultipartETag))
+			if s3ETag == localMultipartETag {
+				result.Skipped = true
+				result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and multipart ETag (%s)", s3Size, s3ETag)
+				result.Stage = StageSkipped
+				a.logger.Debug("   ✅ Skipping: Size and multipart ETag match")
+				// Save to cache for future runs with multipart ETag
+				cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, localMultipartETag, true, time.Time{})
+				_ = cache.save(a.config.CacheScope)
+				return true, result
+			}
+			a.logger.Debug(fmt.Sprintf("   ❌ Multipart ETag mismatch: S3=%s, Local=%s", s3ETag, localMultipartETag))
 	} else {
 		a.logger.Debug(fmt.Sprintf("   ❌ MD5 mismatch: S3=%s, Local=%s", s3ETag, localMD5))
 	}
@@ -2170,9 +2189,10 @@ func calculateUncompressedRowSize(row map[string]interface{}, format string, col
 
 // extractPartitionDataStreaming extracts partition data using streaming architecture
 // This streams data in chunks to a temp file, avoiding loading everything into memory
+// If startTime and endTime are provided (not zero), adds a WHERE clause to filter by date column
 //
 //nolint:nakedret,gocognit,gocyclo // Complex streaming function with named returns for clarity, high complexity unavoidable
-func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, program *tea.Program, cache *PartitionCache, updateTaskStage func(string)) (tempFilePath string, fileSize int64, md5Hash string, uncompressedSize int64, err error) {
+func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, program *tea.Program, cache *PartitionCache, updateTaskStage func(string), startTime, endTime time.Time) (tempFilePath string, fileSize int64, md5Hash string, uncompressedSize int64, err error) {
 	extractStart := time.Now()
 	updateTaskStage("Getting table schema...")
 
@@ -2270,6 +2290,14 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 	quotedTable := pq.QuoteIdentifier(partition.TableName)
 	//nolint:gosec // G201: SQL string formatting is safe here - all identifiers are properly quoted via pq.QuoteIdentifier
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(columnNames, ", "), quotedTable)
+	var queryArgs []interface{}
+
+	// Add date filtering if startTime and endTime are provided
+	if !startTime.IsZero() && !endTime.IsZero() && a.config.DateColumn != "" {
+		quotedDateColumn := pq.QuoteIdentifier(a.config.DateColumn)
+		query += fmt.Sprintf(" WHERE %s >= $1 AND %s < $2", quotedDateColumn, quotedDateColumn)
+		queryArgs = []interface{}{startTime, endTime}
+	}
 
 	// Account for CSV header row in uncompressed size
 	if a.config.OutputFormat == formatters.FormatCSV {
@@ -2278,7 +2306,13 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 		uncompressedSize += headerSize
 	}
 
-	rows, queryErr := a.db.QueryContext(a.ctx, query)
+	var rows *sql.Rows
+	var queryErr error
+	if len(queryArgs) > 0 {
+		rows, queryErr = a.db.QueryContext(a.ctx, query, queryArgs...)
+	} else {
+		rows, queryErr = a.db.QueryContext(a.ctx, query)
+	}
 	if queryErr != nil {
 		streamWriter.Close()
 		if compressorWriter != nil {
@@ -2458,7 +2492,7 @@ func (a *Archiver) extractPartitionDataWithRetry(partition PartitionInfo, progra
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		tempPath, size, hash, uncompSize, extractErr := a.extractPartitionDataStreaming(partition, program, cache, updateTaskStage)
+		tempPath, size, hash, uncompSize, extractErr := a.extractPartitionDataStreaming(partition, program, cache, updateTaskStage, time.Time{}, time.Time{})
 
 		if extractErr == nil {
 			return tempPath, size, hash, uncompSize, nil
