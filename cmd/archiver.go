@@ -1139,13 +1139,13 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 	// Determine partition result based on slice outcomes
 	// Count skipped slices as successful operations (they were processed successfully, just had no data)
 	totalSuccessful := successCount + skipCount
-	
+
 	if totalSuccessful > 0 {
 		// At least some slices succeeded or were skipped - mark partition as successful
 		result.BytesWritten = totalBytes
 		result.Compressed = successCount > 0 // Only true if we actually uploaded files
 		result.Uploaded = successCount > 0   // Only true if we actually uploaded files
-		
+
 		// If some slices failed, log a warning but don't fail the partition
 		if failCount > 0 {
 			result.SkipReason = fmt.Sprintf("%d slice(s) failed: %s", failCount, strings.Join(failedSliceDates, ", "))
