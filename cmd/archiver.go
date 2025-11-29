@@ -1300,10 +1300,13 @@ func (a *Archiver) processSinglePartition(partition PartitionInfo, program *tea.
 			}
 		}
 
-		// Save metadata to cache after successful upload
+		// Save metadata to cache immediately after successful upload
 		cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, multipartETag, true, startTime)
-		_ = cache.save(a.config.CacheScope)
-		a.logger.Debug(fmt.Sprintf("   💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s, multipartETag=%s", fileSize, uncompressedSize, md5Hash, multipartETag))
+		if err := cache.save(a.config.CacheScope); err != nil {
+			a.logger.Warn(fmt.Sprintf("   ⚠️  Failed to save cache metadata: %v", err))
+		} else {
+			a.logger.Debug(fmt.Sprintf("   💾 Saved file metadata to cache: compressed=%d, uncompressed=%d, md5=%s, multipartETag=%s", fileSize, uncompressedSize, md5Hash, multipartETag))
+		}
 	}
 
 	result.Stage = "Complete"
@@ -1427,9 +1430,11 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 			result.Stage = StageSkipped
 			// Clean up temp file
 			cleanupTempFile(tempFilePath)
-			// Save to cache
+			// Save to cache immediately
 			cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, "", true, sliceStartTime)
-			_ = cache.save(a.config.CacheScope)
+			if err := cache.save(a.config.CacheScope); err != nil {
+				a.logger.Warn(fmt.Sprintf("      ⚠️  Failed to save cache metadata: %v", err))
+			}
 			result.Duration = time.Since(sliceStartTime)
 			return result
 		}
@@ -1443,9 +1448,11 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 				result.Stage = StageSkipped
 				// Clean up temp file
 				cleanupTempFile(tempFilePath)
-				// Save to cache with multipart ETag
+				// Save to cache immediately with multipart ETag
 				cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, multipartETag, true, sliceStartTime)
-				_ = cache.save(a.config.CacheScope)
+				if err := cache.save(a.config.CacheScope); err != nil {
+					a.logger.Warn(fmt.Sprintf("      ⚠️  Failed to save cache metadata: %v", err))
+				}
 				result.Duration = time.Since(sliceStartTime)
 				return result
 			}
@@ -1486,9 +1493,11 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 			}
 		}
 
-		// Save metadata to cache with multipart ETag
+		// Save metadata to cache immediately after successful upload
 		cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, multipartETag, true, sliceStartTime)
-		_ = cache.save(a.config.CacheScope)
+		if err := cache.save(a.config.CacheScope); err != nil {
+			a.logger.Warn(fmt.Sprintf("      ⚠️  Failed to save cache metadata: %v", err))
+		}
 
 		// Only log in debug mode when TUI is disabled
 		if a.config.Debug {
@@ -1641,9 +1650,11 @@ func (a *Archiver) checkExistingFile(partition PartitionInfo, objectKey string, 
 		result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and MD5 (%s)", s3Size, s3ETag)
 		result.Stage = StageSkipped
 		a.logger.Debug("   ✅ Skipping: Size and MD5 match")
-		// Save to cache for future runs
+		// Save to cache immediately for future runs
 		cache.setFileMetadata(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, true)
-		_ = cache.save(a.config.CacheScope)
+		if err := cache.save(a.config.CacheScope); err != nil {
+			a.logger.Warn(fmt.Sprintf("   ⚠️  Failed to save cache metadata: %v", err))
+		}
 		return true, result
 	}
 
@@ -1656,9 +1667,11 @@ func (a *Archiver) checkExistingFile(partition PartitionInfo, objectKey string, 
 				result.SkipReason = fmt.Sprintf("Already exists with matching size (%d bytes) and multipart ETag (%s)", s3Size, s3ETag)
 				result.Stage = StageSkipped
 				a.logger.Debug("   ✅ Skipping: Size and multipart ETag match")
-				// Save to cache for future runs with multipart ETag
+				// Save to cache immediately for future runs with multipart ETag
 				cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, localSize, uncompressedSize, localMD5, localMultipartETag, true, time.Time{})
-				_ = cache.save(a.config.CacheScope)
+				if err := cache.save(a.config.CacheScope); err != nil {
+					a.logger.Warn(fmt.Sprintf("   ⚠️  Failed to save cache metadata: %v", err))
+				}
 				return true, result
 			}
 			a.logger.Debug(fmt.Sprintf("   ❌ Multipart ETag mismatch: S3=%s, Local=%s", s3ETag, localMultipartETag))
@@ -2500,10 +2513,15 @@ func (a *Archiver) extractPartitionDataStreaming(partition PartitionInfo, progra
 		}
 	}
 
-	// Save row count to cache if it was unknown
+	// Save row count to cache immediately if it was unknown
 	if partition.RowCount <= 0 && rowCount > 0 {
 		cache.setRowCount(partition.TableName, rowCount)
-		_ = cache.save(a.config.CacheScope)
+		if err := cache.save(a.config.CacheScope); err != nil {
+			// Log warning but don't fail - row count caching is not critical
+			if a.config.Debug {
+				a.logger.Debug(fmt.Sprintf("   ⚠️  Failed to save row count to cache: %v", err))
+			}
+		}
 	}
 
 	return tempFilePath, fileSize, md5Hash, uncompressedSize, nil
