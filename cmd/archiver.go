@@ -1064,6 +1064,10 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 	totalBytes := int64(0)
 	successCount := 0
 	skipCount := 0
+	failCount := 0
+	var firstError error
+	var failedSliceDates []string
+
 	for i, timeRange := range ranges {
 		// Check for cancellation
 		select {
@@ -1102,17 +1106,17 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 		}
 
 		if sliceResult.Error != nil {
-			// Only log errors in debug mode
+			// Track errors but continue processing other slices
+			failCount++
+			if firstError == nil {
+				firstError = sliceResult.Error
+			}
+			failedSliceDates = append(failedSliceDates, timeRange.Start.Format("2006-01-02"))
+			// Log errors in debug mode
 			if a.config.Debug {
 				a.logger.Error(fmt.Sprintf("      ❌ Error processing slice %s: %v", timeRange.Start.Format("2006-01-02"), sliceResult.Error))
 			}
-			// Only return if it's a critical error (not "no rows")
-			if !sliceResult.Skipped {
-				return sliceResult
-			}
-		}
-
-		if sliceResult.Skipped {
+		} else if sliceResult.Skipped {
 			skipCount++
 			if a.config.Debug {
 				a.logger.Debug(fmt.Sprintf("      No data for %s, skipping", timeRange.Start.Format("2006-01-02")))
@@ -1125,15 +1129,35 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 
 	// Only log in debug mode - in TUI mode this corrupts the display
 	if a.config.Debug {
-		a.logger.Info(fmt.Sprintf("  Split partition complete: %d files created, %d skipped", successCount, skipCount))
+		if failCount > 0 {
+			a.logger.Info(fmt.Sprintf("  Split partition complete: %d files created, %d skipped, %d failed", successCount, skipCount, failCount))
+		} else {
+			a.logger.Info(fmt.Sprintf("  Split partition complete: %d files created, %d skipped", successCount, skipCount))
+		}
 	}
 
-	// Handle case where all slices were skipped
+	// Determine partition result based on slice outcomes
 	if successCount > 0 {
+		// At least some slices succeeded - mark partition as successful
 		result.BytesWritten = totalBytes
 		result.Compressed = true
 		result.Uploaded = true
+		// If some slices failed, log a warning but don't fail the partition
+		if failCount > 0 {
+			result.SkipReason = fmt.Sprintf("%d slice(s) failed: %s", failCount, strings.Join(failedSliceDates, ", "))
+			if a.config.Debug {
+				a.logger.Warn(fmt.Sprintf("  ⚠️  Partition %s completed with %d failed slice(s) out of %d total", partition.TableName, failCount, len(ranges)))
+			}
+		}
+	} else if failCount > 0 {
+		// All slices failed - mark partition as failed
+		result.Error = firstError
+		result.BytesWritten = 0
+		result.Compressed = false
+		result.Uploaded = false
+		result.Stage = "Failed"
 	} else {
+		// All slices were skipped
 		result.BytesWritten = 0
 		result.Compressed = false
 		result.Uploaded = false
