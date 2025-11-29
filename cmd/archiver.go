@@ -1137,17 +1137,25 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 	}
 
 	// Determine partition result based on slice outcomes
-	if successCount > 0 {
-		// At least some slices succeeded - mark partition as successful
+	// Count skipped slices as successful operations (they were processed successfully, just had no data)
+	totalSuccessful := successCount + skipCount
+	
+	if totalSuccessful > 0 {
+		// At least some slices succeeded or were skipped - mark partition as successful
 		result.BytesWritten = totalBytes
-		result.Compressed = true
-		result.Uploaded = true
+		result.Compressed = successCount > 0 // Only true if we actually uploaded files
+		result.Uploaded = successCount > 0   // Only true if we actually uploaded files
+		
 		// If some slices failed, log a warning but don't fail the partition
 		if failCount > 0 {
 			result.SkipReason = fmt.Sprintf("%d slice(s) failed: %s", failCount, strings.Join(failedSliceDates, ", "))
 			if a.config.Debug {
 				a.logger.Warn(fmt.Sprintf("  ⚠️  Partition %s completed with %d failed slice(s) out of %d total", partition.TableName, failCount, len(ranges)))
 			}
+		} else if skipCount > 0 && successCount == 0 {
+			// All slices were skipped (no data)
+			result.Skipped = true
+			result.SkipReason = "All slices skipped (no data in time ranges)"
 		}
 	} else if failCount > 0 {
 		// All slices failed - mark partition as failed
@@ -1157,12 +1165,12 @@ func (a *Archiver) processPartitionWithSplit(partition PartitionInfo, program *t
 		result.Uploaded = false
 		result.Stage = "Failed"
 	} else {
-		// All slices were skipped
+		// This shouldn't happen, but handle it gracefully
 		result.BytesWritten = 0
 		result.Compressed = false
 		result.Uploaded = false
 		result.Skipped = true
-		result.SkipReason = "All slices skipped (no data in time ranges)"
+		result.SkipReason = "No slices processed"
 	}
 
 	return result
@@ -1409,6 +1417,12 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 		result.SkipReason = "No data in time range"
 		if tempFilePath != "" {
 			cleanupTempFile(tempFilePath)
+		}
+		// Save cache metadata to indicate this slice was checked and had no data
+		// This prevents re-checking empty slices on subsequent runs
+		cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, 0, 0, "", "", false, sliceStartTime)
+		if err := cache.save(a.config.CacheScope); err != nil {
+			a.logger.Debug(fmt.Sprintf("      ⚠️  Failed to save cache metadata for empty slice: %v", err))
 		}
 		result.Duration = time.Since(sliceStartTime)
 		return result
