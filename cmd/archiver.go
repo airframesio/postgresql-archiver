@@ -1420,7 +1420,8 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 		}
 		// Save cache metadata to indicate this slice was checked and had no data
 		// This prevents re-checking empty slices on subsequent runs
-		cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, 0, 0, "", "", false, sliceStartTime)
+		// Use objectKey as cache key for slices so each slice has its own entry
+		cache.setFileMetadataWithETagAndStartTime(objectKey, objectKey, 0, 0, "", "", false, sliceStartTime)
 		if err := cache.save(a.config.CacheScope); err != nil {
 			a.logger.Debug(fmt.Sprintf("      ⚠️  Failed to save cache metadata for empty slice: %v", err))
 		}
@@ -1444,8 +1445,8 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 			result.Stage = StageSkipped
 			// Clean up temp file
 			cleanupTempFile(tempFilePath)
-			// Save to cache immediately
-			cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, "", true, sliceStartTime)
+			// Save to cache immediately - use objectKey as cache key for slices
+			cache.setFileMetadataWithETagAndStartTime(objectKey, objectKey, fileSize, uncompressedSize, md5Hash, "", true, sliceStartTime)
 			if err := cache.save(a.config.CacheScope); err != nil {
 				a.logger.Warn(fmt.Sprintf("      ⚠️  Failed to save cache metadata: %v", err))
 			}
@@ -1462,8 +1463,8 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 				result.Stage = StageSkipped
 				// Clean up temp file
 				cleanupTempFile(tempFilePath)
-				// Save to cache immediately with multipart ETag
-				cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, multipartETag, true, sliceStartTime)
+				// Save to cache immediately with multipart ETag - use objectKey as cache key for slices
+				cache.setFileMetadataWithETagAndStartTime(objectKey, objectKey, fileSize, uncompressedSize, md5Hash, multipartETag, true, sliceStartTime)
 				if err := cache.save(a.config.CacheScope); err != nil {
 					a.logger.Warn(fmt.Sprintf("      ⚠️  Failed to save cache metadata: %v", err))
 				}
@@ -1508,7 +1509,8 @@ func (a *Archiver) processSinglePartitionSlice(partition PartitionInfo, _ *tea.P
 		}
 
 		// Save metadata to cache immediately after successful upload
-		cache.setFileMetadataWithETagAndStartTime(partition.TableName, objectKey, fileSize, uncompressedSize, md5Hash, multipartETag, true, sliceStartTime)
+		// Use objectKey as cache key for slices so each slice has its own entry
+		cache.setFileMetadataWithETagAndStartTime(objectKey, objectKey, fileSize, uncompressedSize, md5Hash, multipartETag, true, sliceStartTime)
 		if err := cache.save(a.config.CacheScope); err != nil {
 			a.logger.Warn(fmt.Sprintf("      ⚠️  Failed to save cache metadata: %v", err))
 		}
@@ -1534,7 +1536,14 @@ func (a *Archiver) checkCachedMetadata(partition PartitionInfo, objectKey string
 		Partition: partition,
 	}
 
-	cachedSize, cachedMD5, cachedMultipartETag, hasCached := cache.getFileMetadataWithETag(partition.TableName, objectKey, partition.Date)
+	// For slices (custom range partitions), use objectKey as cache key so each slice has its own entry
+	// For regular partitions, use partition.TableName
+	cacheKey := partition.TableName
+	if partition.HasCustomRange() {
+		cacheKey = objectKey
+	}
+
+	cachedSize, cachedMD5, cachedMultipartETag, hasCached := cache.getFileMetadataWithETag(cacheKey, objectKey, partition.Date)
 	if !hasCached {
 		return false, result
 	}
